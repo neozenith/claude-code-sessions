@@ -1,0 +1,56 @@
+---
+title: API Request/Response Flow
+---
+sequenceDiagram
+    participant F as Frontend
+    participant API as Backend API
+    participant DB as DuckDB
+
+    Note over F,DB: Health Check Flow
+    F->>+API: GET /api/health
+    API->>API: get_projects_path()
+    API-->>-F: {status, projects_path}
+
+    Note over F,DB: Summary Data Flow
+    F->>+API: GET /api/summary
+    API->>+DB: Execute summary.sql
+    DB-->>-API: Aggregate usage data
+    API-->>-F: [{cost, tokens, sessions}]
+
+    Note over F,DB: Time-Based Analytics
+    F->>+API: GET /api/usage/daily
+    API->>+DB: Execute by_day.sql
+    DB-->>-API: Daily breakdown
+    API-->>-F: [{date, cost, tokens}]
+
+    F->>+API: GET /api/usage/weekly
+    API->>+DB: Execute by_week.sql
+    DB-->>-API: Weekly breakdown
+    API-->>-F: [{week, cost, sessions}]
+
+    F->>+API: GET /api/usage/monthly
+    API->>+DB: Execute by_month.sql
+    DB-->>-API: Monthly breakdown
+    API-->>-F: [{month, cost, events}]
+
+    F->>+API: GET /api/usage/hourly
+    API->>+DB: Execute by_hour.sql
+    DB-->>-API: Hourly breakdown (last 14d)
+    API-->>-F: [{hour, cost, events}]
+
+    Note over F,DB: Session & Project Data
+    F->>+API: GET /api/usage/sessions
+    API->>+DB: Execute sessions.sql
+    DB-->>-API: Session details
+    API-->>-F: [{session_id, cost}]
+
+    F->>+API: GET /api/projects
+    API->>+DB: Execute by_month.sql
+    DB-->>-API: Monthly data
+    API->>API: Aggregate by project
+    API-->>-F: [{project_id, total_cost}]
+
+    F->>+API: GET /api/usage/top-projects-weekly
+    API->>+DB: Execute top_projects_weekly.sql
+    DB-->>-API: Top 3 projects (8 weeks)
+    API-->>-F: [{project_id, week, cost}]

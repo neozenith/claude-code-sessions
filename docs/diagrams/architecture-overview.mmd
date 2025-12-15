@@ -1,0 +1,34 @@
+---
+title: Claude Code Sessions Analytics - System Architecture
+---
+graph TB
+    subgraph "Data Layer"
+        JSONL["~/.claude/projects/<br/>JSONL Session Logs"]
+        PRICING["pricing.csv<br/>Token Pricing Data"]
+    end
+
+    subgraph "Backend - src/claude_code_sessions/"
+        API["FastAPI Server<br/>main.py<br/>Ports: 8100/8101"]
+        DUCKDB["DuckDB<br/>In-Memory Analytics"]
+        QUERIES["SQL Queries<br/>queries/*.sql"]
+    end
+
+    subgraph "Frontend - React + Vite"
+        APP["React App<br/>Ports: 5273/5274"]
+        PAGES["Dashboard Pages<br/>shadcn + Plotly"]
+    end
+
+    JSONL -->|Read| DUCKDB
+    PRICING -->|Load| DUCKDB
+    DUCKDB -->|Execute| QUERIES
+    QUERIES -->|Results| API
+    API -->|REST API| APP
+    APP -->|Render| PAGES
+
+    style JSONL fill:#e1f5ff
+    style PRICING fill:#e1f5ff
+    style API fill:#fff3e0
+    style DUCKDB fill:#f3e5f5
+    style QUERIES fill:#f3e5f5
+    style APP fill:#e8f5e9
+    style PAGES fill:#e8f5e9
