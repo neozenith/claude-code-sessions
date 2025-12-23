@@ -141,9 +141,13 @@ async def get_top_projects_weekly() -> list[dict[str, Any]]:
 
 
 @app.get("/api/usage/hourly")
-async def get_hourly_usage() -> list[dict[str, Any]]:
-    """Get hourly usage breakdown for last 14 days."""
-    return execute_query("by_hour")
+async def get_hourly_usage(days: int = 14) -> list[dict[str, Any]]:
+    """Get hourly usage breakdown for configurable time range.
+
+    Args:
+        days: Number of days to query (default: 14)
+    """
+    return execute_query("by_hour", {"DAYS": str(days)})
 
 
 @app.get("/api/drilldown/projects")

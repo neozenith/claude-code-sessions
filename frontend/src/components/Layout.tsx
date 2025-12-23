@@ -1,6 +1,6 @@
 import { NavLink } from 'react-router-dom'
 import { ReactNode } from 'react'
-import { LayoutDashboard, Calendar, CalendarDays, CalendarRange, Clock, FolderOpen, Layers } from 'lucide-react'
+import { LayoutDashboard, Calendar, CalendarDays, CalendarRange, Clock, Timer, FolderOpen, Layers } from 'lucide-react'
 import { cn } from '@/lib/utils'
 
 interface LayoutProps {
@@ -10,6 +10,7 @@ interface LayoutProps {
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
   { path: '/hourly', label: 'Hourly', icon: Clock },
+  { path: '/hour-of-day', label: 'Hour of Day', icon: Timer },
   { path: '/daily', label: 'Daily', icon: Calendar },
   { path: '/weekly', label: 'Weekly', icon: CalendarDays },
   { path: '/monthly', label: 'Monthly', icon: CalendarRange },

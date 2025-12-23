@@ -25,10 +25,11 @@ parsed_data AS (
                         ignore_errors=true,
                         maximum_object_size=10485760)
     WHERE message.usage IS NOT NULL
-      AND TRY_CAST(timestamp AS TIMESTAMPTZ) AT TIME ZONE 'Australia/Melbourne' >= CURRENT_DATE - INTERVAL '14 days'
+      AND TRY_CAST(timestamp AS TIMESTAMPTZ) AT TIME ZONE 'Australia/Melbourne' >= CURRENT_DATE - INTERVAL __DAYS__ day
 )
 
 SELECT
+    project_id,
     date AS time_bucket,
     hour AS hour_of_day,
 
@@ -52,5 +53,5 @@ SELECT
 
 FROM parsed_data
 LEFT JOIN pricing p ON parsed_data.model_id = p.model_id
-GROUP BY date, hour
+GROUP BY project_id, date, hour
 ORDER BY date DESC, hour ASC;
