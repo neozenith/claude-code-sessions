@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
+import { useFilters } from '@/hooks/useFilters'
+import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface MonthlyData {
@@ -26,20 +28,9 @@ function formatNumber(num: number): string {
 }
 
 export default function MonthlyUsage() {
-  const { data, loading, error } = useApi<MonthlyData[]>('/usage/monthly')
-  const [selectedProject, setSelectedProject] = useState<string>('all')
-
-  // Get unique projects
-  const projects = useMemo(() => {
-    if (!data) return []
-    const uniqueProjects = [...new Set(data.map((d) => d.project_id))].sort()
-    return uniqueProjects
-  }, [data])
-
-  // Format project name for display
-  const formatProjectName = (name: string) => {
-    return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
-  }
+  const { filters, buildApiQuery } = useFilters()
+  const { colors, mergeLayout } = usePlotlyTheme()
+  const { data, loading, error } = useApi<MonthlyData[]>(`/usage/monthly${buildApiQuery()}`)
 
   // Filter and aggregate data
   const { monthlyCosts, monthlyTokens, modelCosts, sortedMonths, costsByModel, tokensByModel, models } = useMemo(() => {
@@ -52,9 +43,10 @@ export default function MonthlyUsage() {
     const tokensByModel: Record<string, Record<string, { input: number; output: number }>> = {}
     const uniqueModels = new Set<string>()
 
-    const filteredData = selectedProject === 'all'
+    // Filter by project if selected (client-side filtering)
+    const filteredData = !filters.project
       ? data
-      : data?.filter((row) => row.project_id === selectedProject)
+      : data?.filter((row) => row.project_id === filters.project)
 
     filteredData?.forEach((row) => {
       const month = row.time_bucket
@@ -92,9 +84,9 @@ export default function MonthlyUsage() {
       sortedMonths: months,
       costsByModel,
       tokensByModel,
-      models: modelsList
+      models: modelsList,
     }
-  }, [data, selectedProject])
+  }, [data, filters.project])
 
   // Calculate 3-month rolling average
   const rollingAverage = useMemo(() => {
@@ -113,108 +105,100 @@ export default function MonthlyUsage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-gray-900">Monthly Usage</h1>
-
-        {/* Project Filter */}
-        <select
-          value={selectedProject}
-          onChange={(e) => setSelectedProject(e.target.value)}
-          className="px-3 py-2 border rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="all">All Projects</option>
-          {projects.map((project) => (
-            <option key={project} value={project}>
-              {formatProjectName(project)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <h1 className="text-3xl font-bold">Monthly Usage</h1>
 
       {/* Monthly Cost Chart */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Monthly Costs (USD)</h2>
-        <Plot
-          data={[
-            {
-              x: sortedMonths,
-              y: sortedMonths.map((m) => monthlyCosts[m]),
-              type: 'bar',
-              name: 'Monthly Cost',
-              marker: { color: '#10B981' },
-              text: sortedMonths.map((m) => Math.round(monthlyCosts[m]).toString()),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
-            },
-            {
-              x: sortedMonths,
-              y: rollingAverage,
-              type: 'scatter',
-              mode: 'lines',
-              name: '3-month Average',
-              line: { color: '#DC2626', width: 2 },
-            },
-          ]}
-          layout={{
-            autosize: true,
-            margin: { l: 50, r: 30, t: 30, b: 50 },
-            xaxis: { title: 'Month' },
-            yaxis: { title: 'Cost (USD)', tickformat: 'd' },
-            showlegend: true,
-            legend: { x: 0, y: 1.1, orientation: 'h' },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: '400px' }}
-        />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Monthly Costs (USD)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                x: sortedMonths,
+                y: sortedMonths.map((m) => monthlyCosts[m]),
+                type: 'bar' as const,
+                name: 'Monthly Cost',
+                marker: { color: '#10B981' },
+                text: sortedMonths.map((m) => Math.round(monthlyCosts[m]).toString()),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+              },
+              {
+                x: sortedMonths,
+                y: rollingAverage,
+                type: 'scatter' as const,
+                mode: 'lines' as const,
+                name: '3-month Average',
+                line: { color: '#DC2626', width: 2 },
+              },
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              margin: { l: 50, r: 30, t: 30, b: 50 },
+              xaxis: { title: { text: 'Month' } },
+              yaxis: { title: { text: 'Cost (USD)' }, tickformat: 'd' },
+              showlegend: true,
+              legend: { x: 0, y: 1.1, orientation: 'h' },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
+        </CardContent>
+      </Card>
 
       {/* Token Usage Chart - Diverging */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Token Usage</h2>
-        <Plot
-          data={[
-            {
-              x: sortedMonths,
-              y: sortedMonths.map((m) => monthlyTokens[m]?.input || 0),
-              type: 'bar',
-              name: 'Input Tokens',
-              marker: { color: '#8B5CF6' },
-              text: sortedMonths.map((m) => formatNumber(monthlyTokens[m]?.input || 0)),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>Input: %{y:,}<extra></extra>',
-            },
-            {
-              x: sortedMonths,
-              y: sortedMonths.map((m) => -(monthlyTokens[m]?.output || 0)),
-              type: 'bar',
-              name: 'Output Tokens',
-              marker: { color: '#F59E0B' },
-              text: sortedMonths.map((m) => formatNumber(monthlyTokens[m]?.output || 0)),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>Output: %{customdata:,}<extra></extra>',
-              customdata: sortedMonths.map((m) => monthlyTokens[m]?.output || 0),
-            },
-          ]}
-          layout={{
-            autosize: true,
-            barmode: 'overlay',
-            margin: { l: 60, r: 30, t: 30, b: 50 },
-            xaxis: { title: 'Month' },
-            yaxis: {
-              title: 'Tokens',
-              tickformat: ',d',
-              tickprefix: '',
-            },
-            showlegend: true,
-            legend: { x: 0, y: 1.1, orientation: 'h' },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: '400px' }}
-        />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Token Usage</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                x: sortedMonths,
+                y: sortedMonths.map((m) => monthlyTokens[m]?.input || 0),
+                type: 'bar' as const,
+                name: 'Input Tokens',
+                marker: { color: '#8B5CF6' },
+                text: sortedMonths.map((m) => formatNumber(monthlyTokens[m]?.input || 0)),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>Input: %{y:,}<extra></extra>',
+              },
+              {
+                x: sortedMonths,
+                y: sortedMonths.map((m) => -(monthlyTokens[m]?.output || 0)),
+                type: 'bar' as const,
+                name: 'Output Tokens',
+                marker: { color: '#F59E0B' },
+                text: sortedMonths.map((m) => formatNumber(monthlyTokens[m]?.output || 0)),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>Output: %{customdata:,}<extra></extra>',
+                customdata: sortedMonths.map((m) => monthlyTokens[m]?.output || 0),
+              },
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              barmode: 'overlay',
+              margin: { l: 60, r: 30, t: 30, b: 50 },
+              xaxis: { title: { text: 'Month' } },
+              yaxis: {
+                title: { text: 'Tokens' },
+                tickformat: ',d',
+                tickprefix: '',
+              },
+              showlegend: true,
+              legend: { x: 0, y: 1.1, orientation: 'h' },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
+        </CardContent>
+      </Card>
 
       {/* Costs by Model - Grouped Bar Chart */}
       <Card>
@@ -224,31 +208,31 @@ export default function MonthlyUsage() {
         <CardContent>
           <Plot
             data={models.map((model, idx) => {
-              const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899']
+              const chartColors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899']
               return {
                 x: sortedMonths,
                 y: sortedMonths.map((m) => costsByModel[model]?.[m] || 0),
-                type: 'bar',
+                type: 'bar' as const,
                 name: model.replace('claude-', ''),
-                marker: { color: colors[idx % colors.length] },
+                marker: { color: chartColors[idx % chartColors.length] },
                 text: sortedMonths.map((m) => {
                   const cost = costsByModel[model]?.[m] || 0
                   return cost > 0 ? `$${cost.toFixed(0)}` : ''
                 }),
-                textposition: 'inside',
+                textposition: 'inside' as const,
                 textfont: { size: 10 },
                 hovertemplate: '%{x}<br>%{fullData.name}<br>$%{y:.2f}<extra></extra>',
               }
             })}
-            layout={{
+            layout={mergeLayout({
               autosize: true,
               barmode: 'stack',
               margin: { l: 50, r: 30, t: 30, b: 100 },
-              xaxis: { title: 'Month', tickangle: -45 },
-              yaxis: { title: 'Cost (USD)', tickformat: '$.2f' },
+              xaxis: { title: { text: 'Month' }, tickangle: -45 },
+              yaxis: { title: { text: 'Cost (USD)' }, tickformat: '$.2f' },
               showlegend: true,
               legend: { x: 0, y: 1.15, orientation: 'h' },
-            }}
+            })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />
@@ -270,7 +254,7 @@ export default function MonthlyUsage() {
                 return {
                   x: sortedMonths,
                   y: sortedMonths.map((m) => tokensByModel[model]?.[m]?.input || 0),
-                  type: 'bar',
+                  type: 'bar' as const,
                   name: model.replace('claude-', '') + ' (input)',
                   marker: { color: inputColors[idx % inputColors.length] },
                   text: sortedMonths.map((m) => {
@@ -278,7 +262,7 @@ export default function MonthlyUsage() {
                     // Only show text if value is significant (>5% of max)
                     return input > maxInput * 0.05 ? formatNumber(input) : ''
                   }),
-                  textposition: 'inside',
+                  textposition: 'inside' as const,
                   textfont: { size: 11 },
                   cliponaxis: false,
                   hovertemplate: '%{x}<br>%{fullData.name}<br>%{y:,} tokens<extra></extra>',
@@ -292,7 +276,7 @@ export default function MonthlyUsage() {
                 return {
                   x: sortedMonths,
                   y: sortedMonths.map((m) => -(tokensByModel[model]?.[m]?.output || 0)),
-                  type: 'bar',
+                  type: 'bar' as const,
                   name: model.replace('claude-', '') + ' (output)',
                   marker: { color: outputColors[idx % outputColors.length] },
                   text: sortedMonths.map((m) => {
@@ -300,7 +284,7 @@ export default function MonthlyUsage() {
                     // Only show text if value is significant (>5% of max)
                     return output > maxOutput * 0.05 ? formatNumber(output) : ''
                   }),
-                  textposition: 'inside',
+                  textposition: 'inside' as const,
                   textfont: { size: 11 },
                   cliponaxis: false,
                   hovertemplate: '%{x}<br>%{fullData.name}<br>%{customdata:,} tokens<extra></extra>',
@@ -309,18 +293,18 @@ export default function MonthlyUsage() {
                 }
               }),
             ]}
-            layout={{
+            layout={mergeLayout({
               autosize: true,
               barmode: 'relative',
               margin: { l: 60, r: 30, t: 30, b: 100 },
-              xaxis: { title: 'Month', tickangle: -45 },
+              xaxis: { title: { text: 'Month' }, tickangle: -45 },
               yaxis: {
-                title: 'Tokens',
+                title: { text: 'Tokens' },
                 tickformat: ',d',
               },
               showlegend: true,
               legend: { x: 0, y: 1.15, orientation: 'h' },
-            }}
+            })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />
@@ -328,29 +312,34 @@ export default function MonthlyUsage() {
       </Card>
 
       {/* Model Distribution Pie Chart */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Total Cost by Model</h2>
-        <Plot
-          data={[
-            {
-              labels: modelNames,
-              values: modelNames.map((m) => modelCosts[m]),
-              type: 'pie',
-              hole: 0.4,
-              marker: {
-                colors: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'],
+      <Card>
+        <CardHeader>
+          <CardTitle>Total Cost by Model</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                labels: modelNames,
+                values: modelNames.map((m) => modelCosts[m]),
+                type: 'pie' as const,
+                hole: 0.4,
+                marker: {
+                  colors: ['#3B82F6', '#10B981', '#F59E0B', '#EF4444', '#8B5CF6'],
+                },
+                textfont: { color: colors.text },
+                hovertemplate: '%{label}<br>$%{value:.2f}<extra></extra>',
               },
-              hovertemplate: '%{label}<br>$%{value:.2f}<extra></extra>',
-            },
-          ]}
-          layout={{
-            autosize: true,
-            margin: { l: 30, r: 30, t: 30, b: 30 },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: '400px' }}
-        />
-      </div>
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              margin: { l: 30, r: 30, t: 30, b: 30 },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
+        </CardContent>
+      </Card>
     </div>
   )
 }

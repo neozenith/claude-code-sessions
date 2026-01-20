@@ -1,7 +1,9 @@
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
 import duckdb
+import pandas as pd
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -36,14 +38,41 @@ def get_projects_path() -> Path:
     raise HTTPException(status_code=500, detail="No projects data found")
 
 
+def get_file_mtimes_df(projects_path: Path) -> pd.DataFrame:
+    """Get file modification times as a pandas DataFrame.
+
+    DuckDB can query this DataFrame directly by variable name - zero copy!
+
+    Args:
+        projects_path: Path to the projects directory
+
+    Returns:
+        DataFrame with columns: filename (str), mtime_date (str YYYY-MM-DD)
+    """
+    records = []
+    for filepath in projects_path.glob("**/*.jsonl"):
+        mtime = filepath.stat().st_mtime
+        mtime_date = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d")
+        # Use absolute path string to match what DuckDB's read_json_auto returns
+        # when given an absolute glob path
+        records.append({"filename": str(filepath.resolve()), "mtime_date": mtime_date})
+
+    return pd.DataFrame(records)
+
+
 def execute_query(
-    query_name: str, filters: dict[str, str] | None = None
+    query_name: str,
+    filters: dict[str, str] | None = None,
+    dataframes: dict[str, pd.DataFrame] | None = None,
 ) -> list[dict[str, Any]]:
     """Execute a SQL query and return results as list of dicts.
 
     Args:
         query_name: Name of the SQL query file (without .sql extension)
         filters: Optional dict of filter replacements (e.g., {"PROJECT_FILTER": "my-project"})
+        dataframes: Optional dict of DataFrames to register with DuckDB.
+                   Keys are table names, values are DataFrames.
+                   DuckDB can then query these directly in SQL (zero-copy!).
     """
     query_file = QUERIES_PATH / f"{query_name}.sql"
     if not query_file.exists():
@@ -63,6 +92,12 @@ def execute_query(
 
     try:
         conn = duckdb.connect(":memory:")
+
+        # Register DataFrames with DuckDB - they become queryable tables
+        if dataframes:
+            for table_name, df in dataframes.items():
+                conn.register(table_name, df)
+
         result = conn.execute(sql).fetchall()
         columns = [desc[0] for desc in conn.description]
         conn.close()
@@ -83,27 +118,71 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/api/summary")
-async def get_summary() -> list[dict[str, Any]]:
-    """Get overall usage summary."""
-    return execute_query("summary")
+async def get_summary(days: int | None = None) -> list[dict[str, Any]]:
+    """Get overall usage summary.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+    """
+    filters: dict[str, str] = {}
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("summary", filters)
 
 
 @app.get("/api/usage/daily")
-async def get_daily_usage() -> list[dict[str, Any]]:
-    """Get daily usage breakdown."""
-    return execute_query("by_day")
+async def get_daily_usage(days: int | None = None) -> list[dict[str, Any]]:
+    """Get daily usage breakdown.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+    """
+    filters: dict[str, str] = {}
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("by_day", filters)
 
 
 @app.get("/api/usage/weekly")
-async def get_weekly_usage() -> list[dict[str, Any]]:
-    """Get weekly usage breakdown."""
-    return execute_query("by_week")
+async def get_weekly_usage(days: int | None = None) -> list[dict[str, Any]]:
+    """Get weekly usage breakdown.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+    """
+    filters: dict[str, str] = {}
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("by_week", filters)
 
 
 @app.get("/api/usage/monthly")
-async def get_monthly_usage() -> list[dict[str, Any]]:
-    """Get monthly usage breakdown."""
-    return execute_query("by_month")
+async def get_monthly_usage(days: int | None = None) -> list[dict[str, Any]]:
+    """Get monthly usage breakdown.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+    """
+    filters: dict[str, str] = {}
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("by_month", filters)
 
 
 @app.get("/api/usage/sessions")
@@ -115,7 +194,8 @@ async def get_sessions() -> list[dict[str, Any]]:
 @app.get("/api/projects")
 async def get_projects() -> list[dict[str, Any]]:
     """Get list of projects with usage stats."""
-    data = execute_query("by_month")
+    # Pass empty DAYS_FILTER to get all-time data for project list
+    data = execute_query("by_month", {"DAYS_FILTER": ""})
     # Aggregate by project
     projects: dict[str, dict[str, Any]] = {}
     for row in data:
@@ -135,46 +215,100 @@ async def get_projects() -> list[dict[str, Any]]:
 
 
 @app.get("/api/usage/top-projects-weekly")
-async def get_top_projects_weekly() -> list[dict[str, Any]]:
-    """Get weekly usage for top 3 projects over last 8 weeks."""
-    return execute_query("top_projects_weekly")
+async def get_top_projects_weekly(days: int | None = None) -> list[dict[str, Any]]:
+    """Get weekly usage for top 3 projects.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time, default shows last 56 days/8 weeks)
+    """
+    filters: dict[str, str] = {}
+    # Default to 56 days (8 weeks) if no filter specified
+    effective_days = days if days is not None else 56
+    if effective_days and effective_days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{effective_days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("top_projects_weekly", filters)
 
 
 @app.get("/api/usage/hourly")
-async def get_hourly_usage(days: int = 14) -> list[dict[str, Any]]:
+async def get_hourly_usage(days: int | None = None) -> list[dict[str, Any]]:
     """Get hourly usage breakdown for configurable time range.
 
     Args:
-        days: Number of days to query (default: 14)
+        days: Number of days to query (None or 0 = all time)
     """
-    return execute_query("by_hour", {"DAYS": str(days)})
+    filters: dict[str, str] = {}
+    # Add days filter - 0 or None means all time
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMPTZ) AT TIME ZONE "
+            f"'Australia/Melbourne' >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("by_hour", filters)
 
 
-@app.get("/api/drilldown/projects")
-async def get_drilldown_projects() -> list[dict[str, Any]]:
-    """Get project-level drill-down with timezone-aware aggregation."""
-    return execute_query("drilldown_projects")
+@app.get("/api/timeline/events/{project_id}")
+async def get_timeline_events(project_id: str, days: int | None = None) -> list[dict[str, Any]]:
+    """Get event-level timeline data for a specific project.
+
+    Returns individual events with cumulative output tokens per session,
+    ordered by session first event time for timeline visualization.
+
+    Args:
+        project_id: The project ID to filter events for
+        days: Optional number of days to filter (None = all time)
+    """
+    filters = {"PROJECT_FILTER": project_id}
+    # Add days filter - 0 or None means all time
+    if days and days > 0:
+        filters["DAYS_FILTER"] = f"AND timestamp_utc >= NOW() - INTERVAL '{days} days'"
+    else:
+        filters["DAYS_FILTER"] = ""
+    return execute_query("timeline_events", filters)
 
 
-@app.get("/api/drilldown/sessions/{project_id}")
-async def get_drilldown_sessions(project_id: str) -> list[dict[str, Any]]:
-    """Get sessions for a specific project with timezone info."""
-    return execute_query("drilldown_sessions", {"PROJECT_FILTER": project_id})
+@app.get("/api/schema-timeline")
+async def get_schema_timeline(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
+    """Get schema timeline data showing JSON path evolution over time.
 
+    Returns one marker per day per JSON path. Uses file modification time
+    as fallback for records without timestamps. All timestamps are truncated
+    to day level for cleaner visualization.
 
-@app.get("/api/drilldown/events/{project_id}/{session_id}")
-async def get_drilldown_events(project_id: str, session_id: str) -> list[dict[str, Any]]:
-    """Get event-level details for a specific session."""
+    Args:
+        days: Optional number of days to filter (None = all time)
+        project: Optional project ID to filter
+    """
+    filters: dict[str, str] = {}
+
+    # Add days filter
+    if days and days > 0:
+        filters["DAYS_FILTER"] = f"AND event_date >= CURRENT_DATE - INTERVAL '{days} days'"
+    else:
+        filters["DAYS_FILTER"] = ""
+
+    # Add project filter
+    if project:
+        filters["PROJECT_FILTER"] = f"AND project_id = '{project}'"
+    else:
+        filters["PROJECT_FILTER"] = ""
+
+    # Get file mtimes as DataFrame - DuckDB queries this directly (zero-copy!)
+    projects_path = get_projects_path()
+    file_mtimes_df = get_file_mtimes_df(projects_path)
+
     return execute_query(
-        "drilldown_events",
-        {"PROJECT_FILTER": project_id, "SESSION_FILTER": session_id},
+        "schema_timeline",
+        filters,
+        dataframes={"file_mtimes": file_mtimes_df},
     )
-
-
-@app.get("/api/drilldown/daily/{project_id}")
-async def get_drilldown_daily_detail(project_id: str) -> list[dict[str, Any]]:
-    """Get daily detail showing UTC vs Local timezone differences."""
-    return execute_query("drilldown_daily_detail", {"PROJECT_FILTER": project_id})
 
 
 # Serve frontend static files in production

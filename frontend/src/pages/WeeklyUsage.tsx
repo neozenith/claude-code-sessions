@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
+import { useFilters } from '@/hooks/useFilters'
+import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface WeeklyData {
@@ -26,20 +28,9 @@ function formatNumber(num: number): string {
 }
 
 export default function WeeklyUsage() {
-  const { data, loading, error } = useApi<WeeklyData[]>('/usage/weekly')
-  const [selectedProject, setSelectedProject] = useState<string>('all')
-
-  // Get unique projects
-  const projects = useMemo(() => {
-    if (!data) return []
-    const uniqueProjects = [...new Set(data.map((d) => d.project_id))].sort()
-    return uniqueProjects
-  }, [data])
-
-  // Format project name for display
-  const formatProjectName = (name: string) => {
-    return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
-  }
+  const { filters, buildApiQuery } = useFilters()
+  const { colors, mergeLayout } = usePlotlyTheme()
+  const { data, loading, error } = useApi<WeeklyData[]>(`/usage/weekly${buildApiQuery()}`)
 
   // Filter and aggregate data
   const { weeklyCosts, weeklyTokens, sortedWeeks, modelCosts, modelTokens, models } = useMemo(() => {
@@ -51,9 +42,10 @@ export default function WeeklyUsage() {
     const tokensByModel: Record<string, Record<string, { input: number; output: number }>> = {}
     const uniqueModels = new Set<string>()
 
-    const filteredData = selectedProject === 'all'
+    // Filter by project if selected (client-side filtering)
+    const filteredData = !filters.project
       ? data
-      : data?.filter((row) => row.project_id === selectedProject)
+      : data?.filter((row) => row.project_id === filters.project)
 
     filteredData?.forEach((row) => {
       const week = row.time_bucket
@@ -89,9 +81,9 @@ export default function WeeklyUsage() {
       sortedWeeks: weeks,
       modelCosts: costsByModel,
       modelTokens: tokensByModel,
-      models: modelsList
+      models: modelsList,
     }
-  }, [data, selectedProject])
+  }, [data, filters.project])
 
   // Calculate 4-week rolling average
   const rollingAverage = useMemo(() => {
@@ -108,108 +100,100 @@ export default function WeeklyUsage() {
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold text-gray-900">Weekly Usage</h1>
-
-        {/* Project Filter */}
-        <select
-          value={selectedProject}
-          onChange={(e) => setSelectedProject(e.target.value)}
-          className="px-3 py-2 border rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="all">All Projects</option>
-          {projects.map((project) => (
-            <option key={project} value={project}>
-              {formatProjectName(project)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <h1 className="text-3xl font-bold">Weekly Usage</h1>
 
       {/* Cost Chart */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Weekly Costs (USD)</h2>
-        <Plot
-          data={[
-            {
-              x: sortedWeeks,
-              y: sortedWeeks.map((w) => weeklyCosts[w]),
-              type: 'bar',
-              name: 'Weekly Cost',
-              marker: { color: '#10B981' },
-              text: sortedWeeks.map((w) => Math.round(weeklyCosts[w]).toString()),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
-            },
-            {
-              x: sortedWeeks,
-              y: rollingAverage,
-              type: 'scatter',
-              mode: 'lines',
-              name: '4-week Average',
-              line: { color: '#DC2626', width: 2 },
-            },
-          ]}
-          layout={{
-            autosize: true,
-            margin: { l: 50, r: 30, t: 30, b: 50 },
-            xaxis: { title: 'Week Starting' },
-            yaxis: { title: 'Cost (USD)', tickformat: 'd' },
-            showlegend: true,
-            legend: { x: 0, y: 1.1, orientation: 'h' },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: '400px' }}
-        />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Weekly Costs (USD)</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                x: sortedWeeks,
+                y: sortedWeeks.map((w) => weeklyCosts[w]),
+                type: 'bar' as const,
+                name: 'Weekly Cost',
+                marker: { color: '#10B981' },
+                text: sortedWeeks.map((w) => Math.round(weeklyCosts[w]).toString()),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+              },
+              {
+                x: sortedWeeks,
+                y: rollingAverage,
+                type: 'scatter' as const,
+                mode: 'lines' as const,
+                name: '4-week Average',
+                line: { color: '#DC2626', width: 2 },
+              },
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              margin: { l: 50, r: 30, t: 30, b: 50 },
+              xaxis: { title: { text: 'Week Starting' } },
+              yaxis: { title: { text: 'Cost (USD)' }, tickformat: 'd' },
+              showlegend: true,
+              legend: { x: 0, y: 1.1, orientation: 'h' },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
+        </CardContent>
+      </Card>
 
       {/* Token Usage Chart - Diverging */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Token Usage</h2>
-        <Plot
-          data={[
-            {
-              x: sortedWeeks,
-              y: sortedWeeks.map((w) => weeklyTokens[w]?.input || 0),
-              type: 'bar',
-              name: 'Input Tokens',
-              marker: { color: '#8B5CF6' },
-              text: sortedWeeks.map((w) => formatNumber(weeklyTokens[w]?.input || 0)),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>Input: %{y:,}<extra></extra>',
-            },
-            {
-              x: sortedWeeks,
-              y: sortedWeeks.map((w) => -(weeklyTokens[w]?.output || 0)),
-              type: 'bar',
-              name: 'Output Tokens',
-              marker: { color: '#F59E0B' },
-              text: sortedWeeks.map((w) => formatNumber(weeklyTokens[w]?.output || 0)),
-              textposition: 'outside',
-              textfont: { color: '#333' },
-              hovertemplate: '%{x}<br>Output: %{customdata:,}<extra></extra>',
-              customdata: sortedWeeks.map((w) => weeklyTokens[w]?.output || 0),
-            },
-          ]}
-          layout={{
-            autosize: true,
-            barmode: 'overlay',
-            margin: { l: 60, r: 30, t: 30, b: 50 },
-            xaxis: { title: 'Week Starting' },
-            yaxis: {
-              title: 'Tokens',
-              tickformat: ',d',
-              tickprefix: '',
-            },
-            showlegend: true,
-            legend: { x: 0, y: 1.1, orientation: 'h' },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: '400px' }}
-        />
-      </div>
+      <Card>
+        <CardHeader>
+          <CardTitle>Token Usage</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                x: sortedWeeks,
+                y: sortedWeeks.map((w) => weeklyTokens[w]?.input || 0),
+                type: 'bar' as const,
+                name: 'Input Tokens',
+                marker: { color: '#8B5CF6' },
+                text: sortedWeeks.map((w) => formatNumber(weeklyTokens[w]?.input || 0)),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>Input: %{y:,}<extra></extra>',
+              },
+              {
+                x: sortedWeeks,
+                y: sortedWeeks.map((w) => -(weeklyTokens[w]?.output || 0)),
+                type: 'bar' as const,
+                name: 'Output Tokens',
+                marker: { color: '#F59E0B' },
+                text: sortedWeeks.map((w) => formatNumber(weeklyTokens[w]?.output || 0)),
+                textposition: 'outside' as const,
+                textfont: { color: colors.text },
+                hovertemplate: '%{x}<br>Output: %{customdata:,}<extra></extra>',
+                customdata: sortedWeeks.map((w) => weeklyTokens[w]?.output || 0),
+              },
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              barmode: 'overlay',
+              margin: { l: 60, r: 30, t: 30, b: 50 },
+              xaxis: { title: { text: 'Week Starting' } },
+              yaxis: {
+                title: { text: 'Tokens' },
+                tickformat: ',d',
+                tickprefix: '',
+              },
+              showlegend: true,
+              legend: { x: 0, y: 1.1, orientation: 'h' },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
+        </CardContent>
+      </Card>
 
       {/* Costs by Model - Grouped Bar Chart */}
       <Card>
@@ -219,31 +203,31 @@ export default function WeeklyUsage() {
         <CardContent>
           <Plot
             data={models.map((model, idx) => {
-              const colors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899']
+              const chartColors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899']
               return {
                 x: sortedWeeks,
                 y: sortedWeeks.map((w) => modelCosts[model]?.[w] || 0),
-                type: 'bar',
+                type: 'bar' as const,
                 name: model.replace('claude-', ''),
-                marker: { color: colors[idx % colors.length] },
+                marker: { color: chartColors[idx % chartColors.length] },
                 text: sortedWeeks.map((w) => {
                   const cost = modelCosts[model]?.[w] || 0
                   return cost > 0 ? `$${cost.toFixed(0)}` : ''
                 }),
-                textposition: 'inside',
+                textposition: 'inside' as const,
                 textfont: { size: 10 },
                 hovertemplate: '%{x}<br>%{fullData.name}<br>$%{y:.2f}<extra></extra>',
               }
             })}
-            layout={{
+            layout={mergeLayout({
               autosize: true,
               barmode: 'stack',
               margin: { l: 50, r: 30, t: 30, b: 100 },
-              xaxis: { title: 'Week Starting', tickangle: -45 },
-              yaxis: { title: 'Cost (USD)', tickformat: '$.2f' },
+              xaxis: { title: { text: 'Week Starting' }, tickangle: -45 },
+              yaxis: { title: { text: 'Cost (USD)' }, tickformat: '$.2f' },
               showlegend: true,
               legend: { x: 0, y: 1.15, orientation: 'h' },
-            }}
+            })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />
@@ -265,7 +249,7 @@ export default function WeeklyUsage() {
                 return {
                   x: sortedWeeks,
                   y: sortedWeeks.map((w) => modelTokens[model]?.[w]?.input || 0),
-                  type: 'bar',
+                  type: 'bar' as const,
                   name: model.replace('claude-', '') + ' (input)',
                   marker: { color: inputColors[idx % inputColors.length] },
                   text: sortedWeeks.map((w) => {
@@ -273,7 +257,7 @@ export default function WeeklyUsage() {
                     // Only show text if value is significant (>5% of max)
                     return input > maxInput * 0.05 ? formatNumber(input) : ''
                   }),
-                  textposition: 'inside',
+                  textposition: 'inside' as const,
                   textfont: { size: 11 },
                   cliponaxis: false,
                   hovertemplate: '%{x}<br>%{fullData.name}<br>%{y:,} tokens<extra></extra>',
@@ -287,7 +271,7 @@ export default function WeeklyUsage() {
                 return {
                   x: sortedWeeks,
                   y: sortedWeeks.map((w) => -(modelTokens[model]?.[w]?.output || 0)),
-                  type: 'bar',
+                  type: 'bar' as const,
                   name: model.replace('claude-', '') + ' (output)',
                   marker: { color: outputColors[idx % outputColors.length] },
                   text: sortedWeeks.map((w) => {
@@ -295,7 +279,7 @@ export default function WeeklyUsage() {
                     // Only show text if value is significant (>5% of max)
                     return output > maxOutput * 0.05 ? formatNumber(output) : ''
                   }),
-                  textposition: 'inside',
+                  textposition: 'inside' as const,
                   textfont: { size: 11 },
                   cliponaxis: false,
                   hovertemplate: '%{x}<br>%{fullData.name}<br>%{customdata:,} tokens<extra></extra>',
@@ -304,18 +288,18 @@ export default function WeeklyUsage() {
                 }
               }),
             ]}
-            layout={{
+            layout={mergeLayout({
               autosize: true,
               barmode: 'relative',
               margin: { l: 60, r: 30, t: 30, b: 100 },
-              xaxis: { title: 'Week Starting', tickangle: -45 },
+              xaxis: { title: { text: 'Week Starting' }, tickangle: -45 },
               yaxis: {
-                title: 'Tokens',
+                title: { text: 'Tokens' },
                 tickformat: ',d',
               },
               showlegend: true,
               legend: { x: 0, y: 1.15, orientation: 'h' },
-            }}
+            })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />

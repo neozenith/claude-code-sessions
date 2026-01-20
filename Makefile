@@ -1,4 +1,4 @@
-.PHONY: help install dev dev-backend dev-frontend build test lint clean sync-projects
+.PHONY: help install dev dev-backend dev-frontend build test lint clean sync-projects sync-watch
 .PHONY: agentic-dev-backend agentic-dev-frontend agentic-dev format typecheck
 .PHONY: port-debug port-clean compare-projects
 
@@ -116,6 +116,10 @@ compare-projects: ## Compare ~/.claude/projects/ with ./projects/ to show differ
 
 sync-projects: ## APPEND ONLY Sync projects data from ~/.claude/projects/
 	rsync -av ~/.claude/projects/ ./projects/
+
+sync-watch: ## Watch and sync projects every 15 seconds (Ctrl+C to stop)
+	@echo "👀 Watching ~/.claude/projects/ - syncing every 15s (Ctrl+C to stop)"
+	@while true; do rsync -av ~/.claude/projects/ ./projects/; echo "💤 Sleeping 15s..."; sleep 15; done
 
 # =============================================================================
 # Port Management

@@ -7,7 +7,8 @@ import MonthlyUsage from './pages/MonthlyUsage'
 import HourlyUsage from './pages/HourlyUsage'
 import HourOfDay from './pages/HourOfDay'
 import Projects from './pages/Projects'
-import DrillDown from './pages/DrillDown'
+import Timeline from './pages/Timeline'
+import SchemaTimeline from './pages/SchemaTimeline'
 
 export default function App() {
   return (
@@ -20,7 +21,8 @@ export default function App() {
         <Route path="/hourly" element={<HourlyUsage />} />
         <Route path="/hour-of-day" element={<HourOfDay />} />
         <Route path="/projects" element={<Projects />} />
-        <Route path="/drilldown" element={<DrillDown />} />
+        <Route path="/timeline" element={<Timeline />} />
+        <Route path="/schema-timeline" element={<SchemaTimeline />} />
       </Routes>
     </Layout>
   )

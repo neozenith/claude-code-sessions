@@ -1,6 +1,8 @@
-import { useState, useMemo } from 'react'
+import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
+import { useFilters } from '@/hooks/useFilters'
+import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface HourlyData {
@@ -16,27 +18,18 @@ interface HourlyData {
 }
 
 export default function HourlyUsage() {
-  const { data: hourly, loading } = useApi<HourlyData[]>('/usage/hourly')
-  const [selectedProject, setSelectedProject] = useState<string>('all')
+  const { filters, buildApiQuery } = useFilters()
+  const { mergeLayout, isDark } = usePlotlyTheme()
 
-  // Get unique projects
-  const projects = useMemo(() => {
-    if (!hourly) return []
-    const uniqueProjects = [...new Set(hourly.map((d) => d.project_id))].sort()
-    return uniqueProjects
-  }, [hourly])
+  // Fetch data with global filters (days param)
+  const { data: hourly, loading } = useApi<HourlyData[]>(`/usage/hourly${buildApiQuery()}`)
 
-  // Format project name for display
-  const formatProjectName = (name: string) => {
-    return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
-  }
-
-  // Filter data by selected project
+  // Filter data by selected project (client-side for additional filtering)
   const filteredHourly = useMemo(() => {
     if (!hourly) return []
-    if (selectedProject === 'all') return hourly
-    return hourly.filter((d) => d.project_id === selectedProject)
-  }, [hourly, selectedProject])
+    if (!filters.project) return hourly
+    return hourly.filter((d) => d.project_id === filters.project)
+  }, [hourly, filters.project])
 
   // Transform data into heatmap format
   const heatmapData = useMemo(() => {
@@ -54,9 +47,7 @@ export default function HourlyUsage() {
       for (let hour = 0; hour < 24; hour++) {
         const row: number[] = []
         for (const date of dates) {
-          const dataPoint = filteredHourly.find(
-            (d) => d.time_bucket === date && d.hour_of_day === hour
-          )
+          const dataPoint = filteredHourly.find((d) => d.time_bucket === date && d.hour_of_day === hour)
           row.push(dataPoint ? Number(dataPoint[metric]) : 0)
         }
         matrix.push(row)
@@ -84,40 +75,99 @@ export default function HourlyUsage() {
     return <div className="text-center py-8">No hourly data available</div>
   }
 
-  const commonLayout = {
+  // Theme-aware colorscales (dark mode uses darker base colors)
+  const baseColor = isDark ? '#1f2937' : 'white'
+
+  const costColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#e8f5e9'],
+    [0.05, '#c8e6c9'],
+    [0.1, '#a5d6a7'],
+    [0.2, '#81c784'],
+    [0.4, '#66bb6a'],
+    [0.6, '#4caf50'],
+    [0.8, '#43a047'],
+    [1, '#10B981'],
+  ]
+
+  const tokenColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#e3f2fd'],
+    [0.05, '#bbdefb'],
+    [0.1, '#90caf9'],
+    [0.2, '#64b5f6'],
+    [0.4, '#42a5f5'],
+    [0.6, '#2196f3'],
+    [0.8, '#1e88e5'],
+    [1, '#3B82F6'],
+  ]
+
+  const inputColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#f3e5f5'],
+    [0.05, '#e1bee7'],
+    [0.1, '#ce93d8'],
+    [0.2, '#ba68c8'],
+    [0.4, '#ab47bc'],
+    [0.6, '#9c27b0'],
+    [0.8, '#8e24aa'],
+    [1, '#8B5CF6'],
+  ]
+
+  const outputColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#fff3e0'],
+    [0.05, '#ffe0b2'],
+    [0.1, '#ffcc80'],
+    [0.2, '#ffb74d'],
+    [0.4, '#ffa726'],
+    [0.6, '#ff9800'],
+    [0.8, '#fb8c00'],
+    [1, '#F59E0B'],
+  ]
+
+  const sessionsColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#ffebee'],
+    [0.05, '#ffcdd2'],
+    [0.1, '#ef9a9a'],
+    [0.2, '#e57373'],
+    [0.4, '#ef5350'],
+    [0.6, '#f44336'],
+    [0.8, '#e53935'],
+    [1, '#EF4444'],
+  ]
+
+  const eventsColorscale: [number, string][] = [
+    [0, baseColor],
+    [0.01, '#e0f7fa'],
+    [0.05, '#b2ebf2'],
+    [0.1, '#80deea'],
+    [0.2, '#4dd0e1'],
+    [0.4, '#26c6da'],
+    [0.6, '#00bcd4'],
+    [0.8, '#00acc1'],
+    [1, '#06B6D4'],
+  ]
+
+  const commonLayout = mergeLayout({
     autosize: true,
     margin: { l: 60, r: 20, t: 40, b: 80 },
     xaxis: {
-      title: 'Date',
+      title: { text: 'Date' },
       tickangle: -45,
       side: 'bottom' as const,
     },
     yaxis: {
-      title: 'Hour of Day',
+      title: { text: 'Hour of Day' },
       autorange: 'reversed' as const,
       tickvals: [0, 3, 6, 9, 12, 15, 18, 21, 23],
     },
-  }
+  })
 
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between">
-        <h1 className="text-3xl font-bold">Hourly Usage Patterns - Last 14 Days</h1>
-
-        {/* Project Filter */}
-        <select
-          value={selectedProject}
-          onChange={(e) => setSelectedProject(e.target.value)}
-          className="px-3 py-2 border rounded-lg bg-white text-sm focus:outline-none focus:ring-2 focus:ring-primary"
-        >
-          <option value="all">All Projects</option>
-          {projects.map((project) => (
-            <option key={project} value={project}>
-              {formatProjectName(project)}
-            </option>
-          ))}
-        </select>
-      </div>
+      <h1 className="text-3xl font-bold">Hourly Usage Patterns</h1>
 
       {/* Total Cost Heatmap */}
       <Card>
@@ -131,18 +181,8 @@ export default function HourlyUsage() {
                 z: heatmapData.cost,
                 x: heatmapData.dates,
                 y: heatmapData.hours,
-                type: 'heatmap',
-                colorscale: [
-                  [0, 'white'],
-                  [0.01, '#e8f5e9'],
-                  [0.05, '#c8e6c9'],
-                  [0.1, '#a5d6a7'],
-                  [0.2, '#81c784'],
-                  [0.4, '#66bb6a'],
-                  [0.6, '#4caf50'],
-                  [0.8, '#43a047'],
-                  [1, '#10B981'],
-                ],
+                type: 'heatmap' as const,
+                colorscale: costColorscale,
                 hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Cost: $%{z:.2f}<extra></extra>',
               },
             ]}
@@ -165,18 +205,8 @@ export default function HourlyUsage() {
                 z: heatmapData.totalTokens,
                 x: heatmapData.dates,
                 y: heatmapData.hours,
-                type: 'heatmap',
-                colorscale: [
-                  [0, 'white'],
-                  [0.01, '#e3f2fd'],
-                  [0.05, '#bbdefb'],
-                  [0.1, '#90caf9'],
-                  [0.2, '#64b5f6'],
-                  [0.4, '#42a5f5'],
-                  [0.6, '#2196f3'],
-                  [0.8, '#1e88e5'],
-                  [1, '#3B82F6'],
-                ],
+                type: 'heatmap' as const,
+                colorscale: tokenColorscale,
                 hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Tokens: %{z:,.0f}<extra></extra>',
               },
             ]}
@@ -201,18 +231,8 @@ export default function HourlyUsage() {
                   z: heatmapData.inputTokens,
                   x: heatmapData.dates,
                   y: heatmapData.hours,
-                  type: 'heatmap',
-                  colorscale: [
-                    [0, 'white'],
-                    [0.01, '#f3e5f5'],
-                    [0.05, '#e1bee7'],
-                    [0.1, '#ce93d8'],
-                    [0.2, '#ba68c8'],
-                    [0.4, '#ab47bc'],
-                    [0.6, '#9c27b0'],
-                    [0.8, '#8e24aa'],
-                    [1, '#8B5CF6'],
-                  ],
+                  type: 'heatmap' as const,
+                  colorscale: inputColorscale,
                   hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Input: %{z:,.0f}<extra></extra>',
                 },
               ]}
@@ -235,18 +255,8 @@ export default function HourlyUsage() {
                   z: heatmapData.outputTokens,
                   x: heatmapData.dates,
                   y: heatmapData.hours,
-                  type: 'heatmap',
-                  colorscale: [
-                    [0, 'white'],
-                    [0.01, '#fff3e0'],
-                    [0.05, '#ffe0b2'],
-                    [0.1, '#ffcc80'],
-                    [0.2, '#ffb74d'],
-                    [0.4, '#ffa726'],
-                    [0.6, '#ff9800'],
-                    [0.8, '#fb8c00'],
-                    [1, '#F59E0B'],
-                  ],
+                  type: 'heatmap' as const,
+                  colorscale: outputColorscale,
                   hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Output: %{z:,.0f}<extra></extra>',
                 },
               ]}
@@ -272,18 +282,8 @@ export default function HourlyUsage() {
                   z: heatmapData.sessions,
                   x: heatmapData.dates,
                   y: heatmapData.hours,
-                  type: 'heatmap',
-                  colorscale: [
-                    [0, 'white'],
-                    [0.01, '#ffebee'],
-                    [0.05, '#ffcdd2'],
-                    [0.1, '#ef9a9a'],
-                    [0.2, '#e57373'],
-                    [0.4, '#ef5350'],
-                    [0.6, '#f44336'],
-                    [0.8, '#e53935'],
-                    [1, '#EF4444'],
-                  ],
+                  type: 'heatmap' as const,
+                  colorscale: sessionsColorscale,
                   hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Sessions: %{z}<extra></extra>',
                 },
               ]}
@@ -306,18 +306,8 @@ export default function HourlyUsage() {
                   z: heatmapData.events,
                   x: heatmapData.dates,
                   y: heatmapData.hours,
-                  type: 'heatmap',
-                  colorscale: [
-                    [0, 'white'],
-                    [0.01, '#e0f7fa'],
-                    [0.05, '#b2ebf2'],
-                    [0.1, '#80deea'],
-                    [0.2, '#4dd0e1'],
-                    [0.4, '#26c6da'],
-                    [0.6, '#00bcd4'],
-                    [0.8, '#00acc1'],
-                    [1, '#06B6D4'],
-                  ],
+                  type: 'heatmap' as const,
+                  colorscale: eventsColorscale,
                   hovertemplate: 'Date: %{x}<br>Hour: %{y}<br>Events: %{z}<extra></extra>',
                 },
               ]}
@@ -328,7 +318,6 @@ export default function HourlyUsage() {
           </CardContent>
         </Card>
       </div>
-
     </div>
   )
 }

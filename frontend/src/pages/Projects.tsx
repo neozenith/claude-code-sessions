@@ -1,104 +1,138 @@
+import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
+import { useFilters } from '@/hooks/useFilters'
+import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+
+interface HourlyData {
+  project_id: string
+  time_bucket: string
+  hour_of_day: number
+  total_cost_usd: number
+  input_tokens: number
+  output_tokens: number
+  total_tokens: number
+  session_count: number
+  event_count: number
+}
 
 interface ProjectData {
   project_id: string
   total_cost_usd: number
   session_count: number
   event_count: number
+  total_tokens: number
 }
 
 export default function Projects() {
-  const { data, loading, error } = useApi<ProjectData[]>('/projects')
+  const { buildApiQuery } = useFilters()
+  const { mergeLayout } = usePlotlyTheme()
+  const { data: hourlyData, loading, error } = useApi<HourlyData[]>(`/usage/hourly${buildApiQuery()}`)
 
-  if (loading) return <div className="text-center py-8">Loading...</div>
-  if (error) return <div className="text-center py-8 text-red-500">Error: {error}</div>
+  // Aggregate hourly data by project
+  const sortedProjects = useMemo(() => {
+    if (!hourlyData) return []
 
-  // Sort projects by cost
-  const sortedProjects = [...(data || [])].sort(
-    (a, b) => Number(b.total_cost_usd) - Number(a.total_cost_usd)
-  )
+    const projectMap = new Map<string, ProjectData>()
+
+    hourlyData.forEach((d) => {
+      const existing = projectMap.get(d.project_id)
+      if (existing) {
+        existing.total_cost_usd += Number(d.total_cost_usd) || 0
+        existing.session_count += Number(d.session_count) || 0
+        existing.event_count += Number(d.event_count) || 0
+        existing.total_tokens += Number(d.total_tokens) || 0
+      } else {
+        projectMap.set(d.project_id, {
+          project_id: d.project_id,
+          total_cost_usd: Number(d.total_cost_usd) || 0,
+          session_count: Number(d.session_count) || 0,
+          event_count: Number(d.event_count) || 0,
+          total_tokens: Number(d.total_tokens) || 0,
+        })
+      }
+    })
+
+    // Sort by cost (most expensive first)
+    return Array.from(projectMap.values()).sort((a, b) => b.total_cost_usd - a.total_cost_usd)
+  }, [hourlyData])
 
   // Format project names for display
   const formatProjectName = (name: string) => {
     return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
   }
 
+  if (loading) return <div className="text-center py-8">Loading...</div>
+  if (error) return <div className="text-center py-8 text-red-500">Error: {error}</div>
+
   return (
     <div className="space-y-6">
-      <h1 className="text-3xl font-bold text-gray-900">Projects</h1>
+      <h1 className="text-3xl font-bold">Projects</h1>
 
       {/* Projects Bar Chart */}
-      <div className="bg-white rounded-lg shadow p-6">
-        <h2 className="text-xl font-semibold mb-4">Cost by Project</h2>
-        <Plot
-          data={[
-            {
-              x: sortedProjects.map((p) => Number(p.total_cost_usd)),
-              y: sortedProjects.map((p) => formatProjectName(p.project_id)),
-              type: 'bar',
-              orientation: 'h',
-              marker: {
-                color: sortedProjects.map((_, i) =>
-                  `hsl(${(i * 360) / sortedProjects.length}, 70%, 50%)`
-                ),
+      <Card>
+        <CardHeader>
+          <CardTitle>Cost by Project</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <Plot
+            data={[
+              {
+                // Reverse for chart: Plotly renders horizontal bars bottom-to-top
+                x: [...sortedProjects].reverse().map((p) => Number(p.total_cost_usd)),
+                y: [...sortedProjects].reverse().map((p) => formatProjectName(p.project_id)),
+                type: 'bar' as const,
+                orientation: 'h' as const,
+                marker: {
+                  color: [...sortedProjects].reverse().map((_, i) => `hsl(${(i * 360) / sortedProjects.length}, 70%, 50%)`),
+                },
               },
-            },
-          ]}
-          layout={{
-            autosize: true,
-            margin: { l: 200, r: 30, t: 30, b: 50 },
-            xaxis: { title: 'Cost (USD)' },
-            yaxis: { automargin: true },
-          }}
-          useResizeHandler
-          style={{ width: '100%', height: `${Math.max(400, sortedProjects.length * 40)}px` }}
-        />
-      </div>
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              margin: { l: 200, r: 30, t: 30, b: 50 },
+              xaxis: { title: { text: 'Cost (USD)' } },
+              yaxis: { automargin: true },
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: `${Math.max(400, sortedProjects.length * 40)}px` }}
+          />
+        </CardContent>
+      </Card>
 
       {/* Projects Table */}
-      <div className="bg-white rounded-lg shadow overflow-hidden">
-        <h2 className="text-xl font-semibold p-6 border-b">Project Details</h2>
-        <div className="overflow-x-auto">
-          <table className="min-w-full divide-y divide-gray-200">
-            <thead className="bg-gray-50">
-              <tr>
-                <th className="px-6 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                  Project
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                  Cost (USD)
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                  Sessions
-                </th>
-                <th className="px-6 py-3 text-right text-xs font-medium text-gray-500 uppercase">
-                  Events
-                </th>
-              </tr>
-            </thead>
-            <tbody className="bg-white divide-y divide-gray-200">
-              {sortedProjects.map((project) => (
-                <tr key={project.project_id} className="hover:bg-gray-50">
-                  <td className="px-6 py-4 text-sm text-gray-900">
-                    {formatProjectName(project.project_id)}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900 text-right">
-                    ${Number(project.total_cost_usd).toFixed(2)}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900 text-right">
-                    {project.session_count}
-                  </td>
-                  <td className="px-6 py-4 text-sm text-gray-900 text-right">
-                    {project.event_count}
-                  </td>
+      <Card>
+        <CardHeader>
+          <CardTitle>Project Details</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="overflow-x-auto">
+            <table className="w-full">
+              <thead>
+                <tr className="border-b">
+                  <th className="text-left py-3 px-4 font-medium">Project</th>
+                  <th className="text-right py-3 px-4 font-medium">Cost (USD)</th>
+                  <th className="text-right py-3 px-4 font-medium">Sessions</th>
+                  <th className="text-right py-3 px-4 font-medium">Events</th>
+                  <th className="text-right py-3 px-4 font-medium">Tokens</th>
                 </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
-      </div>
+              </thead>
+              <tbody>
+                {sortedProjects.map((project) => (
+                  <tr key={project.project_id} className="border-b last:border-0 hover:bg-muted/50">
+                    <td className="py-3 px-4">{formatProjectName(project.project_id)}</td>
+                    <td className="py-3 px-4 text-right font-mono">${Number(project.total_cost_usd).toFixed(2)}</td>
+                    <td className="py-3 px-4 text-right">{project.session_count.toLocaleString()}</td>
+                    <td className="py-3 px-4 text-right">{project.event_count.toLocaleString()}</td>
+                    <td className="py-3 px-4 text-right">{project.total_tokens.toLocaleString()}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   )
 }

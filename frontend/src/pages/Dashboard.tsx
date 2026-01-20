@@ -1,6 +1,8 @@
 import { useMemo } from 'react'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
+import { useFilters } from '@/hooks/useFilters'
+import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 
 interface SummaryData {
@@ -50,9 +52,13 @@ const formatNumber = (num: number): string => {
 }
 
 export default function Dashboard() {
-  const { data: summary, loading: summaryLoading } = useApi<SummaryData[]>('/summary')
-  const { data: monthly, loading: monthlyLoading } = useApi<MonthlyData[]>('/usage/monthly')
-  const { data: topProjectsData, loading: topProjectsLoading } = useApi<TopProjectWeekly[]>('/usage/top-projects-weekly')
+  const { filters, buildApiQuery } = useFilters()
+  const { mergeLayout } = usePlotlyTheme()
+  const { data: summary, loading: summaryLoading } = useApi<SummaryData[]>(`/summary${buildApiQuery()}`)
+  const { data: monthly, loading: monthlyLoading } = useApi<MonthlyData[]>(`/usage/monthly${buildApiQuery()}`)
+  const { data: topProjectsData, loading: topProjectsLoading } = useApi<TopProjectWeekly[]>(
+    `/usage/top-projects-weekly${buildApiQuery()}`
+  )
 
   // Process top projects data (must be before early return - Rules of Hooks)
   const topProjectsAnalysis = useMemo(() => {
@@ -65,24 +71,27 @@ export default function Dashboard() {
     const weeks = [...new Set(topProjectsData.map((d) => d.time_bucket))].sort()
 
     // Define colors for projects (matching our existing color scheme)
-    const colors = ['#10B981', '#8B5CF6', '#F59E0B']
+    const chartColors = ['#10B981', '#8B5CF6', '#F59E0B']
     const projectColors: Record<string, string> = {}
     projects.forEach((proj, i) => {
-      projectColors[proj] = colors[i % colors.length]
+      projectColors[proj] = chartColors[i % chartColors.length]
     })
 
     // Organize data by project
-    const projectData: Record<string, {
-      weeks: string[]
-      costs: number[]
-      tokens: number[]
-      sessions: number[]
-      totalCost: number
-      totalTokens: number
-      totalSessions: number
-      tokensPerSession: number
-      sessionsPerDay: number
-    }> = {}
+    const projectData: Record<
+      string,
+      {
+        weeks: string[]
+        costs: number[]
+        tokens: number[]
+        sessions: number[]
+        totalCost: number
+        totalTokens: number
+        totalSessions: number
+        tokensPerSession: number
+        sessionsPerDay: number
+      }
+    > = {}
 
     projects.forEach((proj) => {
       const projRows = topProjectsData.filter((d) => d.project_id === proj)
@@ -109,6 +118,13 @@ export default function Dashboard() {
     return { projects, weeks, projectColors, projectData }
   }, [topProjectsData])
 
+  // Filter monthly data by project if selected
+  const filteredMonthly = useMemo(() => {
+    if (!monthly) return []
+    if (!filters.project) return monthly
+    return monthly.filter((row) => row.project_id === filters.project)
+  }, [monthly, filters.project])
+
   // Early return after all hooks
   if (summaryLoading || monthlyLoading || topProjectsLoading) {
     return <div className="text-center py-8">Loading...</div>
@@ -118,7 +134,7 @@ export default function Dashboard() {
 
   // Aggregate monthly costs
   const monthlyCosts: Record<string, number> = {}
-  monthly?.forEach((row) => {
+  filteredMonthly.forEach((row) => {
     const month = row.time_bucket
     monthlyCosts[month] = (monthlyCosts[month] || 0) + Number(row.total_cost_usd)
   })
@@ -136,9 +152,7 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Total Cost</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold text-green-600">
-              ${summaryData?.grand_total_cost_usd?.toFixed(2) || '0.00'}
-            </p>
+            <p className="text-3xl font-bold text-green-600">${summaryData?.grand_total_cost_usd?.toFixed(2) || '0.00'}</p>
           </CardContent>
         </Card>
         <Card>
@@ -146,9 +160,7 @@ export default function Dashboard() {
             <CardTitle className="text-sm font-medium text-muted-foreground">Projects</CardTitle>
           </CardHeader>
           <CardContent>
-            <p className="text-3xl font-bold text-blue-600">
-              {summaryData?.total_projects || 0}
-            </p>
+            <p className="text-3xl font-bold text-blue-600">{summaryData?.total_projects || 0}</p>
           </CardContent>
         </Card>
         <Card>
@@ -263,21 +275,21 @@ export default function Dashboard() {
                   return {
                     x: data.weeks,
                     y: data.costs,
-                    type: 'bar',
+                    type: 'bar' as const,
                     name: formatProjectName(proj),
                     marker: { color: topProjectsAnalysis.projectColors[proj] },
                     hovertemplate: '%{x}<br>%{fullData.name}<br>$%{y:.2f}<extra></extra>',
                   }
                 })}
-                layout={{
+                layout={mergeLayout({
                   autosize: true,
                   barmode: 'group',
                   margin: { l: 50, r: 30, t: 30, b: 80 },
                   xaxis: {
-                    title: 'Week Starting',
+                    title: { text: 'Week Starting' },
                     tickangle: -45,
                   },
-                  yaxis: { title: 'Cost (USD)' },
+                  yaxis: { title: { text: 'Cost (USD)' } },
                   showlegend: true,
                   legend: {
                     orientation: 'h',
@@ -285,7 +297,7 @@ export default function Dashboard() {
                     x: 0.5,
                     xanchor: 'center',
                   },
-                }}
+                })}
                 useResizeHandler
                 style={{ width: '100%', height: '450px' }}
               />
