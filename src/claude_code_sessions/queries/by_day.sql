@@ -38,6 +38,7 @@ parsed_data AS (
     -- Only include rows that have usage data (assistant messages)
     WHERE message.usage IS NOT NULL
       __DAYS_FILTER__
+      __PROJECT_FILTER__
 )
 
 SELECT

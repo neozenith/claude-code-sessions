@@ -8,7 +8,7 @@ Make `claude-code-sessions` a standalone, zero-install analytics dashboard that 
 
 ```bash
 # One command to rule them all
-uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-sessions
+uvx --from git+https://github.com/neozenith/claude-code-sessions claude-code-sessions
 
 # Opens browser automatically to http://localhost:8100
 # Analyzes data from ~/.claude/projects/ by default
@@ -18,16 +18,16 @@ uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-ses
 
 ```bash
 # Custom port
-uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-sessions --port 3000
+uvx --from git+https://github.com/neozenith/claude-code-sessions claude-code-sessions --port 3000
 
 # Custom projects path
-uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-sessions --projects-path /path/to/projects
+uvx --from git+https://github.com/neozenith/claude-code-sessions claude-code-sessions --projects-path /path/to/projects
 
 # Don't open browser automatically
-uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-sessions --no-open
+uvx --from git+https://github.com/neozenith/claude-code-sessions claude-code-sessions --no-open
 
 # Environment variable override
-PROJECTS_PATH=~/my-claude-data uvx --from git+https://github.com/noxasaxon/claude-code-sessions claude-code-sessions
+PROJECTS_PATH=~/my-claude-data uvx --from git+https://github.com/neozenith/claude-code-sessions claude-code-sessions
 ```
 
 ---

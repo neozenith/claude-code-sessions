@@ -53,12 +53,23 @@ function formatProjectName(projectId: string): string {
 export default function Layout({ children }: LayoutProps) {
   const { filters, setFilters, filterSearchString } = useFilters()
   const { theme, setTheme } = useTheme()
-  const { data: projects } = useApi<Project[]>('/projects')
 
-  // Sort projects by cost (descending)
+  // Build project list URL with time range filter
+  // This makes the project dropdown update when time range changes
+  const projectsUrl = useMemo(() => {
+    const params = new URLSearchParams()
+    if (filters.days !== null && filters.days > 0) {
+      params.set('days', String(filters.days))
+    }
+    const queryString = params.toString()
+    return queryString ? `/projects?${queryString}` : '/projects'
+  }, [filters.days])
+
+  const { data: projects } = useApi<Project[]>(projectsUrl)
+
+  // Projects are already sorted by cost from the API
   const sortedProjects = useMemo(() => {
-    if (!projects) return []
-    return [...projects].sort((a, b) => b.total_cost_usd - a.total_cost_usd)
+    return projects ?? []
   }, [projects])
 
   // Build NavLink to preserve query params

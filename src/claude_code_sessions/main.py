@@ -38,6 +38,39 @@ def get_projects_path() -> Path:
     raise HTTPException(status_code=500, detail="No projects data found")
 
 
+def build_filters(days: int | None = None, project: str | None = None) -> dict[str, str]:
+    """Build filter dict for SQL query placeholders.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
+
+    Returns:
+        Dict with DAYS_FILTER and PROJECT_FILTER keys for SQL replacement
+    """
+    filters: dict[str, str] = {}
+
+    # Days filter
+    if days and days > 0:
+        filters["DAYS_FILTER"] = (
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
+        )
+    else:
+        filters["DAYS_FILTER"] = ""
+
+    # Project filter
+    if project:
+        # Escape single quotes in project ID to prevent SQL injection
+        safe_project = project.replace("'", "''")
+        filters["PROJECT_FILTER"] = (
+            f"AND regexp_extract(filename, 'projects/([^/]+)/', 1) = '{safe_project}'"
+        )
+    else:
+        filters["PROJECT_FILTER"] = ""
+
+    return filters
+
+
 def get_file_mtimes_df(projects_path: Path) -> pd.DataFrame:
     """Get file modification times as a pandas DataFrame.
 
@@ -118,84 +151,82 @@ async def health() -> dict[str, str]:
 
 
 @app.get("/api/summary")
-async def get_summary(days: int | None = None) -> list[dict[str, Any]]:
+async def get_summary(days: int | None = None, project: str | None = None) -> list[dict[str, Any]]:
     """Get overall usage summary.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
     """
-    filters: dict[str, str] = {}
-    if days and days > 0:
-        filters["DAYS_FILTER"] = (
-            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
-        )
-    else:
-        filters["DAYS_FILTER"] = ""
+    filters = build_filters(days, project)
     return execute_query("summary", filters)
 
 
 @app.get("/api/usage/daily")
-async def get_daily_usage(days: int | None = None) -> list[dict[str, Any]]:
+async def get_daily_usage(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
     """Get daily usage breakdown.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
     """
-    filters: dict[str, str] = {}
-    if days and days > 0:
-        filters["DAYS_FILTER"] = (
-            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
-        )
-    else:
-        filters["DAYS_FILTER"] = ""
+    filters = build_filters(days, project)
     return execute_query("by_day", filters)
 
 
 @app.get("/api/usage/weekly")
-async def get_weekly_usage(days: int | None = None) -> list[dict[str, Any]]:
+async def get_weekly_usage(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
     """Get weekly usage breakdown.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
     """
-    filters: dict[str, str] = {}
-    if days and days > 0:
-        filters["DAYS_FILTER"] = (
-            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
-        )
-    else:
-        filters["DAYS_FILTER"] = ""
+    filters = build_filters(days, project)
     return execute_query("by_week", filters)
 
 
 @app.get("/api/usage/monthly")
-async def get_monthly_usage(days: int | None = None) -> list[dict[str, Any]]:
+async def get_monthly_usage(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
     """Get monthly usage breakdown.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
     """
-    filters: dict[str, str] = {}
-    if days and days > 0:
-        filters["DAYS_FILTER"] = (
-            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{days} days'"
-        )
-    else:
-        filters["DAYS_FILTER"] = ""
+    filters = build_filters(days, project)
     return execute_query("by_month", filters)
 
 
 @app.get("/api/usage/sessions")
-async def get_sessions() -> list[dict[str, Any]]:
-    """Get per-session usage details."""
-    return execute_query("sessions")
+async def get_sessions(days: int | None = None, project: str | None = None) -> list[dict[str, Any]]:
+    """Get per-session usage details.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
+    """
+    filters = build_filters(days, project)
+    return execute_query("sessions", filters)
 
 
 @app.get("/api/projects")
-async def get_projects() -> list[dict[str, Any]]:
-    """Get list of projects with usage stats."""
-    # Pass empty DAYS_FILTER to get all-time data for project list
-    data = execute_query("by_month", {"DAYS_FILTER": ""})
+async def get_projects(days: int | None = None) -> list[dict[str, Any]]:
+    """Get list of projects with usage stats.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time).
+              Use this to get projects active within the time range.
+    """
+    # Build filters - project filter not applicable here (we're listing all projects)
+    filters = build_filters(days, None)
+    data = execute_query("by_month", filters)
     # Aggregate by project
     projects: dict[str, dict[str, Any]] = {}
     for row in data:
@@ -211,7 +242,9 @@ async def get_projects() -> list[dict[str, Any]]:
         projects[proj]["session_count"] += int(row.get("session_count", 0))
         projects[proj]["event_count"] += int(row.get("event_count", 0))
 
-    return list(projects.values())
+    # Sort by cost (highest first)
+    sorted_projects = sorted(projects.values(), key=lambda p: p["total_cost_usd"], reverse=True)
+    return sorted_projects
 
 
 @app.get("/api/usage/top-projects-weekly")
@@ -226,7 +259,8 @@ async def get_top_projects_weekly(days: int | None = None) -> list[dict[str, Any
     effective_days = days if days is not None else 56
     if effective_days and effective_days > 0:
         filters["DAYS_FILTER"] = (
-            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= CURRENT_DATE - INTERVAL '{effective_days} days'"
+            f"AND TRY_CAST(timestamp AS TIMESTAMP) >= "
+            f"CURRENT_DATE - INTERVAL '{effective_days} days'"
         )
     else:
         filters["DAYS_FILTER"] = ""
@@ -234,14 +268,18 @@ async def get_top_projects_weekly(days: int | None = None) -> list[dict[str, Any
 
 
 @app.get("/api/usage/hourly")
-async def get_hourly_usage(days: int | None = None) -> list[dict[str, Any]]:
+async def get_hourly_usage(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
     """Get hourly usage breakdown for configurable time range.
 
     Args:
         days: Number of days to query (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
     """
     filters: dict[str, str] = {}
     # Add days filter - 0 or None means all time
+    # Note: Uses local timezone for hourly view
     if days and days > 0:
         filters["DAYS_FILTER"] = (
             f"AND TRY_CAST(timestamp AS TIMESTAMPTZ) AT TIME ZONE "
@@ -249,6 +287,16 @@ async def get_hourly_usage(days: int | None = None) -> list[dict[str, Any]]:
         )
     else:
         filters["DAYS_FILTER"] = ""
+
+    # Add project filter
+    if project:
+        safe_project = project.replace("'", "''")
+        filters["PROJECT_FILTER"] = (
+            f"AND regexp_extract(filename, 'projects/([^/]+)/', 1) = '{safe_project}'"
+        )
+    else:
+        filters["PROJECT_FILTER"] = ""
+
     return execute_query("by_hour", filters)
 
 

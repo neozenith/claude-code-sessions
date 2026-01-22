@@ -1,0 +1,433 @@
+{
+  "sections": [
+    {
+      "id": 0,
+      "name": "Dashboard",
+      "path": "/",
+      "file": "frontend/src/pages/Dashboard.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Summary Stats Cards",
+          "apiEndpoint": "/api/summary",
+          "chartType": "cards",
+          "apiFile": "src/claude_code_sessions/main.py:get_summary",
+          "queryFile": "src/claude_code_sessions/queries/summary.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Monthly Costs Table",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "table",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 2,
+          "name": "Top Projects Cards",
+          "apiEndpoint": "/api/usage/top-projects-weekly",
+          "chartType": "cards",
+          "apiFile": "src/claude_code_sessions/main.py:get_top_projects_weekly",
+          "queryFile": "src/claude_code_sessions/queries/top_projects_weekly.sql",
+          "supportsDays": true,
+          "supportsProject": false
+        },
+        {
+          "id": 3,
+          "name": "Weekly Costs by Project",
+          "apiEndpoint": "/api/usage/top-projects-weekly",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_top_projects_weekly",
+          "queryFile": "src/claude_code_sessions/queries/top_projects_weekly.sql",
+          "supportsDays": true,
+          "supportsProject": false
+        }
+      ]
+    },
+    {
+      "id": 1,
+      "name": "Daily Usage",
+      "path": "/daily",
+      "file": "frontend/src/pages/DailyUsage.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Daily Costs Chart",
+          "apiEndpoint": "/api/usage/daily",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_daily_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_day.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Token Usage Chart",
+          "apiEndpoint": "/api/usage/daily",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_daily_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_day.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 2,
+          "name": "Daily Costs by Model",
+          "apiEndpoint": "/api/usage/daily",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_daily_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_day.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 3,
+          "name": "Daily Tokens by Model",
+          "apiEndpoint": "/api/usage/daily",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_daily_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_day.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 2,
+      "name": "Weekly Usage",
+      "path": "/weekly",
+      "file": "frontend/src/pages/WeeklyUsage.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Weekly Costs Chart",
+          "apiEndpoint": "/api/usage/weekly",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_weekly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_week.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Token Usage Chart",
+          "apiEndpoint": "/api/usage/weekly",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_weekly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_week.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 2,
+          "name": "Weekly Costs by Model",
+          "apiEndpoint": "/api/usage/weekly",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_weekly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_week.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 3,
+          "name": "Weekly Tokens by Model",
+          "apiEndpoint": "/api/usage/weekly",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_weekly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_week.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 3,
+      "name": "Monthly Usage",
+      "path": "/monthly",
+      "file": "frontend/src/pages/MonthlyUsage.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Monthly Costs Chart",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Token Usage Chart",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 2,
+          "name": "Monthly Costs by Model",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 3,
+          "name": "Monthly Tokens by Model",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "stacked_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 4,
+          "name": "Total Cost by Model Pie",
+          "apiEndpoint": "/api/usage/monthly",
+          "chartType": "pie",
+          "apiFile": "src/claude_code_sessions/main.py:get_monthly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 4,
+      "name": "Hourly Usage",
+      "path": "/hourly",
+      "file": "frontend/src/pages/HourlyUsage.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Cost by Hour Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Total Tokens Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 2,
+          "name": "Input Tokens Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 3,
+          "name": "Output Tokens Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 4,
+          "name": "Sessions Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 5,
+          "name": "Events Heatmap",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "heatmap",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 5,
+      "name": "Hour of Day",
+      "path": "/hour-of-day",
+      "file": "frontend/src/pages/HourOfDay.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Cost Polar Chart",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "polar",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Tokens Polar Chart",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "polar",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 6,
+      "name": "Projects",
+      "path": "/projects",
+      "file": "frontend/src/pages/Projects.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Cost by Project Bar",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "horizontal_bar",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Project Details Table",
+          "apiEndpoint": "/api/usage/hourly",
+          "chartType": "table",
+          "apiFile": "src/claude_code_sessions/main.py:get_hourly_usage",
+          "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 7,
+      "name": "Timeline",
+      "path": "/timeline",
+      "file": "frontend/src/pages/Timeline.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Event Timeline",
+          "apiEndpoint": "/api/timeline/events/{project_id}",
+          "chartType": "scatter",
+          "requiresProject": true,
+          "apiFile": "src/claude_code_sessions/main.py:get_timeline_events",
+          "queryFile": "src/claude_code_sessions/queries/timeline_events.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    },
+    {
+      "id": 8,
+      "name": "Schema Timeline",
+      "path": "/schema-timeline",
+      "file": "frontend/src/pages/SchemaTimeline.tsx",
+      "visualizations": [
+        {
+          "id": 0,
+          "name": "Schema Evolution Timeline",
+          "apiEndpoint": "/api/schema-timeline",
+          "chartType": "scatter",
+          "apiFile": "src/claude_code_sessions/main.py:get_schema_timeline",
+          "queryFile": "src/claude_code_sessions/queries/schema_timeline.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        },
+        {
+          "id": 1,
+          "name": "Path Details Table",
+          "apiEndpoint": "/api/schema-timeline",
+          "chartType": "table",
+          "apiFile": "src/claude_code_sessions/main.py:get_schema_timeline",
+          "queryFile": "src/claude_code_sessions/queries/schema_timeline.sql",
+          "supportsDays": true,
+          "supportsProject": true
+        }
+      ]
+    }
+  ],
+  "apiEndpoints": {
+    "/api/schema-timeline": {
+      "queryFile": "src/claude_code_sessions/queries/schema_timeline.sql",
+      "functionName": "get_schema_timeline",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/summary": {
+      "queryFile": "src/claude_code_sessions/queries/summary.sql",
+      "functionName": "get_summary",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/timeline/events/{project_id}": {
+      "queryFile": "src/claude_code_sessions/queries/timeline_events.sql",
+      "functionName": "get_timeline_events",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/usage/daily": {
+      "queryFile": "src/claude_code_sessions/queries/by_day.sql",
+      "functionName": "get_daily_usage",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/usage/hourly": {
+      "queryFile": "src/claude_code_sessions/queries/by_hour.sql",
+      "functionName": "get_hourly_usage",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/usage/monthly": {
+      "queryFile": "src/claude_code_sessions/queries/by_month.sql",
+      "functionName": "get_monthly_usage",
+      "supportsDays": true,
+      "supportsProject": true
+    },
+    "/api/usage/top-projects-weekly": {
+      "queryFile": "src/claude_code_sessions/queries/top_projects_weekly.sql",
+      "functionName": "get_top_projects_weekly",
+      "supportsDays": true,
+      "supportsProject": false
+    },
+    "/api/usage/weekly": {
+      "queryFile": "src/claude_code_sessions/queries/by_week.sql",
+      "functionName": "get_weekly_usage",
+      "supportsDays": true,
+      "supportsProject": true
+    }
+  },
+  "metadata": {
+    "generated_at": "2026-01-21T02:48:26.052989+00:00",
+    "total_sections": 9,
+    "total_visualizations": 30,
+    "total_api_endpoints": 8
+  }
+}

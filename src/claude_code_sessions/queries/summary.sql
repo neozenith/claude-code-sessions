@@ -20,6 +20,7 @@ parsed_data AS (
                         maximum_object_size=10485760)
     WHERE message.usage IS NOT NULL
       __DAYS_FILTER__
+      __PROJECT_FILTER__
 )
 
 SELECT
