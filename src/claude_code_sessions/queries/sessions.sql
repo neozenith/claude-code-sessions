@@ -1,6 +1,7 @@
 -- Claude Code Session Usage Analysis
 -- Aggregates token usage across all sessions grouped by project, session, and model
 -- Includes billing calculations based on Anthropic API pricing (as of 2025)
+-- Now includes subagent/sidechain token breakdown for visibility into where tokens are spent
 -- Pricing table for Claude models (per million tokens)
 WITH pricing AS (
     SELECT * FROM read_csv_auto('__PRICING_CSV_PATH__')
@@ -16,6 +17,11 @@ parsed_data AS (
 
         -- Extract model from the nested message structure
         message.model AS model_id,
+
+        -- Subagent/sidechain identification
+        -- isSidechain = true indicates this event belongs to a subagent (Task tool invocation)
+        -- Use TRY_CAST to handle records where isSidechain field doesn't exist
+        COALESCE(TRY_CAST(isSidechain AS BOOLEAN), false) AS is_sidechain,
 
         -- Extract all usage token fields
         message.usage.input_tokens AS input_tokens,
@@ -35,7 +41,8 @@ parsed_data AS (
                         format='newline_delimited',
                         filename=true,
                         ignore_errors=true,
-                        maximum_object_size=10485760)
+                        maximum_object_size=10485760,
+                        union_by_name=true)
 
     -- Only include rows that have usage data (assistant messages)
     WHERE message.usage IS NOT NULL
@@ -70,7 +77,26 @@ SELECT
     COALESCE(SUM(pd.cache_read_input_tokens), 0) +
     COALESCE(SUM(pd.output_tokens), 0) AS total_all_tokens,
 
-    -- Billing calculations (costs in USD)
+    -- ========== SUBAGENT/SIDECHAIN BREAKDOWN ==========
+    -- Event counts by agent type
+    COUNT(CASE WHEN NOT pd.is_sidechain THEN 1 END) AS main_agent_events,
+    COUNT(CASE WHEN pd.is_sidechain THEN 1 END) AS subagent_events,
+
+    -- Main agent token usage (is_sidechain = false)
+    COALESCE(SUM(CASE WHEN NOT pd.is_sidechain THEN pd.input_tokens END), 0) AS main_agent_input_tokens,
+    COALESCE(SUM(CASE WHEN NOT pd.is_sidechain THEN pd.output_tokens END), 0) AS main_agent_output_tokens,
+
+    -- Subagent token usage (is_sidechain = true)
+    COALESCE(SUM(CASE WHEN pd.is_sidechain THEN pd.input_tokens END), 0) AS subagent_input_tokens,
+    COALESCE(SUM(CASE WHEN pd.is_sidechain THEN pd.output_tokens END), 0) AS subagent_output_tokens,
+
+    -- Percentage of tokens from subagents
+    ROUND(
+        100.0 * COALESCE(SUM(CASE WHEN pd.is_sidechain THEN pd.input_tokens + pd.output_tokens END), 0) /
+        NULLIF(COALESCE(SUM(pd.input_tokens + pd.output_tokens), 0), 0),
+    1) AS subagent_token_pct,
+
+    -- ========== BILLING CALCULATIONS ==========
     -- Base input tokens cost
     ROUND((COALESCE(SUM(pd.input_tokens), 0) / 1000000.0) * COALESCE(p.base_input_price, 0), 4) AS cost_base_input,
 

@@ -1,6 +1,7 @@
 -- Timeline Events Query
 -- Returns individual events for a specific project with cumulative output tokens per session
 -- Used for timeline scatterplot visualization
+-- Includes subagent/sidechain identification for agent breakdown analysis
 WITH pricing AS (
     SELECT * FROM read_csv_auto('__PRICING_CSV_PATH__')
 ),
@@ -12,6 +13,14 @@ parsed_events AS (
         message.model AS model_id,
         -- Use top-level 'type' field for event type (user, assistant, system, etc.)
         type AS event_type,
+        -- Subagent/sidechain identification
+        -- agentId uniquely identifies each agent (main or subagent) within a session
+        -- Use TRY_CAST to handle missing fields gracefully (returns NULL if field doesn't exist)
+        TRY_CAST(agentId AS VARCHAR) AS agent_id,
+        -- isSidechain = true indicates this event belongs to a subagent
+        COALESCE(TRY_CAST(isSidechain AS BOOLEAN), false) AS is_sidechain,
+        -- slug provides a human-readable name for subagents (e.g., "Explore", "Plan")
+        TRY_CAST(slug AS VARCHAR) AS agent_slug,
         -- Extract message content for hover display
         -- For user messages, content is at message.content
         -- For assistant messages, it may be in message.content or nested in content array
@@ -36,7 +45,8 @@ parsed_events AS (
                         format='newline_delimited',
                         filename=true,
                         ignore_errors=true,
-                        maximum_object_size=10485760)
+                        maximum_object_size=10485760,
+                        union_by_name=true)
     WHERE regexp_extract(filename, 'projects/([^/]+)/', 1) = '__PROJECT_FILTER__'
       -- Only include meaningful event types (exclude file-history-snapshot, summary, etc.)
       AND type IN ('user', 'assistant', 'system')
@@ -56,7 +66,22 @@ session_first_event AS (
 
 events_with_cumulative AS (
     SELECT
-        e.*,
+        e.project_id,
+        e.session_id,
+        e.model_id,
+        e.event_type,
+        e.agent_id,
+        e.is_sidechain,
+        e.agent_slug,
+        e.message_content,
+        e.input_tokens,
+        e.output_tokens,
+        e.cache_read_tokens,
+        e.cache_creation_tokens,
+        e.cache_5m_tokens,
+        e.timestamp_utc,
+        e.timestamp_local,
+        e.event_seq,
         sfe.first_event_time,
         SUM(COALESCE(e.output_tokens, 0)) OVER (
             PARTITION BY e.session_id
@@ -73,6 +98,10 @@ SELECT
     event_seq,
     model_id,
     COALESCE(event_type, 'assistant') AS event_type,
+    -- Subagent identification fields
+    agent_id,
+    is_sidechain,
+    agent_slug,
     message_content,
     timestamp_utc,
     timestamp_local,
