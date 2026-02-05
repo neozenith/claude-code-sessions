@@ -359,6 +359,57 @@ async def get_schema_timeline(
     )
 
 
+@app.get("/api/sessions")
+async def get_sessions_list(
+    days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
+    """Get list of all sessions grouped by project.
+
+    Returns sessions with aggregated stats including subagent counts.
+    Sorted by most recent session first.
+
+    Args:
+        days: Number of days to filter (None or 0 = all time)
+        project: Project ID to filter by (None = all projects)
+    """
+    filters = build_filters(days, project)
+    return execute_query("sessions_list", filters)
+
+
+@app.get("/api/sessions/{project_id}/{session_id}")
+async def get_session_events(
+    project_id: str,
+    session_id: str,
+    event_uuid: str | None = None,
+) -> list[dict[str, Any]]:
+    """Get all events for a specific session including subagent events.
+
+    Uses pure Python parser for detailed event extraction.
+    Returns events with uuid, parentUuid, type, timestamp, message content,
+    token usage, and source file information for timeline visualization.
+    Events are ordered chronologically.
+
+    Args:
+        project_id: The project ID
+        session_id: The session ID
+        event_uuid: Optional UUID to filter to - returns this event and all descendants
+    """
+    from claude_code_sessions.session_parser import (
+        events_to_response,
+        filter_event_tree,
+        parse_session,
+    )
+
+    projects_path = get_projects_path()
+    events = parse_session(projects_path, project_id, session_id)
+
+    # Filter to specific event and descendants if requested
+    if event_uuid:
+        events = filter_event_tree(events, event_uuid)
+
+    return events_to_response(events)
+
+
 # Serve frontend static files in production
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():

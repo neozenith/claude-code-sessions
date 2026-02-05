@@ -75,7 +75,7 @@ agentic-dev-frontend: ## Run frontend dev server only (AI agent - port 5274)
 build: ## Build frontend for production
 	npm --prefix frontend run build
 
-test: test-backend test-frontend ## Run all tests
+test: test-frontend test-backend test-frontend-e2e ## Run all tests
 
 test-backend: ## Run backend tests
 	uv run pytest tests/ -v

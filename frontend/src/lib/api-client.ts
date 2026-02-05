@@ -205,6 +205,23 @@ export class ApiClient {
   async getSchemaTimeline(params?: { days?: number }): Promise<ApiResult<SchemaEvent[]>> {
     return this.get('/schema-timeline', params)
   }
+
+  /** Get sessions list */
+  async getSessions(params?: { days?: number; project?: string }): Promise<ApiResult<SessionListItem[]>> {
+    return this.get('/sessions', params)
+  }
+
+  /** Get session events for a specific session */
+  async getSessionEvents(
+    projectId: string,
+    sessionId: string,
+    params?: { event_uuid?: string }
+  ): Promise<ApiResult<SessionEvent[]>> {
+    return this.get(
+      `/sessions/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}`,
+      params
+    )
+  }
 }
 
 // =========================================================================
@@ -296,6 +313,63 @@ export interface SchemaEvent {
   first_seen: string
   has_record_timestamp: boolean
   event_count: number
+}
+
+/** Session list item from /api/sessions */
+export interface SessionListItem {
+  project_id: string
+  session_id: string
+  first_timestamp: string
+  last_timestamp: string
+  event_count: number
+  subagent_count: number
+  total_input_tokens: number
+  total_output_tokens: number
+  total_cost_usd: number
+  filepath: string
+}
+
+/** Session event from /api/sessions/{project_id}/{session_id} */
+export interface SessionEvent {
+  // Core identification
+  uuid: string | null
+  parent_uuid: string | null
+  event_type: string
+  // Timestamps
+  timestamp: string | null
+  timestamp_local: string | null
+  // Session/agent identification
+  session_id: string | null
+  is_sidechain: boolean
+  agent_slug: string | null
+  // Message content - can be string or array of content items
+  message_role: string | null
+  message_content: string | MessageContentItem[] | null
+  model_id: string | null
+  // Token usage
+  input_tokens: number
+  output_tokens: number
+  cache_read_tokens: number
+  cache_creation_tokens: number
+  // Source file info
+  filepath: string
+  line_number: number
+  is_subagent_file: boolean
+  // Raw message JSON for expandable view
+  message_json: unknown
+}
+
+/** Message content item (for assistant messages with typed content) */
+export interface MessageContentItem {
+  type: 'text' | 'thinking' | 'tool_use' | 'tool_result' | string
+  text?: string
+  thinking?: string
+  name?: string
+  input?: Record<string, unknown>
+  id?: string
+  content?: string | MessageContentItem[]
+  tool_use_id?: string
+  is_error?: boolean
 }
 
 // =========================================================================

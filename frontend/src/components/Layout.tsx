@@ -13,6 +13,7 @@ import {
   Sun,
   Moon,
   Monitor,
+  History,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -38,6 +39,7 @@ const navItems = [
   { path: '/weekly', label: 'Weekly', icon: CalendarDays },
   { path: '/monthly', label: 'Monthly', icon: CalendarRange },
   { path: '/projects', label: 'Projects', icon: FolderOpen },
+  { path: '/sessions', label: 'Sessions', icon: History },
   { path: '/timeline', label: 'Timeline', icon: Activity },
   { path: '/schema-timeline', label: 'Schema Timeline', icon: GitBranch },
 ]
