@@ -5,37 +5,8 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface TimelineEvent {
-  project_id: string
-  session_id: string
-  event_seq: number
-  model_id: string
-  event_type: string
-  message_content: string
-  timestamp_utc: string
-  timestamp_local: string
-  first_event_time: string
-  input_tokens: number
-  output_tokens: number
-  cache_read_tokens: number
-  cache_creation_tokens: number
-  cache_5m_tokens: number
-  total_tokens: number
-  cumulative_output_tokens: number
-}
-
-// Event type styling - color AND marker shape for maximum visibility
-const EVENT_TYPE_STYLES: Record<string, { symbol: string; color: string; name: string }> = {
-  user: { symbol: 'square', color: '#3B82F6', name: 'User' }, // Blue square
-  assistant: { symbol: 'circle', color: '#10B981', name: 'Assistant' }, // Green circle
-  tool_use: { symbol: 'diamond', color: '#F59E0B', name: 'Tool Use' }, // Orange diamond
-  tool_result: { symbol: 'star', color: '#8B5CF6', name: 'Tool Result' }, // Purple star
-  system: { symbol: 'hexagon', color: '#EF4444', name: 'System' }, // Red hexagon
-}
-
-// Default style for unknown event types
-const DEFAULT_EVENT_STYLE = { symbol: 'circle', color: '#6B7280', name: 'Other' }
+import { EVENT_TYPE_STYLES, getEventTypeStyle } from '@/lib/chart-colors'
+import type { TimelineEvent } from '@/lib/api-client'
 
 export default function Timeline() {
   const [searchParams, setSearchParams] = useSearchParams()
@@ -95,7 +66,7 @@ export default function Timeline() {
     // Create traces grouped by event type (for different markers and colors)
     const traces = eventTypes.map((eventType) => {
       const typeEvents = filteredEvents.filter((e) => e.event_type === eventType)
-      const style = EVENT_TYPE_STYLES[eventType] || DEFAULT_EVENT_STYLE
+      const style = getEventTypeStyle(eventType)
 
       return {
         type: 'scatter' as const,

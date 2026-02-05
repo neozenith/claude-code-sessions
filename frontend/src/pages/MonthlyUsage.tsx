@@ -4,33 +4,14 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface MonthlyData {
-  project_id: string
-  model_id: string
-  time_bucket: string
-  total_cost_usd: number
-  session_count: number
-  event_count: number
-  total_input_tokens: number
-  total_output_tokens: number
-}
-
-// Format large numbers in human-friendly format (e.g., 1.2M, 592k)
-function formatNumber(num: number): string {
-  if (num >= 1_000_000) {
-    return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
-  }
-  if (num >= 1_000) {
-    return (num / 1_000).toFixed(0) + 'k'
-  }
-  return num.toString()
-}
+import { formatNumber } from '@/lib/formatters'
+import { CHART_COLORS } from '@/lib/chart-colors'
+import type { UsageData } from '@/lib/api-client'
 
 export default function MonthlyUsage() {
   const { filters, buildApiQuery } = useFilters()
   const { colors, mergeLayout } = usePlotlyTheme()
-  const { data, loading, error } = useApi<MonthlyData[]>(`/usage/monthly${buildApiQuery()}`)
+  const { data, loading, error } = useApi<UsageData[]>(`/usage/monthly${buildApiQuery()}`)
 
   // Filter and aggregate data
   const { monthlyCosts, monthlyTokens, modelCosts, sortedMonths, costsByModel, tokensByModel, models } = useMemo(() => {
@@ -208,7 +189,7 @@ export default function MonthlyUsage() {
         <CardContent>
           <Plot
             data={models.map((model, idx) => {
-              const chartColors = ['#3B82F6', '#EF4444', '#10B981', '#F59E0B', '#8B5CF6', '#EC4899']
+              const chartColors = CHART_COLORS
               return {
                 x: sortedMonths,
                 y: sortedMonths.map((m) => costsByModel[model]?.[m] || 0),

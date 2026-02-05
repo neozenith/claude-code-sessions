@@ -3,35 +3,8 @@ import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface SchemaEvent {
-  event_date: string  // YYYY-MM-DD format
-  version: string | null
-  json_path: string
-  first_seen: string  // YYYY-MM-DD format
-  has_record_timestamp: boolean
-  event_count: number
-}
-
-// Color palette for JSON paths
-const PATH_COLORS = [
-  '#3B82F6', // Blue
-  '#10B981', // Emerald
-  '#F59E0B', // Amber
-  '#EF4444', // Red
-  '#8B5CF6', // Violet
-  '#EC4899', // Pink
-  '#06B6D4', // Cyan
-  '#84CC16', // Lime
-  '#F97316', // Orange
-  '#6366F1', // Indigo
-  '#14B8A6', // Teal
-  '#A855F7', // Purple
-  '#22C55E', // Green
-  '#0EA5E9', // Sky
-  '#E11D48', // Rose
-  '#FACC15', // Yellow
-]
+import { EXTENDED_CHART_COLORS } from '@/lib/chart-colors'
+import type { SchemaEvent } from '@/lib/api-client'
 
 export default function SchemaTimeline() {
   const { buildApiQuery } = useFilters()
@@ -66,7 +39,7 @@ export default function SchemaTimeline() {
     // Create traces - one per path for distinct colors
     const traces = pathOrder.map((jsonPath, colorIndex) => {
       const pathData = pathEvents.get(jsonPath) || []
-      const color = PATH_COLORS[colorIndex % PATH_COLORS.length]
+      const color = EXTENDED_CHART_COLORS[colorIndex % EXTENDED_CHART_COLORS.length]
 
       return {
         type: 'scatter' as const,
@@ -252,7 +225,7 @@ export default function SchemaTimeline() {
                           <div className="flex items-center gap-2">
                             <div
                               className="w-3 h-3 rounded-full"
-                              style={{ backgroundColor: PATH_COLORS[i % PATH_COLORS.length] }}
+                              style={{ backgroundColor: EXTENDED_CHART_COLORS[i % EXTENDED_CHART_COLORS.length] }}
                             />
                             <code className="text-xs">{stat.path}</code>
                           </div>

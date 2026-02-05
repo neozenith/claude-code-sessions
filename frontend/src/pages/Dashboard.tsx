@@ -4,58 +4,15 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface SummaryData {
-  summary_level: string
-  total_projects: number
-  total_events: number
-  total_input_tokens: number
-  total_output_tokens: number
-  grand_total_cost_usd: number
-}
-
-interface MonthlyData {
-  project_id: string
-  model_id: string
-  time_bucket: string
-  total_cost_usd: number
-  session_count: number
-  event_count: number
-}
-
-interface TopProjectWeekly {
-  project_id: string
-  time_bucket: string
-  cost_usd: number
-  input_tokens: number
-  output_tokens: number
-  total_tokens: number
-  session_count: number
-  event_count: number
-  cost_per_session: number
-}
-
-// Format project name for display
-const formatProjectName = (name: string) => {
-  return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
-}
-
-// Format large numbers
-const formatNumber = (num: number): string => {
-  if (num >= 1_000_000) {
-    return (num / 1_000_000).toFixed(1).replace(/\.0$/, '') + 'M'
-  }
-  if (num >= 1_000) {
-    return (num / 1_000).toFixed(0) + 'k'
-  }
-  return num.toString()
-}
+import { formatNumber, formatProjectName } from '@/lib/formatters'
+import { CHART_COLORS } from '@/lib/chart-colors'
+import type { SummaryData, UsageData, TopProjectWeekly } from '@/lib/api-client'
 
 export default function Dashboard() {
   const { filters, buildApiQuery } = useFilters()
   const { mergeLayout } = usePlotlyTheme()
   const { data: summary, loading: summaryLoading } = useApi<SummaryData[]>(`/summary${buildApiQuery()}`)
-  const { data: monthly, loading: monthlyLoading } = useApi<MonthlyData[]>(`/usage/monthly${buildApiQuery()}`)
+  const { data: monthly, loading: monthlyLoading } = useApi<UsageData[]>(`/usage/monthly${buildApiQuery()}`)
   const { data: topProjectsData, loading: topProjectsLoading } = useApi<TopProjectWeekly[]>(
     `/usage/top-projects-weekly${buildApiQuery()}`
   )
@@ -70,11 +27,10 @@ export default function Dashboard() {
     const projects = [...new Set(topProjectsData.map((d) => d.project_id))].sort()
     const weeks = [...new Set(topProjectsData.map((d) => d.time_bucket))].sort()
 
-    // Define colors for projects (matching our existing color scheme)
-    const chartColors = ['#10B981', '#8B5CF6', '#F59E0B']
+    // Define colors for projects using shared color palette
     const projectColors: Record<string, string> = {}
     projects.forEach((proj, i) => {
-      projectColors[proj] = chartColors[i % chartColors.length]
+      projectColors[proj] = CHART_COLORS[i % CHART_COLORS.length]
     })
 
     // Organize data by project

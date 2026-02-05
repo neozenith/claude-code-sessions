@@ -4,18 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface HourlyData {
-  project_id: string
-  time_bucket: string
-  hour_of_day: number
-  total_cost_usd: number
-  input_tokens: number
-  output_tokens: number
-  total_tokens: number
-  session_count: number
-  event_count: number
-}
+import type { HourlyData } from '@/lib/api-client'
 
 export default function HourOfDay() {
   const { filters, buildApiQuery } = useFilters()

@@ -4,18 +4,9 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
-
-interface HourlyData {
-  project_id: string
-  time_bucket: string
-  hour_of_day: number
-  total_cost_usd: number
-  input_tokens: number
-  output_tokens: number
-  total_tokens: number
-  session_count: number
-  event_count: number
-}
+import { formatProjectName } from '@/lib/formatters'
+import { generateHslColors } from '@/lib/chart-colors'
+import type { HourlyData } from '@/lib/api-client'
 
 interface ProjectData {
   project_id: string
@@ -58,11 +49,6 @@ export default function Projects() {
     return Array.from(projectMap.values()).sort((a, b) => b.total_cost_usd - a.total_cost_usd)
   }, [hourlyData])
 
-  // Format project names for display
-  const formatProjectName = (name: string) => {
-    return name.replace(/-Users-joshpeak-/, '').replace(/-/g, '/')
-  }
-
   if (loading) return <div className="text-center py-8">Loading...</div>
   if (error) return <div className="text-center py-8 text-red-500">Error: {error}</div>
 
@@ -85,7 +71,7 @@ export default function Projects() {
                 type: 'bar' as const,
                 orientation: 'h' as const,
                 marker: {
-                  color: [...sortedProjects].reverse().map((_, i) => `hsl(${(i * 360) / sortedProjects.length}, 70%, 50%)`),
+                  color: generateHslColors(sortedProjects.length).reverse(),
                 },
               },
             ]}
