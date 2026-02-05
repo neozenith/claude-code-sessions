@@ -83,6 +83,9 @@ test-backend: ## Run backend tests
 test-frontend: ## Run frontend tests
 	npm --prefix frontend run test
 
+test-frontend-e2e: ## Run frontend end-to-end tests
+	npm --prefix frontend run test:e2e
+
 # =============================================================================
 # Code Quality
 # =============================================================================
