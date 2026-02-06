@@ -9,6 +9,13 @@ parsed_data AS (
         regexp_extract(filename, 'projects/([^/]+)/', 1) AS project_id,
         regexp_extract(filename, '/([^/]+)\.jsonl$', 1) AS session_id,
         message.model AS model_id,
+        -- Extract model family for pricing lookup
+        CASE
+            WHEN message.model LIKE '%opus%' THEN 'opus'
+            WHEN message.model LIKE '%sonnet%' THEN 'sonnet'
+            WHEN message.model LIKE '%haiku%' THEN 'haiku'
+            ELSE 'unknown'
+        END AS model_family,
         message.usage.input_tokens AS input_tokens,
         message.usage.cache_creation_input_tokens AS cache_creation_input_tokens,
         message.usage.cache_read_input_tokens AS cache_read_input_tokens,
@@ -38,7 +45,7 @@ top_projects AS (
             (COALESCE(pd.output_tokens, 0) / 1000000.0) * COALESCE(p.output_price, 0)
         ) AS total_cost
     FROM parsed_data pd
-    LEFT JOIN pricing p ON pd.model_id = p.model_id
+    LEFT JOIN pricing p ON pd.model_family = p.model_family
     GROUP BY pd.project_id
     ORDER BY total_cost DESC
     LIMIT 3
@@ -70,7 +77,7 @@ weekly_aggregates AS (
 
     FROM parsed_data pd
     INNER JOIN top_projects tp ON pd.project_id = tp.project_id
-    LEFT JOIN pricing p ON pd.model_id = p.model_id
+    LEFT JOIN pricing p ON pd.model_family = p.model_family
     GROUP BY pd.project_id, pd.week
 )
 

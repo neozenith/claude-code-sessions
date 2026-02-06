@@ -8,6 +8,13 @@ parsed_data AS (
     SELECT
         regexp_extract(filename, 'projects/([^/]+)/', 1) AS project_id,
         message.model AS model_id,
+        -- Extract model family for pricing lookup
+        CASE
+            WHEN message.model LIKE '%opus%' THEN 'opus'
+            WHEN message.model LIKE '%sonnet%' THEN 'sonnet'
+            WHEN message.model LIKE '%haiku%' THEN 'haiku'
+            ELSE 'unknown'
+        END AS model_family,
         -- Subagent identification
         -- Use TRY_CAST to handle records where isSidechain field doesn't exist
         COALESCE(TRY_CAST(isSidechain AS BOOLEAN), false) AS is_sidechain,
@@ -73,4 +80,4 @@ SELECT
     2) AS grand_total_cost_usd
 
 FROM parsed_data pd
-LEFT JOIN pricing p ON pd.model_id = p.model_id;
+LEFT JOIN pricing p ON pd.model_family = p.model_family;

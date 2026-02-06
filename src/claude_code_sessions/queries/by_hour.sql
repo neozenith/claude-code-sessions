@@ -9,6 +9,13 @@ parsed_data AS (
         regexp_extract(filename, 'projects/([^/]+)/', 1) AS project_id,
         regexp_extract(filename, '/([^/]+)\.jsonl$', 1) AS session_id,
         message.model AS model_id,
+        -- Extract model family for pricing lookup
+        CASE
+            WHEN message.model LIKE '%opus%' THEN 'opus'
+            WHEN message.model LIKE '%sonnet%' THEN 'sonnet'
+            WHEN message.model LIKE '%haiku%' THEN 'haiku'
+            ELSE 'unknown'
+        END AS model_family,
         message.usage.input_tokens AS input_tokens,
         message.usage.cache_creation_input_tokens AS cache_creation_input_tokens,
         message.usage.cache_read_input_tokens AS cache_read_input_tokens,
@@ -53,6 +60,6 @@ SELECT
     COUNT(*) AS event_count
 
 FROM parsed_data
-LEFT JOIN pricing p ON parsed_data.model_id = p.model_id
+LEFT JOIN pricing p ON parsed_data.model_family = p.model_family
 GROUP BY project_id, date, hour
 ORDER BY date DESC, hour ASC;

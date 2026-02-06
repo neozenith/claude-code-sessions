@@ -2,11 +2,7 @@
 -- Returns individual events for a specific project with cumulative output tokens per session
 -- Used for timeline scatterplot visualization
 -- Includes subagent/sidechain identification for agent breakdown analysis
-WITH pricing AS (
-    SELECT * FROM read_csv_auto('__PRICING_CSV_PATH__')
-),
-
-parsed_events AS (
+WITH parsed_events AS (
     SELECT
         regexp_extract(filename, 'projects/([^/]+)/', 1) AS project_id,
         regexp_extract(filename, '/([^/]+)\.jsonl$', 1) AS session_id,

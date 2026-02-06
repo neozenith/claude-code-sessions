@@ -15,6 +15,14 @@ parsed_data AS (
         -- Extract model from the nested message structure
         message.model AS model_id,
 
+        -- Extract model family for pricing lookup
+        CASE
+            WHEN message.model LIKE '%opus%' THEN 'opus'
+            WHEN message.model LIKE '%sonnet%' THEN 'sonnet'
+            WHEN message.model LIKE '%haiku%' THEN 'haiku'
+            ELSE 'unknown'
+        END AS model_family,
+
         -- Extract all usage token fields
         message.usage.input_tokens AS input_tokens,
         message.usage.cache_creation_input_tokens AS cache_creation_input_tokens,
@@ -46,14 +54,14 @@ SELECT
     pd.model_id,
     pd.day AS time_bucket,
 
-    -- Total cost (moved to first aggregate)
-    ROUND(
-        (COALESCE(SUM(pd.input_tokens), 0) / 1000000.0) * COALESCE(p.base_input_price, 0) +
-        (COALESCE(SUM(pd.ephemeral_5m_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_5m_write_price, 0) +
-        (COALESCE(SUM(pd.ephemeral_1h_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_1h_write_price, 0) +
-        (COALESCE(SUM(pd.cache_read_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_read_price, 0) +
-        (COALESCE(SUM(pd.output_tokens), 0) / 1000000.0) * COALESCE(p.output_price, 0),
-    4) AS total_cost_usd,
+    -- Total cost (per-row multiplication inside SUM for correct GROUP BY)
+    ROUND(SUM(
+        (COALESCE(pd.input_tokens, 0) / 1000000.0) * COALESCE(p.base_input_price, 0) +
+        (COALESCE(pd.ephemeral_5m_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_5m_write_price, 0) +
+        (COALESCE(pd.ephemeral_1h_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_1h_write_price, 0) +
+        (COALESCE(pd.cache_read_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_read_price, 0) +
+        (COALESCE(pd.output_tokens, 0) / 1000000.0) * COALESCE(p.output_price, 0)
+    ), 4) AS total_cost_usd,
 
     -- Count of distinct sessions and events
     COUNT(DISTINCT pd.session_id) AS session_count,
@@ -74,24 +82,20 @@ SELECT
     COALESCE(SUM(pd.output_tokens), 0) AS total_all_tokens,
 
     -- Billing breakdown (costs in USD)
-    ROUND((COALESCE(SUM(pd.input_tokens), 0) / 1000000.0) * COALESCE(p.base_input_price, 0), 4) AS cost_base_input,
-    ROUND((COALESCE(SUM(pd.ephemeral_5m_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_5m_write_price, 0), 4) AS cost_cache_5m_writes,
-    ROUND((COALESCE(SUM(pd.ephemeral_1h_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_1h_write_price, 0), 4) AS cost_cache_1h_writes,
-    ROUND((COALESCE(SUM(pd.cache_read_input_tokens), 0) / 1000000.0) * COALESCE(p.cache_read_price, 0), 4) AS cost_cache_reads,
-    ROUND((COALESCE(SUM(pd.output_tokens), 0) / 1000000.0) * COALESCE(p.output_price, 0), 4) AS cost_output
+    ROUND(SUM((COALESCE(pd.input_tokens, 0) / 1000000.0) * COALESCE(p.base_input_price, 0)), 4) AS cost_base_input,
+    ROUND(SUM((COALESCE(pd.ephemeral_5m_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_5m_write_price, 0)), 4) AS cost_cache_5m_writes,
+    ROUND(SUM((COALESCE(pd.ephemeral_1h_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_1h_write_price, 0)), 4) AS cost_cache_1h_writes,
+    ROUND(SUM((COALESCE(pd.cache_read_input_tokens, 0) / 1000000.0) * COALESCE(p.cache_read_price, 0)), 4) AS cost_cache_reads,
+    ROUND(SUM((COALESCE(pd.output_tokens, 0) / 1000000.0) * COALESCE(p.output_price, 0)), 4) AS cost_output
 
 FROM parsed_data pd
-LEFT JOIN pricing p ON pd.model_id = p.model_id
+LEFT JOIN pricing p ON pd.model_family = p.model_family
 
 GROUP BY
     pd.project_id,
     pd.model_id,
     pd.day,
-    p.base_input_price,
-    p.cache_5m_write_price,
-    p.cache_1h_write_price,
-    p.cache_read_price,
-    p.output_price
+    pd.model_family
 
 ORDER BY
     pd.day DESC,

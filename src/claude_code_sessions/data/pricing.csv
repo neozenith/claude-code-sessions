@@ -1,12 +1,4 @@
-model_id,base_input_price,cache_5m_write_price,cache_1h_write_price,cache_read_price,output_price
-claude-opus-4-5-20251101,15.00,18.75,30.00,1.50,75.00
-claude-opus-4-5,15.00,18.75,30.00,1.50,75.00
-claude-opus-4-1,15.00,18.75,30.00,1.50,75.00
-claude-opus-4,15.00,18.75,30.00,1.50,75.00
-claude-sonnet-4-5-20250929,3.00,3.75,6.00,0.30,15.00
-claude-sonnet-4-5,3.00,3.75,6.00,0.30,15.00
-claude-sonnet-4,3.00,3.75,6.00,0.30,15.00
-claude-haiku-4-5-20251001,1.00,1.25,2.00,0.10,5.00
-claude-haiku-4-5,1.00,1.25,2.00,0.10,5.00
-claude-3-5-haiku-20241022,0.80,1.00,1.60,0.08,4.00
-claude-3-haiku-20240307,0.25,0.30,0.50,0.03,1.25
+model_family,base_input_price,cache_5m_write_price,cache_1h_write_price,cache_read_price,output_price
+opus,15.00,18.75,30.00,1.50,75.00
+sonnet,3.00,3.75,6.00,0.30,15.00
+haiku,1.00,1.25,2.00,0.10,5.00

@@ -43,6 +43,14 @@ all_events AS (
         -- Model for pricing
         message.model AS model_id,
 
+        -- Extract model family for pricing lookup
+        CASE
+            WHEN message.model LIKE '%opus%' THEN 'opus'
+            WHEN message.model LIKE '%sonnet%' THEN 'sonnet'
+            WHEN message.model LIKE '%haiku%' THEN 'haiku'
+            ELSE 'unknown'
+        END AS model_family,
+
         -- Token usage
         message.usage.input_tokens AS input_tokens,
         message.usage.output_tokens AS output_tokens,
@@ -71,6 +79,7 @@ usage_events AS (
         e.project_id,
         e.session_id,
         e.model_id,
+        e.model_family,
         e.input_tokens,
         e.output_tokens,
         e.cache_creation_input_tokens,
@@ -98,7 +107,7 @@ session_costs AS (
             COALESCE((u.output_tokens / 1000000.0) * p.output_price, 0)
         ) AS total_cost_usd
     FROM usage_events u
-    LEFT JOIN pricing p ON u.model_id = p.model_id
+    LEFT JOIN pricing p ON u.model_family = p.model_family
     GROUP BY u.project_id, u.session_id
 ),
 
