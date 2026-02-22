@@ -47,6 +47,7 @@ parsed_data AS (
     WHERE message.usage IS NOT NULL
       __DAYS_FILTER__
       __PROJECT_FILTER__
+      __DOMAIN_FILTER__
 )
 
 SELECT

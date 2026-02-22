@@ -31,6 +31,7 @@ parsed_data AS (
                         maximum_object_size=10485760)
     WHERE message.usage IS NOT NULL
       __DAYS_FILTER__
+      __DOMAIN_FILTER__
 ),
 
 -- Identify top 3 projects by total cost over last 8 weeks

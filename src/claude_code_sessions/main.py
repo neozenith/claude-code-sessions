@@ -11,10 +11,14 @@ from fastapi.staticfiles import StaticFiles
 from claude_code_sessions.config import (
     BACKEND_HOST,
     BACKEND_PORT,
+    BLOCKED_DOMAINS,
+    HOME_PREFIX,
     HOME_PROJECTS_PATH,
     PRICING_CSV_PATH,
     PROJECTS_PATH,
     QUERIES_PATH,
+    extract_domain,
+    is_project_blocked,
 )
 
 app = FastAPI(title="Claude Code Sessions Analytics")
@@ -38,6 +42,27 @@ def get_projects_path() -> Path:
     raise HTTPException(status_code=500, detail="No projects data found")
 
 
+def _build_domain_filter_sql() -> str:
+    """Generate SQL AND clauses to exclude blocked domains from results.
+
+    Each blocked domain produces a NOT LIKE clause against the encoded project ID
+    extracted from the filename path. Returns empty string when nothing is blocked.
+
+    Example with BLOCKED_DOMAINS=["work", "clients"]:
+        AND regexp_extract(filename, 'projects/([^/]+)/', 1) NOT LIKE '-Users-joshpeak-work-%'
+        AND regexp_extract(filename, 'projects/([^/]+)/', 1) NOT LIKE '-Users-joshpeak-clients-%'
+    """
+    if not BLOCKED_DOMAINS:
+        return ""
+    clauses = []
+    for domain in BLOCKED_DOMAINS:
+        clauses.append(
+            f"AND regexp_extract(filename, 'projects/([^/]+)/', 1) "
+            f"NOT LIKE '{HOME_PREFIX}-{domain}-%'"
+        )
+    return "\n    ".join(clauses)
+
+
 def build_filters(days: int | None = None, project: str | None = None) -> dict[str, str]:
     """Build filter dict for SQL query placeholders.
 
@@ -46,7 +71,7 @@ def build_filters(days: int | None = None, project: str | None = None) -> dict[s
         project: Project ID to filter by (None = all projects)
 
     Returns:
-        Dict with DAYS_FILTER and PROJECT_FILTER keys for SQL replacement
+        Dict with DAYS_FILTER, PROJECT_FILTER, and DOMAIN_FILTER keys for SQL replacement
     """
     filters: dict[str, str] = {}
 
@@ -68,6 +93,9 @@ def build_filters(days: int | None = None, project: str | None = None) -> dict[s
     else:
         filters["PROJECT_FILTER"] = ""
 
+    # Domain filter - always included
+    filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
+
     return filters
 
 
@@ -84,6 +112,10 @@ def get_file_mtimes_df(projects_path: Path) -> pd.DataFrame:
     """
     records = []
     for filepath in projects_path.glob("**/*.jsonl"):
+        # Skip files from blocked domains
+        project_dir = filepath.parent.name
+        if is_project_blocked(project_dir):
+            continue
         mtime = filepath.stat().st_mtime
         mtime_date = datetime.fromtimestamp(mtime, tz=UTC).strftime("%Y-%m-%d")
         # Use absolute path string to match what DuckDB's read_json_auto returns
@@ -264,6 +296,7 @@ async def get_top_projects_weekly(days: int | None = None) -> list[dict[str, Any
         )
     else:
         filters["DAYS_FILTER"] = ""
+    filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
     return execute_query("top_projects_weekly", filters)
 
 
@@ -297,6 +330,7 @@ async def get_hourly_usage(
     else:
         filters["PROJECT_FILTER"] = ""
 
+    filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
     return execute_query("by_hour", filters)
 
 
@@ -311,12 +345,15 @@ async def get_timeline_events(project_id: str, days: int | None = None) -> list[
         project_id: The project ID to filter events for
         days: Optional number of days to filter (None = all time)
     """
+    if is_project_blocked(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
     filters = {"PROJECT_FILTER": project_id}
     # Add days filter - 0 or None means all time
     if days and days > 0:
         filters["DAYS_FILTER"] = f"AND timestamp_utc >= NOW() - INTERVAL '{days} days'"
     else:
         filters["DAYS_FILTER"] = ""
+    filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
     return execute_query("timeline_events", filters)
 
 
@@ -347,6 +384,8 @@ async def get_schema_timeline(
         filters["PROJECT_FILTER"] = f"AND project_id = '{project}'"
     else:
         filters["PROJECT_FILTER"] = ""
+
+    filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
 
     # Get file mtimes as DataFrame - DuckDB queries this directly (zero-copy!)
     projects_path = get_projects_path()
@@ -394,6 +433,9 @@ async def get_session_events(
         session_id: The session ID
         event_uuid: Optional UUID to filter to - returns this event and all descendants
     """
+    if is_project_blocked(project_id):
+        raise HTTPException(status_code=404, detail="Project not found")
+
     from claude_code_sessions.session_parser import (
         events_to_response,
         filter_event_tree,
@@ -410,6 +452,26 @@ async def get_session_events(
     return events_to_response(events)
 
 
+@app.get("/api/domains")
+async def get_domains() -> dict[str, list[str]]:
+    """Get domain filtering status.
+
+    Returns available, blocked, and all domains discovered from project IDs.
+    """
+    projects_path = get_projects_path()
+    all_domains: set[str] = set()
+    for project_dir in projects_path.iterdir():
+        if project_dir.is_dir():
+            domain = extract_domain(project_dir.name)
+            if domain:
+                all_domains.add(domain)
+
+    sorted_all = sorted(all_domains)
+    blocked = sorted(d for d in sorted_all if d in BLOCKED_DOMAINS)
+    available = sorted(d for d in sorted_all if d not in BLOCKED_DOMAINS)
+    return {"available": available, "blocked": blocked, "all": sorted_all}
+
+
 # Serve frontend static files in production
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():
@@ -417,7 +479,31 @@ if frontend_dist.exists():
 
 
 def main() -> None:
+    import argparse
+    import logging
+
     import uvicorn
+
+    from claude_code_sessions import config
+
+    log = logging.getLogger(__name__)
+
+    parser = argparse.ArgumentParser(description="Claude Code Sessions Analytics API")
+    parser.add_argument(
+        "--block-domains",
+        nargs="*",
+        default=None,
+        help="Domains to block (overrides BLOCKED_DOMAINS env var). "
+        "E.g.: --block-domains work clients",
+    )
+    args = parser.parse_args()
+
+    # CLI flag overrides env var
+    if args.block_domains is not None:
+        config.BLOCKED_DOMAINS = args.block_domains
+
+    if config.BLOCKED_DOMAINS:
+        log.warning("Domain filtering active — blocked domains: %s", config.BLOCKED_DOMAINS)
 
     uvicorn.run(app, host=BACKEND_HOST, port=BACKEND_PORT)
 

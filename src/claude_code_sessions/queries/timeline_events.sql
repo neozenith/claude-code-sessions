@@ -50,6 +50,7 @@ WITH parsed_events AS (
       AND timestamp IS NOT NULL
       -- Optional days filter (replaced by API)
       __DAYS_FILTER__
+      __DOMAIN_FILTER__
 ),
 
 session_first_event AS (

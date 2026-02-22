@@ -1,6 +1,6 @@
 .PHONY: help install dev dev-backend dev-frontend build test lint clean sync-projects sync-watch
 .PHONY: agentic-dev-backend agentic-dev-frontend agentic-dev format typecheck
-.PHONY: port-debug port-clean compare-projects
+.PHONY: port-debug port-clean compare-projects demo-backend
 
 # Port Configuration
 # Human developer ports (default)
@@ -64,6 +64,9 @@ agentic-dev: install-frontend ## Run both servers for AI agent development (port
 
 agentic-dev-backend: ## Run backend server only (AI agent - port 8101)
 	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) uv run python -m claude_code_sessions.main
+
+demo-backend: ## Run backend in demo mode (blocks work, clients domains)
+	BLOCKED_DOMAINS=work,clients BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main
 
 agentic-dev-frontend: ## Run frontend dev server only (AI agent - port 5274)
 	VITE_BACKEND_URL=http://localhost:$(AGENTIC_BACKEND_PORT) npm --prefix frontend run dev:frontend-only -- --port $(AGENTIC_FRONTEND_PORT)

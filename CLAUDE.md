@@ -147,15 +147,25 @@ GET /api/usage/weekly    # Weekly breakdown
 GET /api/usage/monthly   # Monthly breakdown
 GET /api/usage/sessions  # Per-session details
 GET /api/projects        # Projects with stats
+GET /api/domains         # Domain filtering status
 ```
 
 ## Environment Variables
 
 ```bash
-BACKEND_PORT=8000        # Backend port
-BACKEND_HOST=0.0.0.0     # Backend host
-PROJECTS_PATH=./projects # Path to projects data
+BACKEND_PORT=8000            # Backend port
+BACKEND_HOST=0.0.0.0         # Backend host
+PROJECTS_PATH=./projects     # Path to projects data
+BLOCKED_DOMAINS=work,clients # Comma-separated domains to hide from API responses
 ```
+
+### Domain Filtering
+
+For demos or privacy, sensitive project domains can be blocked so they never appear in API responses.
+
+- **Env var**: `BLOCKED_DOMAINS=work,clients`
+- **CLI flag**: `--block-domains work clients` (overrides env var)
+- **Makefile**: `make demo-backend` (pre-configured to block `work,clients`)
 
 ## Session Memory
 

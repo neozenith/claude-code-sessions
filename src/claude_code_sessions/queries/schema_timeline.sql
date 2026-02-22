@@ -61,6 +61,7 @@ WITH raw_events AS (
     LEFT JOIN file_mtimes fm ON j.filename = fm.filename
     WHERE 1=1
       __PROJECT_FILTER__
+      __DOMAIN_FILTER__
 ),
 
 -- Unpivot: convert columns to rows for each path

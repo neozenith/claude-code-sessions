@@ -71,6 +71,7 @@ all_events AS (
     WHERE timestamp IS NOT NULL
       __DAYS_FILTER__
       __PROJECT_FILTER__
+      __DOMAIN_FILTER__
 ),
 
 -- Aggregate events with usage data for cost calculation
