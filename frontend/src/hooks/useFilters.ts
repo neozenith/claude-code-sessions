@@ -74,10 +74,21 @@ export function useFilters() {
     [navigate, location.search]
   )
 
-  // Get the current search string for use in links
+  // Get the current search string for use in links — only global params (days, project),
+  // not page-local params like ?msg= or ?sort= which shouldn't leak across pages.
   const filterSearchString = useMemo(() => {
-    return location.search
-  }, [location.search])
+    const params = new URLSearchParams()
+    const daysParam = searchParams.get('days')
+    const projectParam = searchParams.get('project')
+    if (daysParam !== null && daysParam !== String(DEFAULT_DAYS)) {
+      params.set('days', daysParam)
+    }
+    if (projectParam) {
+      params.set('project', projectParam)
+    }
+    const str = params.toString()
+    return str ? `?${str}` : ''
+  }, [searchParams])
 
   // Build API query string from filters
   const buildApiQuery = useCallback(

@@ -4,7 +4,7 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName } from '@/lib/formatters'
-import type { SessionEvent, MessageContentItem } from '@/lib/api-client'
+import type { SessionEvent, MessageContentItem, MessageKind } from '@/lib/api-client'
 import {
   ChevronLeft,
   ChevronDown,
@@ -23,6 +23,19 @@ import {
   X,
   Filter,
 } from 'lucide-react'
+
+// Message kind filter options — "All messages" + the 8 fine-grained kinds
+const MSG_KIND_OPTIONS: { value: MessageKind | ''; label: string; description: string }[] = [
+  { value: '', label: 'All messages', description: 'Show everything' },
+  { value: 'human', label: 'Human prompt', description: 'Actual typed user input' },
+  { value: 'assistant_text', label: 'Assistant text', description: 'Model text responses' },
+  { value: 'thinking', label: 'Thinking', description: 'Extended thinking blocks' },
+  { value: 'tool_use', label: 'Tool call', description: 'Tool invocations by the model' },
+  { value: 'tool_result', label: 'Tool result', description: 'Output returned from tools' },
+  { value: 'user_text', label: 'User text', description: 'User messages with text blocks' },
+  { value: 'meta', label: 'Meta / injected', description: 'System-injected context (isMeta=true)' },
+  { value: 'other', label: 'System / progress', description: 'Progress, system, queue-operation events' },
+]
 
 // Event type styling
 const EVENT_TYPE_CONFIG: Record<string, { icon: typeof User; color: string; bgColor: string }> = {
@@ -320,8 +333,9 @@ export default function SessionDetail() {
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Get event_uuid filter from query params
+  // Get event_uuid and msg kind filters from query params
   const eventUuidFilter = searchParams.get('event_uuid')
+  const msgKindFilter = (searchParams.get('msg') ?? '') as MessageKind | ''
   const [highlightedUuid, setHighlightedUuid] = useState<string | null>(null)
 
   // Build API URL with optional event_uuid filter (filtering happens server-side)
@@ -336,7 +350,14 @@ export default function SessionDetail() {
 
   const { data: events, loading, error } = useApi<SessionEvent[]>(apiUrl)
 
-  // Build event lookup map for parent references
+  // Client-side message kind filter (applied on top of the server-side event_uuid filter)
+  const visibleEvents = useMemo(() => {
+    if (!events) return []
+    if (!msgKindFilter) return events
+    return events.filter((e) => e.message_kind === msgKindFilter)
+  }, [events, msgKindFilter])
+
+  // Build event lookup map for parent references (always from full event set)
   const eventMap = useMemo(() => {
     if (!events) return new Map<string, SessionEvent>()
 
@@ -386,6 +407,22 @@ export default function SessionDetail() {
     newParams.delete('event_uuid')
     setSearchParams(newParams)
   }, [searchParams, setSearchParams])
+
+  // Set/clear the message kind filter
+  const setMsgKindFilter = useCallback(
+    (kind: MessageKind | '') => {
+      setSearchParams((prev) => {
+        const next = new URLSearchParams(prev)
+        if (kind) {
+          next.set('msg', kind)
+        } else {
+          next.delete('msg')
+        }
+        return next
+      })
+    },
+    [setSearchParams]
+  )
 
   // Scroll to fragment on load/change
   useEffect(() => {
@@ -488,16 +525,36 @@ export default function SessionDetail() {
       {/* Events Timeline - Flat chronological list */}
       <Card>
         <CardHeader>
-          <CardTitle className="flex items-center gap-2">
-            <Clock className="h-5 w-5" />
-            Event Timeline
-            {events && (
-              <span className="text-sm font-normal text-muted-foreground ml-2">
-                ({events.length} events{eventUuidFilter && ' filtered'})
-              </span>
-            )}
-          </CardTitle>
-          {/* Filter indicator */}
+          <div className="flex items-center justify-between gap-4 flex-wrap">
+            <CardTitle className="flex items-center gap-2">
+              <Clock className="h-5 w-5" />
+              Event Timeline
+              {events && (
+                <span className="text-sm font-normal text-muted-foreground ml-2">
+                  ({visibleEvents.length}{visibleEvents.length !== events.length && ` of ${events.length}`} events
+                  {(eventUuidFilter || msgKindFilter) && ' filtered'})
+                </span>
+              )}
+            </CardTitle>
+            {/* Message kind dropdown */}
+            <div className="flex items-center gap-2">
+              <Filter className="h-4 w-4 text-muted-foreground flex-shrink-0" />
+              <select
+                value={msgKindFilter}
+                onChange={(e) => setMsgKindFilter(e.target.value as MessageKind | '')}
+                className="text-sm border rounded px-2 py-1 bg-background text-foreground focus:outline-none focus:ring-1 focus:ring-ring"
+                data-testid="msg-kind-filter"
+                title={MSG_KIND_OPTIONS.find(o => o.value === msgKindFilter)?.description}
+              >
+                {MSG_KIND_OPTIONS.map((opt) => (
+                  <option key={opt.value} value={opt.value} title={opt.description}>
+                    {opt.label}
+                  </option>
+                ))}
+              </select>
+            </div>
+          </div>
+          {/* Event UUID filter indicator */}
           {eventUuidFilter && (
             <div className="flex items-center gap-2 mt-2">
               <span className="text-sm text-muted-foreground">Filtered to:</span>
@@ -517,23 +574,31 @@ export default function SessionDetail() {
           )}
         </CardHeader>
         <CardContent>
-          {!events || events.length === 0 ? (
-            eventUuidFilter ? (
-              <div className="text-center py-8">
-                <p className="text-muted-foreground">No events match the filter</p>
+          {visibleEvents.length === 0 ? (
+            <div className="text-center py-8">
+              <p className="text-muted-foreground">
+                {msgKindFilter || eventUuidFilter ? 'No events match the active filters' : 'No events found'}
+              </p>
+              {msgKindFilter && (
+                <button
+                  onClick={() => setMsgKindFilter('')}
+                  className="mt-2 text-blue-600 dark:text-blue-400 hover:underline text-sm"
+                >
+                  Show all message types
+                </button>
+              )}
+              {eventUuidFilter && (
                 <button
                   onClick={clearEventFilter}
-                  className="mt-2 text-blue-600 dark:text-blue-400 hover:underline"
+                  className="mt-2 ml-2 text-blue-600 dark:text-blue-400 hover:underline text-sm"
                 >
-                  Clear filter
+                  Clear UUID filter
                 </button>
-              </div>
-            ) : (
-              <p className="text-center text-muted-foreground py-8">No events found</p>
-            )
+              )}
+            </div>
           ) : (
             <div className="space-y-3">
-              {events.map((event, index) => (
+              {visibleEvents.map((event, index) => (
                 <EventCard
                   key={event.uuid || `event-${index}`}
                   event={event}

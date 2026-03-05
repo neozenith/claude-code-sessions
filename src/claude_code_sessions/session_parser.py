@@ -15,6 +15,58 @@ from pathlib import Path
 from typing import Any
 
 
+def _first_content_block_type(content: Any) -> str | None:
+    """Return the shape of a message's content field.
+
+    Returns:
+        'string'      — raw string (human-typed prompt)
+        'text'        — list whose first block has type='text'
+        'tool_use'    — list whose first block has type='tool_use'
+        'tool_result' — list whose first block has type='tool_result'
+        'thinking'    — list whose first block has type='thinking'
+        other str     — first block's type (catch-all)
+        None          — content is None or empty list
+    """
+    if content is None:
+        return None
+    if isinstance(content, str):
+        return "string"
+    if isinstance(content, list) and content and isinstance(content[0], dict):
+        return content[0].get("type")
+    return None
+
+
+def _message_kind(event_type: str, is_meta: bool, content: Any) -> str:
+    """Classify an event into one of 8 fine-grained message kinds.
+
+    Kinds:
+        human         — user, not meta, string content (actual typed prompts)
+        tool_result   — user, not meta, tool_result list
+        user_text     — user, not meta, text/other list
+        meta          — user, isMeta=true (system-injected context)
+        assistant_text — assistant, text list
+        thinking      — assistant, thinking list
+        tool_use      — assistant, tool_use list
+        other         — progress / system / queue-operation / etc.
+    """
+    fct = _first_content_block_type(content)
+    if event_type == "user":
+        if is_meta:
+            return "meta"
+        if fct == "string":
+            return "human"
+        if fct == "tool_result":
+            return "tool_result"
+        return "user_text"
+    if event_type == "assistant":
+        if fct == "thinking":
+            return "thinking"
+        if fct == "tool_use":
+            return "tool_use"
+        return "assistant_text"
+    return "other"
+
+
 @dataclass
 class SessionEvent:
     """Represents a single event from a session JSONL file."""
@@ -39,6 +91,7 @@ class SessionEvent:
     message_role: str | None = None
     message_content: Any = None  # Can be string or list of content items
     model_id: str | None = None
+    is_meta: bool = False  # raw event's isMeta flag (system-injected wrappers)
 
     # Token usage
     input_tokens: int = 0
@@ -72,6 +125,8 @@ class SessionEvent:
             "message_role": self.message_role,
             "message_content": self.message_content,
             "model_id": self.model_id,
+            "is_meta": self.is_meta,
+            "message_kind": _message_kind(self.event_type, self.is_meta, self.message_content),
             "input_tokens": self.input_tokens,
             "output_tokens": self.output_tokens,
             "cache_read_tokens": self.cache_read_tokens,
@@ -183,6 +238,7 @@ def parse_event_line(
         message_role=message_role,
         message_content=message_content,
         model_id=model_id,
+        is_meta=bool(data.get("isMeta", False)),
         input_tokens=input_tokens,
         output_tokens=output_tokens,
         cache_read_tokens=cache_read_tokens,

@@ -9,6 +9,8 @@ import pytest
 
 from claude_code_sessions.session_parser import (
     SessionEvent,
+    _first_content_block_type,
+    _message_kind,
     events_to_response,
     extract_agent_slug,
     filter_event_tree,
@@ -57,6 +59,68 @@ class TestExtractAgentSlug:
     def test_non_agent_file_returns_none(self) -> None:
         assert extract_agent_slug("/path/to/session-abc123.jsonl") is None
         assert extract_agent_slug("/path/to/regular.jsonl") is None
+
+
+class TestFirstContentBlockType:
+    """Tests for _first_content_block_type helper."""
+
+    def test_none_returns_none(self) -> None:
+        assert _first_content_block_type(None) is None
+
+    def test_string_returns_string(self) -> None:
+        assert _first_content_block_type("hello") == "string"
+
+    def test_list_with_text_block(self) -> None:
+        assert _first_content_block_type([{"type": "text", "text": "hi"}]) == "text"
+
+    def test_list_with_tool_use(self) -> None:
+        assert _first_content_block_type([{"type": "tool_use", "name": "read"}]) == "tool_use"
+
+    def test_list_with_tool_result(self) -> None:
+        assert _first_content_block_type([{"type": "tool_result", "content": "ok"}]) == "tool_result"
+
+    def test_list_with_thinking(self) -> None:
+        assert _first_content_block_type([{"type": "thinking", "thinking": "..."}]) == "thinking"
+
+    def test_empty_list_returns_none(self) -> None:
+        assert _first_content_block_type([]) is None
+
+
+class TestMessageKind:
+    """Tests for _message_kind classification — the 8 fine-grained kinds."""
+
+    def test_human_prompt(self) -> None:
+        assert _message_kind("user", False, "Hello world") == "human"
+
+    def test_tool_result(self) -> None:
+        assert _message_kind("user", False, [{"type": "tool_result"}]) == "tool_result"
+
+    def test_user_text_block(self) -> None:
+        assert _message_kind("user", False, [{"type": "text", "text": "hi"}]) == "user_text"
+
+    def test_meta_string(self) -> None:
+        assert _message_kind("user", True, "injected context") == "meta"
+
+    def test_meta_list(self) -> None:
+        assert _message_kind("user", True, [{"type": "text"}]) == "meta"
+
+    def test_assistant_text(self) -> None:
+        assert _message_kind("assistant", False, [{"type": "text", "text": "hi"}]) == "assistant_text"
+
+    def test_thinking(self) -> None:
+        assert _message_kind("assistant", False, [{"type": "thinking", "thinking": "..."}]) == "thinking"
+
+    def test_tool_use(self) -> None:
+        assert _message_kind("assistant", False, [{"type": "tool_use", "name": "read"}]) == "tool_use"
+
+    def test_progress_is_other(self) -> None:
+        assert _message_kind("progress", False, None) == "other"
+
+    def test_system_is_other(self) -> None:
+        assert _message_kind("system", False, None) == "other"
+
+    def test_queue_operation_is_other(self) -> None:
+        assert _message_kind("queue-operation", False, None) == "other"
 
 
 class TestParseEventLine:

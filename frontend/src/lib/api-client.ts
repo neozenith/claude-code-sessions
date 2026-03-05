@@ -334,6 +334,17 @@ export interface SessionListItem {
   filepath: string
 }
 
+/** The 8 fine-grained message kinds derived from event_type + is_meta + content shape */
+export type MessageKind =
+  | 'human'          // user, not meta, string content — actual typed prompts
+  | 'tool_result'    // user, not meta, tool_result list
+  | 'user_text'      // user, not meta, text/other list
+  | 'meta'           // user, isMeta=true — system-injected context
+  | 'assistant_text' // assistant, text list
+  | 'thinking'       // assistant, thinking list
+  | 'tool_use'       // assistant, tool_use list
+  | 'other'          // progress / system / queue-operation / etc.
+
 /** Session event from /api/sessions/{project_id}/{session_id} */
 export interface SessionEvent {
   // Core identification
@@ -351,6 +362,8 @@ export interface SessionEvent {
   message_role: string | null
   message_content: string | MessageContentItem[] | null
   model_id: string | null
+  is_meta: boolean
+  message_kind: MessageKind
   // Token usage
   input_tokens: number
   output_tokens: number

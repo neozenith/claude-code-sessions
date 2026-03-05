@@ -227,6 +227,11 @@ setSearchParams((prev) => {
 - `?days=7` — number of days; omitted when default (30)
 - `?project=...` — encoded project ID; omitted for "all projects"
 - `?sort={column}_{dir}` — e.g. `?sort=cost_desc`; omitted when default (`last_active_desc`)
+- `?msg={kind}` — message kind filter on session detail; omitted when "all messages"
+
+**Scope: global vs page-local params**
+
+`filterSearchString` from `useFilters` carries **only** `days` and `project` — not page-local params like `?sort=` or `?msg=`. This prevents page-specific state from leaking into sidebar nav links and breadcrumbs. Page-local params are managed entirely in-component via `useSearchParams`.
 
 ### Test Suites
 
