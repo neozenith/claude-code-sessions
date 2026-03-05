@@ -1,11 +1,14 @@
-import { useMemo } from 'react'
+import { useMemo, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName, formatSessionId, formatCurrency } from '@/lib/formatters'
 import type { SessionListItem } from '@/lib/api-client'
-import { ExternalLink, Clock, ChevronLeft, FileText, MessageSquare, Coins } from 'lucide-react'
+import { ExternalLink, Clock, ChevronLeft, FileText, MessageSquare, Coins, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+
+type SortColumn = 'last_active' | 'events' | 'subagents' | 'cost'
+type SortDirection = 'asc' | 'desc'
 
 // Helper to format filepath for display - shows just the filename
 function formatFilepath(filepath: string): string {
@@ -14,9 +17,49 @@ function formatFilepath(filepath: string): string {
   return parts[parts.length - 1] || filepath
 }
 
+function SortIcon({ column, sortBy, sortDir }: { column: SortColumn; sortBy: SortColumn; sortDir: SortDirection }) {
+  if (sortBy !== column) return <ChevronsUpDown className="inline h-3 w-3 ml-1 opacity-40" />
+  return sortDir === 'asc'
+    ? <ChevronUp className="inline h-3 w-3 ml-1" />
+    : <ChevronDown className="inline h-3 w-3 ml-1" />
+}
+
+function SortableHeader({
+  column,
+  sortBy,
+  sortDir,
+  onSort,
+  children,
+  align = 'left',
+}: {
+  column: SortColumn
+  sortBy: SortColumn
+  sortDir: SortDirection
+  onSort: (col: SortColumn) => void
+  children: React.ReactNode
+  align?: 'left' | 'right'
+}) {
+  const isActive = sortBy === column
+  return (
+    <th
+      className={`py-3 px-4 font-medium cursor-pointer select-none hover:text-foreground transition-colors ${
+        isActive ? 'text-foreground' : 'text-muted-foreground'
+      } ${align === 'right' ? 'text-right' : 'text-left'}`}
+      onClick={() => onSort(column)}
+      data-testid={`sort-${column}`}
+    >
+      {children}
+      <SortIcon column={column} sortBy={sortBy} sortDir={sortDir} />
+    </th>
+  )
+}
+
 export default function ProjectSessions() {
   const { projectId } = useParams<{ projectId: string }>()
   const { buildApiQuery, filterSearchString } = useFilters()
+
+  const [sortBy, setSortBy] = useState<SortColumn>('last_active')
+  const [sortDir, setSortDir] = useState<SortDirection>('desc')
 
   // Fetch sessions filtered to this project
   const apiQuery = buildApiQuery({ project: projectId ?? null })
@@ -25,8 +68,39 @@ export default function ProjectSessions() {
   // Filter to only this project's sessions (in case API returns others)
   const projectSessions = useMemo(() => {
     if (!sessions) return []
-    return sessions.filter((s) => s.project_id === projectId)
-  }, [sessions, projectId])
+    const filtered = sessions.filter((s) => s.project_id === projectId)
+
+    return [...filtered].sort((a, b) => {
+      let cmp = 0
+      switch (sortBy) {
+        case 'last_active': {
+          const ta = a.last_timestamp ? new Date(a.last_timestamp).getTime() : 0
+          const tb = b.last_timestamp ? new Date(b.last_timestamp).getTime() : 0
+          cmp = ta - tb
+          break
+        }
+        case 'events':
+          cmp = (Number(a.event_count) || 0) - (Number(b.event_count) || 0)
+          break
+        case 'subagents':
+          cmp = (Number(a.subagent_count) || 0) - (Number(b.subagent_count) || 0)
+          break
+        case 'cost':
+          cmp = (Number(a.total_cost_usd) || 0) - (Number(b.total_cost_usd) || 0)
+          break
+      }
+      return sortDir === 'asc' ? cmp : -cmp
+    })
+  }, [sessions, projectId, sortBy, sortDir])
+
+  function handleSort(col: SortColumn) {
+    if (sortBy === col) {
+      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
+    } else {
+      setSortBy(col)
+      setSortDir('desc')
+    }
+  }
 
   // Calculate summary stats
   const summaryStats = useMemo(() => {
@@ -124,13 +198,19 @@ export default function ProjectSessions() {
                       <FileText className="inline h-4 w-4 mr-1" />
                       File
                     </th>
-                    <th className="text-left py-3 px-4 font-medium">
+                    <SortableHeader column="last_active" sortBy={sortBy} sortDir={sortDir} onSort={handleSort}>
                       <Clock className="inline h-4 w-4 mr-1" />
                       Last Active
-                    </th>
-                    <th className="text-right py-3 px-4 font-medium">Events</th>
-                    <th className="text-right py-3 px-4 font-medium">Subagents</th>
-                    <th className="text-right py-3 px-4 font-medium">Cost</th>
+                    </SortableHeader>
+                    <SortableHeader column="events" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right">
+                      Events
+                    </SortableHeader>
+                    <SortableHeader column="subagents" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right">
+                      Subagents
+                    </SortableHeader>
+                    <SortableHeader column="cost" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right">
+                      Cost
+                    </SortableHeader>
                     <th className="text-right py-3 px-4 font-medium">Actions</th>
                   </tr>
                 </thead>

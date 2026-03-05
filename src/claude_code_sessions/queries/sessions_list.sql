@@ -148,4 +148,4 @@ WHERE s.project_id IS NOT NULL
   AND s.session_id IS NOT NULL
   -- Only include sessions that have a main session file (not just subagent files)
   AND s.main_filepath IS NOT NULL
-ORDER BY s.last_timestamp DESC NULLS LAST;
+ORDER BY __SORT_COLUMN__ __SORT_ORDER__ NULLS LAST;

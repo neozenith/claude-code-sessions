@@ -35,4 +35,5 @@ frontend/playwright-report/
 .env.local
 
 .playwright-mcp/
+.playwright-cli/
 .*_cache/

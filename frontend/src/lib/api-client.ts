@@ -207,7 +207,12 @@ export class ApiClient {
   }
 
   /** Get sessions list */
-  async getSessions(params?: { days?: number; project?: string }): Promise<ApiResult<SessionListItem[]>> {
+  async getSessions(params?: {
+    days?: number
+    project?: string
+    sort_by?: 'last_active' | 'events' | 'subagents' | 'cost'
+    sort_order?: 'asc' | 'desc'
+  }): Promise<ApiResult<SessionListItem[]>> {
     return this.get('/sessions', params)
   }
 

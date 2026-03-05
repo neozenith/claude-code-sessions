@@ -167,6 +167,44 @@ For demos or privacy, sensitive project domains can be blocked so they never app
 - **CLI flag**: `--block-domains work clients` (overrides env var)
 - **Makefile**: `make demo-backend` (pre-configured to block `work,clients`)
 
+## Development Workflow for Changes
+
+### Planning Full-Stack Changes
+
+This is a full-stack project spanning React TypeScript (frontend) and Python FastAPI (backend). When planning any feature:
+
+1. **Use the `/lsp` skill** to query type signatures, find all references, and understand impact before writing code
+   - `hover` — get exact type signatures for functions/methods
+   - `references` — find every call site that a change will affect
+   - `diagnostics` — catch type errors before they hit CI
+2. **Changes propagate across layers**: SQL query → Python endpoint → TypeScript `api-client.ts` types → React `.tsx` component → unit tests (both languages) → e2e tests
+
+### Quality Gate: `make ci`
+
+All changes must pass `make ci` before they are considered complete:
+```bash
+make ci   # typecheck + lint + test (backend pytest + frontend vitest)
+```
+
+This runs: `mypy`, `ruff`, `eslint`, `tsc`, `pytest`, `vitest`.
+
+### Visual Verification: Playwright
+
+Use the `playwright-cli` skill or Playwright MCP to visually verify UI changes work as intended. The project has an existing e2e suite at `frontend/e2e/` using Playwright.
+
+- **Add new e2e tests** to `frontend/e2e/` for every new user-facing feature — do not just describe what to test, write the actual spec
+- **Run e2e tests** with `make test-frontend-e2e`
+- Playwright config uses agentic ports (backend 8101, frontend 5274)
+- Screenshots go to `frontend/e2e-screenshots/`
+
+### Test Suites
+
+| Layer | Framework | Location | Run |
+|-------|-----------|----------|-----|
+| Backend unit | pytest | `tests/` | `make test-backend` |
+| Frontend unit | vitest | `frontend/src/**/*.test.ts` | `make test-frontend` |
+| E2E browser | playwright | `frontend/e2e/` | `make test-frontend-e2e` |
+
 ## Session Memory
 
 ### Current State

@@ -308,6 +308,32 @@ describe('api-client', () => {
         expect(mockFetch).toHaveBeenCalledWith('/api/sessions', expect.any(Object))
       })
 
+      it('getSessions() passes sort_by and sort_order params', async () => {
+        mockFetch.mockResolvedValueOnce({
+          ok: true,
+          json: async () => [],
+        })
+
+        await client.getSessions({ sort_by: 'cost', sort_order: 'desc' })
+
+        expect(mockFetch).toHaveBeenCalledWith(
+          '/api/sessions?sort_by=cost&sort_order=desc',
+          expect.any(Object)
+        )
+      })
+
+      it('getSessions() can sort by all supported columns', async () => {
+        const columns = ['last_active', 'events', 'subagents', 'cost'] as const
+        for (const col of columns) {
+          mockFetch.mockResolvedValueOnce({ ok: true, json: async () => [] })
+          await client.getSessions({ sort_by: col, sort_order: 'asc' })
+          expect(mockFetch).toHaveBeenCalledWith(
+            `/api/sessions?sort_by=${col}&sort_order=asc`,
+            expect.any(Object)
+          )
+        }
+      })
+
       it('getSessionEvents() encodes project and session IDs', async () => {
         mockFetch.mockResolvedValueOnce({
           ok: true,

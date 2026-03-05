@@ -227,6 +227,74 @@ class TestSessionEventsEndpoint:
                 assert root_event.get("uuid") in filtered_uuids
 
 
+class TestSessionsListSorting:
+    """Test sort_by and sort_order parameters for GET /api/sessions."""
+
+    def test_sort_by_last_active_default(self) -> None:
+        """Default sort is last_active descending."""
+        response = client.get("/api/sessions")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            timestamps = [s.get("last_timestamp") for s in data if s.get("last_timestamp")]
+            for i in range(len(timestamps) - 1):
+                assert timestamps[i] >= timestamps[i + 1], "Default sort should be last_active desc"
+
+    def test_sort_by_last_active_asc(self) -> None:
+        """sort_by=last_active&sort_order=asc returns ascending timestamps."""
+        response = client.get("/api/sessions?sort_by=last_active&sort_order=asc")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            timestamps = [s.get("last_timestamp") for s in data if s.get("last_timestamp")]
+            for i in range(len(timestamps) - 1):
+                assert timestamps[i] <= timestamps[i + 1], "sort_order=asc should give ascending timestamps"
+
+    def test_sort_by_events_desc(self) -> None:
+        """sort_by=events returns sessions ordered by event_count descending."""
+        response = client.get("/api/sessions?sort_by=events&sort_order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            counts = [s.get("event_count", 0) for s in data]
+            for i in range(len(counts) - 1):
+                assert counts[i] >= counts[i + 1], "sort_by=events desc should give descending event counts"
+
+    def test_sort_by_cost_desc(self) -> None:
+        """sort_by=cost returns sessions ordered by total_cost_usd descending."""
+        response = client.get("/api/sessions?sort_by=cost&sort_order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            costs = [float(s.get("total_cost_usd", 0)) for s in data]
+            for i in range(len(costs) - 1):
+                assert costs[i] >= costs[i + 1], "sort_by=cost desc should give descending costs"
+
+    def test_sort_by_subagents_desc(self) -> None:
+        """sort_by=subagents returns sessions ordered by subagent_count descending."""
+        response = client.get("/api/sessions?sort_by=subagents&sort_order=desc")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            counts = [s.get("subagent_count", 0) for s in data]
+            for i in range(len(counts) - 1):
+                assert counts[i] >= counts[i + 1], "sort_by=subagents desc should give descending subagent counts"
+
+    def test_invalid_sort_by_falls_back_to_last_active(self) -> None:
+        """Invalid sort_by value silently falls back to last_active."""
+        response = client.get("/api/sessions?sort_by=invalid_column")
+        assert response.status_code == 200
+        data = response.json()
+        # Should return data without error (fallback to last_active)
+        assert isinstance(data, list)
+
+    def test_invalid_sort_order_falls_back_to_desc(self) -> None:
+        """Invalid sort_order value falls back to DESC."""
+        response = client.get("/api/sessions?sort_order=sideways")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+
 class TestSessionsFilterConsistency:
     """Test filter behavior consistency with other endpoints."""
 

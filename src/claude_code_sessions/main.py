@@ -63,15 +63,32 @@ def _build_domain_filter_sql() -> str:
     return "\n    ".join(clauses)
 
 
-def build_filters(days: int | None = None, project: str | None = None) -> dict[str, str]:
+# Allowlist mapping for sort_by parameter values -> SQL column expressions
+# Using an explicit allowlist prevents SQL injection from user-supplied sort_by values
+_SORT_COLUMN_MAP: dict[str, str] = {
+    "last_active": "s.last_timestamp",
+    "events": "s.event_count",
+    "subagents": "COALESCE(s.subagent_count, 0)",
+    "cost": "ROUND(COALESCE(c.total_cost_usd, 0), 4)",
+}
+
+
+def build_filters(
+    days: int | None = None,
+    project: str | None = None,
+    sort_by: str = "last_active",
+    sort_order: str = "desc",
+) -> dict[str, str]:
     """Build filter dict for SQL query placeholders.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
         project: Project ID to filter by (None = all projects)
+        sort_by: Column to sort by — one of: last_active, events, subagents, cost
+        sort_order: Sort direction — "asc" or "desc"
 
     Returns:
-        Dict with DAYS_FILTER, PROJECT_FILTER, and DOMAIN_FILTER keys for SQL replacement
+        Dict with DAYS_FILTER, PROJECT_FILTER, DOMAIN_FILTER, SORT_COLUMN, SORT_ORDER keys
     """
     filters: dict[str, str] = {}
 
@@ -95,6 +112,12 @@ def build_filters(days: int | None = None, project: str | None = None) -> dict[s
 
     # Domain filter - always included
     filters["DOMAIN_FILTER"] = _build_domain_filter_sql()
+
+    # Sort - validated against allowlist to prevent SQL injection
+    valid_sort_by = sort_by if sort_by in _SORT_COLUMN_MAP else "last_active"
+    valid_sort_order = "ASC" if sort_order.strip().lower() == "asc" else "DESC"
+    filters["SORT_COLUMN"] = _SORT_COLUMN_MAP[valid_sort_by]
+    filters["SORT_ORDER"] = valid_sort_order
 
     return filters
 
@@ -400,18 +423,22 @@ async def get_schema_timeline(
 
 @app.get("/api/sessions")
 async def get_sessions_list(
-    days: int | None = None, project: str | None = None
+    days: int | None = None,
+    project: str | None = None,
+    sort_by: str = "last_active",
+    sort_order: str = "desc",
 ) -> list[dict[str, Any]]:
     """Get list of all sessions grouped by project.
 
     Returns sessions with aggregated stats including subagent counts.
-    Sorted by most recent session first.
 
     Args:
         days: Number of days to filter (None or 0 = all time)
         project: Project ID to filter by (None = all projects)
+        sort_by: Column to sort by — one of: last_active, events, subagents, cost
+        sort_order: Sort direction — "asc" or "desc" (default: "desc")
     """
-    filters = build_filters(days, project)
+    filters = build_filters(days, project, sort_by, sort_order)
     return execute_query("sessions_list", filters)
 
 
