@@ -37,49 +37,46 @@ test.describe('Project Sessions - Sortable Columns', () => {
     await expect(page.getByTestId('sort-cost')).toBeVisible()
   })
 
-  test('default sort is Last Active descending', async ({ page }) => {
-    // Last Active header should be active by default (shows directional chevron)
+  test('default sort is Last Active descending with no sort param in URL', async ({ page }) => {
+    // No ?sort= param for the default (last_active_desc keeps URL clean)
+    expect(page.url()).not.toContain('sort=')
     const header = page.getByTestId('sort-last_active')
     await expect(header).toBeVisible()
 
-    // Take screenshot to verify initial state
     await page.screenshot({
       path: 'e2e-screenshots/project-sessions-default-sort.png',
       fullPage: true,
     })
   })
 
-  test('clicking Last Active toggles asc/desc', async ({ page }) => {
+  test('clicking Last Active toggles asc/desc and updates URL', async ({ page }) => {
     const rows = page.locator('tbody tr')
     const count = await rows.count()
     if (count < 2) test.skip()
 
     const header = page.getByTestId('sort-last_active')
 
-    // Click once → should still be last_active but toggle direction
+    // Click once → toggles to asc, URL gets ?sort=last_active_asc
     await header.click()
     await waitForPageLoad(page)
-    await page.screenshot({
-      path: 'e2e-screenshots/project-sessions-last-active-asc.png',
-      fullPage: true,
-    })
+    expect(page.url()).toContain('sort=last_active_asc')
+    await page.screenshot({ path: 'e2e-screenshots/project-sessions-last-active-asc.png', fullPage: true })
 
-    // Click again → toggles back
+    // Click again → back to default desc, ?sort param removed (clean URL)
     await header.click()
     await waitForPageLoad(page)
-    await page.screenshot({
-      path: 'e2e-screenshots/project-sessions-last-active-desc.png',
-      fullPage: true,
-    })
+    expect(page.url()).not.toContain('sort=')
+    await page.screenshot({ path: 'e2e-screenshots/project-sessions-last-active-desc.png', fullPage: true })
   })
 
-  test('clicking Events sorts by event count', async ({ page }) => {
+  test('clicking Events sorts by event count and sets ?sort=events_desc', async ({ page }) => {
     const rows = page.locator('tbody tr')
     const count = await rows.count()
     if (count < 2) test.skip()
 
     await page.getByTestId('sort-events').click()
     await waitForPageLoad(page)
+    expect(page.url()).toContain('sort=events_desc')
 
     // Collect event counts from rows (4th column, 0-indexed = index 3)
     const cells = page.locator('tbody tr td:nth-child(4)')
@@ -182,20 +179,56 @@ test.describe('Project Sessions - Sortable Columns', () => {
   })
 })
 
-test.describe('Project Sessions - Sort with Filters', () => {
-  test('sort is maintained when time filter changes', async ({ page }) => {
+test.describe('Project Sessions - Sort via Deep Link', () => {
+  test('navigating directly to ?sort=cost_desc shows cost sort active', async ({ page }) => {
+    await page.goto(`/sessions/${encodeURIComponent(TEST_PROJECT_ID)}?sort=cost_desc`)
+    await waitForPageLoad(page)
+    await page.waitForSelector('tbody, [class*="py-12"]', { timeout: 10000 }).catch(() => {})
+
+    // Cost header should be the active sort
+    const costHeader = page.getByTestId('sort-cost')
+    await expect(costHeader).toBeVisible()
+    // ChevronDown should be present (desc) — check the header is styled as active
+    await expect(costHeader).toHaveClass(/text-foreground/)
+
+    await page.screenshot({
+      path: 'e2e-screenshots/project-sessions-deeplink-cost-desc.png',
+      fullPage: true,
+    })
+  })
+
+  test('navigating directly to ?sort=events_asc shows events asc sort active', async ({ page }) => {
+    await page.goto(`/sessions/${encodeURIComponent(TEST_PROJECT_ID)}?sort=events_asc`)
+    await waitForPageLoad(page)
+    await page.waitForSelector('tbody, [class*="py-12"]', { timeout: 10000 }).catch(() => {})
+
+    const rows = page.locator('tbody tr')
+    const count = await rows.count()
+    if (count < 2) test.skip()
+
+    // Verify ascending sort — first row should have fewer events than last
+    const cells = page.locator('tbody tr td:nth-child(4)')
+    const texts = await cells.allTextContents()
+    const nums = texts.map((v) => parseInt(v.replace(/,/g, ''), 10)).filter((n) => !isNaN(n))
+    for (let i = 0; i < nums.length - 1; i++) {
+      expect(nums[i]).toBeLessThanOrEqual(nums[i + 1])
+    }
+  })
+
+  test('sort param is preserved when time filter changes', async ({ page }) => {
     await navigateToProjectSessions(page)
 
     // Sort by cost
     await page.getByTestId('sort-cost').click()
     await waitForPageLoad(page)
+    expect(page.url()).toContain('sort=cost_desc')
 
-    // Change time filter
+    // Change time filter — sort param should survive
     const timeSelect = page.locator('select').first()
     await timeSelect.selectOption('7')
     await waitForPageLoad(page)
 
-    // Sort header should still be present (sort state is local)
-    await expect(page.getByTestId('sort-cost')).toBeVisible()
+    expect(page.url()).toContain('sort=cost_desc')
+    expect(page.url()).toContain('days=7')
   })
 })

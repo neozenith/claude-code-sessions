@@ -197,6 +197,37 @@ Use the `playwright-cli` skill or Playwright MCP to visually verify UI changes w
 - Playwright config uses agentic ports (backend 8101, frontend 5274)
 - Screenshots go to `frontend/e2e-screenshots/`
 
+### URL as State — Deep Linking
+
+**All user-visible page state must live in the URL**, not in React `useState`. This enables deep links, browser history, copy-paste sharing, and deterministic test setup.
+
+The pattern used throughout this project:
+
+```typescript
+// Read state from URL
+const [searchParams, setSearchParams] = useSearchParams()
+const value = searchParams.get('param') ?? 'default'
+
+// Write state to URL (preserves other params)
+setSearchParams((prev) => {
+  const next = new URLSearchParams(prev)
+  if (value === DEFAULT_VALUE) {
+    next.delete('param')   // omit defaults for clean URLs
+  } else {
+    next.set('param', value)
+  }
+  return next
+})
+```
+
+**Global filters** (`days`, `project`) are managed by `useFilters` in `frontend/src/hooks/useFilters.ts`.
+**Page-local state** (e.g. sort order on project sessions) uses `useSearchParams` directly in the component.
+
+**Encoding conventions:**
+- `?days=7` — number of days; omitted when default (30)
+- `?project=...` — encoded project ID; omitted for "all projects"
+- `?sort={column}_{dir}` — e.g. `?sort=cost_desc`; omitted when default (`last_active_desc`)
+
 ### Test Suites
 
 | Layer | Framework | Location | Run |

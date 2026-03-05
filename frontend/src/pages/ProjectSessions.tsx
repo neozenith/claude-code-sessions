@@ -1,5 +1,5 @@
-import { useMemo, useState } from 'react'
-import { useParams, Link } from 'react-router-dom'
+import { useMemo } from 'react'
+import { useParams, Link, useSearchParams } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -9,6 +9,25 @@ import { ExternalLink, Clock, ChevronLeft, FileText, MessageSquare, Coins, Chevr
 
 type SortColumn = 'last_active' | 'events' | 'subagents' | 'cost'
 type SortDirection = 'asc' | 'desc'
+
+const VALID_SORT_COLUMNS: SortColumn[] = ['last_active', 'events', 'subagents', 'cost']
+const DEFAULT_SORT_BY: SortColumn = 'last_active'
+const DEFAULT_SORT_DIR: SortDirection = 'desc'
+
+// Parse ?sort=cost_desc or ?sort=events_asc into {sortBy, sortDir}.
+// Format: "{column}_{direction}" where direction is "asc" or "desc".
+// The default (last_active_desc) is omitted from the URL for clean links.
+function parseSortParam(param: string | null): { sortBy: SortColumn; sortDir: SortDirection } {
+  if (!param) return { sortBy: DEFAULT_SORT_BY, sortDir: DEFAULT_SORT_DIR }
+  const lastUnderscore = param.lastIndexOf('_')
+  if (lastUnderscore === -1) return { sortBy: DEFAULT_SORT_BY, sortDir: DEFAULT_SORT_DIR }
+  const col = param.slice(0, lastUnderscore) as SortColumn
+  const dir = param.slice(lastUnderscore + 1)
+  return {
+    sortBy: VALID_SORT_COLUMNS.includes(col) ? col : DEFAULT_SORT_BY,
+    sortDir: dir === 'asc' ? 'asc' : 'desc',
+  }
+}
 
 // Helper to format filepath for display - shows just the filename
 function formatFilepath(filepath: string): string {
@@ -57,9 +76,11 @@ function SortableHeader({
 export default function ProjectSessions() {
   const { projectId } = useParams<{ projectId: string }>()
   const { buildApiQuery, filterSearchString } = useFilters()
+  const [searchParams, setSearchParams] = useSearchParams()
 
-  const [sortBy, setSortBy] = useState<SortColumn>('last_active')
-  const [sortDir, setSortDir] = useState<SortDirection>('desc')
+  // Sort state is in the URL as ?sort={column}_{direction}.
+  // Default (last_active_desc) is omitted so the base URL stays clean.
+  const { sortBy, sortDir } = parseSortParam(searchParams.get('sort'))
 
   // Fetch sessions filtered to this project
   const apiQuery = buildApiQuery({ project: projectId ?? null })
@@ -94,12 +115,16 @@ export default function ProjectSessions() {
   }, [sessions, projectId, sortBy, sortDir])
 
   function handleSort(col: SortColumn) {
-    if (sortBy === col) {
-      setSortDir((d) => (d === 'asc' ? 'desc' : 'asc'))
-    } else {
-      setSortBy(col)
-      setSortDir('desc')
-    }
+    const newDir: SortDirection = sortBy === col ? (sortDir === 'asc' ? 'desc' : 'asc') : 'desc'
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (col === DEFAULT_SORT_BY && newDir === DEFAULT_SORT_DIR) {
+        next.delete('sort')
+      } else {
+        next.set('sort', `${col}_${newDir}`)
+      }
+      return next
+    })
   }
 
   // Calculate summary stats
