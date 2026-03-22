@@ -116,7 +116,7 @@ export default function HourOfDay() {
       </p>
 
       {/* Polar Charts - Day of Week x Hour of Day */}
-      <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+      <div className="grid grid-cols-1 gap-6">
         {/* Cost Polar Chart */}
         <Card>
           <CardHeader>
@@ -190,7 +190,7 @@ export default function HourOfDay() {
                 showlegend: false,
               })}
               useResizeHandler
-              style={{ width: '100%', height: '500px' }}
+              style={{ width: '100%', height: '700px' }}
             />
           </CardContent>
         </Card>
@@ -268,7 +268,7 @@ export default function HourOfDay() {
                 showlegend: false,
               })}
               useResizeHandler
-              style={{ width: '100%', height: '500px' }}
+              style={{ width: '100%', height: '700px' }}
             />
           </CardContent>
         </Card>
