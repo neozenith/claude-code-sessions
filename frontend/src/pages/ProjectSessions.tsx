@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import { useParams, Link, useSearchParams } from 'react-router-dom'
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -76,11 +76,17 @@ function SortableHeader({
 export default function ProjectSessions() {
   const { projectId } = useParams<{ projectId: string }>()
   const { buildApiQuery, filterSearchString } = useFilters()
-  const [searchParams, setSearchParams] = useSearchParams()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   // Sort state is in the URL as ?sort={column}_{direction}.
   // Default (last_active_desc) is omitted so the base URL stays clean.
-  const { sortBy, sortDir } = parseSortParam(searchParams.get('sort'))
+  // Derived from location.search (always reactive) to avoid stale reads
+  // when useFilters and useSearchParams coexist.
+  const { sortBy, sortDir } = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    return parseSortParam(params.get('sort'))
+  }, [location.search])
 
   // Fetch sessions filtered to this project
   const apiQuery = buildApiQuery({ project: projectId ?? null })
@@ -116,15 +122,14 @@ export default function ProjectSessions() {
 
   function handleSort(col: SortColumn) {
     const newDir: SortDirection = sortBy === col ? (sortDir === 'asc' ? 'desc' : 'asc') : 'desc'
-    setSearchParams((prev) => {
-      const next = new URLSearchParams(prev)
-      if (col === DEFAULT_SORT_BY && newDir === DEFAULT_SORT_DIR) {
-        next.delete('sort')
-      } else {
-        next.set('sort', `${col}_${newDir}`)
-      }
-      return next
-    })
+    const params = new URLSearchParams(location.search)
+    if (col === DEFAULT_SORT_BY && newDir === DEFAULT_SORT_DIR) {
+      params.delete('sort')
+    } else {
+      params.set('sort', `${col}_${newDir}`)
+    }
+    const qs = params.toString()
+    navigate(`${location.pathname}${qs ? `?${qs}` : ''}`, { replace: true })
   }
 
   // Calculate summary stats

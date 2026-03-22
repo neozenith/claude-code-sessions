@@ -1,5 +1,5 @@
 import { useMemo, useState, useEffect, useCallback } from 'react'
-import { useParams, Link, useSearchParams, useLocation, useNavigate } from 'react-router-dom'
+import { useParams, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
@@ -22,12 +22,15 @@ import {
   Wrench,
   X,
   Filter,
+  Activity,
+  BellRing,
 } from 'lucide-react'
 
-// Message kind filter options — "All messages" + the 8 fine-grained kinds
+// Message kind filter options — "All messages" + the 9 fine-grained kinds
 const MSG_KIND_OPTIONS: { value: MessageKind | ''; label: string; description: string }[] = [
   { value: '', label: 'All messages', description: 'Show everything' },
   { value: 'human', label: 'Human prompt', description: 'Actual typed user input' },
+  { value: 'task_notification', label: 'Task notification', description: 'Async task completion callbacks' },
   { value: 'assistant_text', label: 'Assistant text', description: 'Model text responses' },
   { value: 'thinking', label: 'Thinking', description: 'Extended thinking blocks' },
   { value: 'tool_use', label: 'Tool call', description: 'Tool invocations by the model' },
@@ -37,33 +40,75 @@ const MSG_KIND_OPTIONS: { value: MessageKind | ''; label: string; description: s
   { value: 'other', label: 'System / progress', description: 'Progress, system, queue-operation events' },
 ]
 
-// Event type styling
-const EVENT_TYPE_CONFIG: Record<string, { icon: typeof User; color: string; bgColor: string }> = {
-  user: {
+// Message kind styling — one unique color + icon per derived kind
+const MESSAGE_KIND_CONFIG: Record<MessageKind, { icon: typeof User; label: string; color: string; bgColor: string; badgeBg: string }> = {
+  human: {
     icon: User,
+    label: 'Human prompt',
     color: 'text-blue-600 dark:text-blue-400',
     bgColor: 'bg-blue-50 dark:bg-blue-900/20 border-blue-200 dark:border-blue-800',
+    badgeBg: 'bg-blue-100 text-blue-800 dark:bg-blue-900/60 dark:text-blue-300',
   },
-  assistant: {
+  task_notification: {
+    icon: BellRing,
+    label: 'Task notification',
+    color: 'text-teal-600 dark:text-teal-400',
+    bgColor: 'bg-teal-50 dark:bg-teal-900/20 border-teal-200 dark:border-teal-800',
+    badgeBg: 'bg-teal-100 text-teal-800 dark:bg-teal-900/60 dark:text-teal-300',
+  },
+  assistant_text: {
     icon: Bot,
-    color: 'text-green-600 dark:text-green-400',
-    bgColor: 'bg-green-50 dark:bg-green-900/20 border-green-200 dark:border-green-800',
+    label: 'Assistant text',
+    color: 'text-emerald-600 dark:text-emerald-400',
+    bgColor: 'bg-emerald-50 dark:bg-emerald-900/20 border-emerald-200 dark:border-emerald-800',
+    badgeBg: 'bg-emerald-100 text-emerald-800 dark:bg-emerald-900/60 dark:text-emerald-300',
   },
-  system: {
+  thinking: {
+    icon: Brain,
+    label: 'Thinking',
+    color: 'text-purple-600 dark:text-purple-400',
+    bgColor: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800',
+    badgeBg: 'bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300',
+  },
+  tool_use: {
+    icon: Wrench,
+    label: 'Tool call',
+    color: 'text-amber-600 dark:text-amber-400',
+    bgColor: 'bg-amber-50 dark:bg-amber-900/20 border-amber-200 dark:border-amber-800',
+    badgeBg: 'bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300',
+  },
+  tool_result: {
+    icon: Code,
+    label: 'Tool result',
+    color: 'text-cyan-600 dark:text-cyan-400',
+    bgColor: 'bg-cyan-50 dark:bg-cyan-900/20 border-cyan-200 dark:border-cyan-800',
+    badgeBg: 'bg-cyan-100 text-cyan-800 dark:bg-cyan-900/60 dark:text-cyan-300',
+  },
+  user_text: {
+    icon: MessageSquare,
+    label: 'User text',
+    color: 'text-indigo-600 dark:text-indigo-400',
+    bgColor: 'bg-indigo-50 dark:bg-indigo-900/20 border-indigo-200 dark:border-indigo-800',
+    badgeBg: 'bg-indigo-100 text-indigo-800 dark:bg-indigo-900/60 dark:text-indigo-300',
+  },
+  meta: {
     icon: Settings,
-    color: 'text-gray-600 dark:text-gray-400',
-    bgColor: 'bg-gray-50 dark:bg-gray-800/30 border-gray-200 dark:border-gray-700',
+    label: 'Meta / injected',
+    color: 'text-slate-600 dark:text-slate-400',
+    bgColor: 'bg-slate-100 dark:bg-slate-800/30 border-slate-300 dark:border-slate-700',
+    badgeBg: 'bg-slate-200 text-slate-700 dark:bg-slate-800 dark:text-slate-300',
+  },
+  other: {
+    icon: Activity,
+    label: 'System / progress',
+    color: 'text-rose-600 dark:text-rose-400',
+    bgColor: 'bg-rose-50 dark:bg-rose-900/20 border-rose-200 dark:border-rose-800',
+    badgeBg: 'bg-rose-100 text-rose-800 dark:bg-rose-900/60 dark:text-rose-300',
   },
 }
 
-function getEventConfig(eventType: string) {
-  return (
-    EVENT_TYPE_CONFIG[eventType] || {
-      icon: MessageSquare,
-      color: 'text-purple-600 dark:text-purple-400',
-      bgColor: 'bg-purple-50 dark:bg-purple-900/20 border-purple-200 dark:border-purple-800',
-    }
-  )
+function getMessageKindConfig(kind: MessageKind) {
+  return MESSAGE_KIND_CONFIG[kind] ?? MESSAGE_KIND_CONFIG.other
 }
 
 // Parse message content - handles nested content types
@@ -193,7 +238,7 @@ function EventCard({
 }) {
   const [showJson, setShowJson] = useState(false)
 
-  const config = getEventConfig(event.event_type)
+  const config = getMessageKindConfig(event.message_kind)
   const Icon = config.icon
   const parentEvent = event.parent_uuid ? eventMap.get(event.parent_uuid) : null
   const contentItems = parseMessageContent(event.message_content)
@@ -233,21 +278,29 @@ function EventCard({
         </div>
       )}
 
+      {/* Message kind badge */}
+      <div className="flex items-center justify-between gap-2 mb-3">
+        <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold ${config.badgeBg}`}>
+          <Icon className="h-3.5 w-3.5" />
+          {config.label}
+        </span>
+        {event.is_subagent_file && (
+          <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
+            <GitBranch className="h-3 w-3" />
+            {event.agent_slug || 'subagent'}
+          </span>
+        )}
+      </div>
+
       {/* Event header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
-          <div className={`p-2 rounded-full bg-background`}>
+          <div className="p-2 rounded-full bg-background">
             <Icon className={`h-4 w-4 ${config.color}`} />
           </div>
           <div>
             <div className="flex items-center gap-2 flex-wrap">
               <span className={`font-medium ${config.color}`}>{event.event_type}</span>
-              {event.is_subagent_file && (
-                <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded text-xs font-medium bg-blue-100 text-blue-800 dark:bg-blue-900 dark:text-blue-200">
-                  <GitBranch className="h-3 w-3" />
-                  {event.agent_slug || 'subagent'}
-                </span>
-              )}
               {event.model_id && (
                 <span className="text-xs text-muted-foreground">
                   {event.model_id.replace('claude-', '').replace(/-\d+$/, '')}
@@ -329,13 +382,43 @@ function EventCard({
 export default function SessionDetail() {
   const { projectId, sessionId } = useParams<{ projectId: string; sessionId: string }>()
   const { filterSearchString } = useFilters()
-  const [searchParams, setSearchParams] = useSearchParams()
   const location = useLocation()
   const navigate = useNavigate()
 
-  // Get event_uuid and msg kind filters from query params
-  const eventUuidFilter = searchParams.get('event_uuid')
-  const msgKindFilter = (searchParams.get('msg') ?? '') as MessageKind | ''
+  // Filter state — useState for immediate reactivity, synced with URL.
+  // React Router's navigate/setSearchParams doesn't reliably trigger
+  // re-renders when useFilters (Layout) also uses useSearchParams.
+  const [msgKindFilter, setMsgKindState] = useState<MessageKind | ''>(() => {
+    const params = new URLSearchParams(location.search)
+    return (params.get('msg') ?? '') as MessageKind | ''
+  })
+  const [eventUuidFilter, setEventUuidState] = useState<string | null>(() => {
+    const params = new URLSearchParams(location.search)
+    return params.get('event_uuid')
+  })
+
+  // Sync state from URL on navigation (back/forward, external URL changes)
+  useEffect(() => {
+    const params = new URLSearchParams(location.search)
+    setMsgKindState((params.get('msg') ?? '') as MessageKind | '')
+    setEventUuidState(params.get('event_uuid'))
+  }, [location.search])
+
+  // Helper: update both React state (immediate) and URL (for deep linking)
+  const updateSearchParams = useCallback(
+    (updater: (params: URLSearchParams) => void) => {
+      const params = new URLSearchParams(location.search)
+      updater(params)
+      // Sync local state immediately from the updated params
+      setMsgKindState((params.get('msg') ?? '') as MessageKind | '')
+      setEventUuidState(params.get('event_uuid'))
+      // Update URL for deep linking
+      const qs = params.toString()
+      navigate(`${location.pathname}${qs ? `?${qs}` : ''}${location.hash}`, { replace: true })
+    },
+    [navigate, location.pathname, location.search, location.hash]
+  )
+
   const [highlightedUuid, setHighlightedUuid] = useState<string | null>(null)
 
   // Build API URL with optional event_uuid filter (filtering happens server-side)
@@ -394,34 +477,28 @@ export default function SessionDetail() {
   // Handle filter click - sets event_uuid query parameter
   const handleFilterClick = useCallback(
     (uuid: string) => {
-      const newParams = new URLSearchParams(searchParams)
-      newParams.set('event_uuid', uuid)
-      setSearchParams(newParams)
+      updateSearchParams((params) => params.set('event_uuid', uuid))
     },
-    [searchParams, setSearchParams]
+    [updateSearchParams]
   )
 
   // Clear the event_uuid filter
   const clearEventFilter = useCallback(() => {
-    const newParams = new URLSearchParams(searchParams)
-    newParams.delete('event_uuid')
-    setSearchParams(newParams)
-  }, [searchParams, setSearchParams])
+    updateSearchParams((params) => params.delete('event_uuid'))
+  }, [updateSearchParams])
 
   // Set/clear the message kind filter
   const setMsgKindFilter = useCallback(
     (kind: MessageKind | '') => {
-      setSearchParams((prev) => {
-        const next = new URLSearchParams(prev)
+      updateSearchParams((params) => {
         if (kind) {
-          next.set('msg', kind)
+          params.set('msg', kind)
         } else {
-          next.delete('msg')
+          params.delete('msg')
         }
-        return next
       })
     },
-    [setSearchParams]
+    [updateSearchParams]
   )
 
   // Scroll to fragment on load/change
@@ -600,7 +677,7 @@ export default function SessionDetail() {
             <div className="space-y-3">
               {visibleEvents.map((event, index) => (
                 <EventCard
-                  key={event.uuid || `event-${index}`}
+                  key={event.uuid ? `${event.uuid}-${index}` : `event-${index}`}
                   event={event}
                   eventMap={eventMap}
                   onUuidClick={handleUuidClick}

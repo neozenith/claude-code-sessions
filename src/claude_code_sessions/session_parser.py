@@ -37,23 +37,27 @@ def _first_content_block_type(content: Any) -> str | None:
 
 
 def _message_kind(event_type: str, is_meta: bool, content: Any) -> str:
-    """Classify an event into one of 8 fine-grained message kinds.
+    """Classify an event into one of 9 fine-grained message kinds.
 
     Kinds:
-        human         — user, not meta, string content (actual typed prompts)
-        tool_result   — user, not meta, tool_result list
-        user_text     — user, not meta, text/other list
-        meta          — user, isMeta=true (system-injected context)
-        assistant_text — assistant, text list
-        thinking      — assistant, thinking list
-        tool_use      — assistant, tool_use list
-        other         — progress / system / queue-operation / etc.
+        human              — user, not meta, string content (actual typed prompts)
+        task_notification   — user, not meta, string starting with <task-notification>
+        tool_result        — user, not meta, tool_result list
+        user_text          — user, not meta, text/other list
+        meta               — user, isMeta=true (system-injected context)
+        assistant_text     — assistant, text list
+        thinking           — assistant, thinking list
+        tool_use           — assistant, tool_use list
+        other              — progress / system / queue-operation / etc.
     """
     fct = _first_content_block_type(content)
     if event_type == "user":
         if is_meta:
             return "meta"
         if fct == "string":
+            # Detect task-notification callbacks injected as user messages
+            if isinstance(content, str) and content.lstrip().startswith("<task-notification>"):
+                return "task_notification"
             return "human"
         if fct == "tool_result":
             return "tool_result"

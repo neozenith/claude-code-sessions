@@ -1,5 +1,5 @@
 import { useMemo, useCallback } from 'react'
-import { useSearchParams } from 'react-router-dom'
+import { useLocation, useNavigate } from 'react-router-dom'
 import Plot from 'react-plotly.js'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
@@ -9,29 +9,32 @@ import { EVENT_TYPE_STYLES, getEventTypeStyle } from '@/lib/chart-colors'
 import type { TimelineEvent } from '@/lib/api-client'
 
 export default function Timeline() {
-  const [searchParams, setSearchParams] = useSearchParams()
   const { filters } = useFilters()
   const { mergeLayout, colors } = usePlotlyTheme()
+  const location = useLocation()
+  const navigate = useNavigate()
 
   // Read hide agents from URL params (specific to this page)
-  const hideAgentSessions = searchParams.get('hideAgents') === 'true'
+  const hideAgentSessions = useMemo(() => {
+    const params = new URLSearchParams(location.search)
+    return params.get('hideAgents') === 'true'
+  }, [location.search])
 
-  // Update URL params (for page-specific params like hideAgents)
+  // Update URL params via navigate (avoids useSearchParams conflicts with useFilters)
   const updateParams = useCallback(
     (updates: Record<string, string | null>) => {
-      setSearchParams((prev) => {
-        const newParams = new URLSearchParams(prev)
-        Object.entries(updates).forEach(([key, value]) => {
-          if (value === null || value === '') {
-            newParams.delete(key)
-          } else {
-            newParams.set(key, value)
-          }
-        })
-        return newParams
+      const params = new URLSearchParams(location.search)
+      Object.entries(updates).forEach(([key, value]) => {
+        if (value === null || value === '') {
+          params.delete(key)
+        } else {
+          params.set(key, value)
+        }
       })
+      const qs = params.toString()
+      navigate(`${location.pathname}${qs ? `?${qs}` : ''}`, { replace: true })
     },
-    [setSearchParams]
+    [navigate, location.pathname, location.search]
   )
 
   // Build API query for timeline events using global filters

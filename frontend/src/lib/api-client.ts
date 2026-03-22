@@ -334,16 +334,17 @@ export interface SessionListItem {
   filepath: string
 }
 
-/** The 8 fine-grained message kinds derived from event_type + is_meta + content shape */
+/** The 9 fine-grained message kinds derived from event_type + is_meta + content shape */
 export type MessageKind =
-  | 'human'          // user, not meta, string content — actual typed prompts
-  | 'tool_result'    // user, not meta, tool_result list
-  | 'user_text'      // user, not meta, text/other list
-  | 'meta'           // user, isMeta=true — system-injected context
-  | 'assistant_text' // assistant, text list
-  | 'thinking'       // assistant, thinking list
-  | 'tool_use'       // assistant, tool_use list
-  | 'other'          // progress / system / queue-operation / etc.
+  | 'human'              // user, not meta, string content — actual typed prompts
+  | 'task_notification'  // user, not meta, string starting with <task-notification>
+  | 'tool_result'        // user, not meta, tool_result list
+  | 'user_text'          // user, not meta, text/other list
+  | 'meta'               // user, isMeta=true — system-injected context
+  | 'assistant_text'     // assistant, text list
+  | 'thinking'           // assistant, thinking list
+  | 'tool_use'           // assistant, tool_use list
+  | 'other'              // progress / system / queue-operation / etc.
 
 /** Session event from /api/sessions/{project_id}/{session_id} */
 export interface SessionEvent {

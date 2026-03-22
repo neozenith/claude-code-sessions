@@ -1,6 +1,6 @@
 .PHONY: help install dev dev-backend dev-frontend build test lint clean sync-projects sync-watch
 .PHONY: agentic-dev-backend agentic-dev-frontend agentic-dev format typecheck
-.PHONY: port-debug port-clean compare-projects demo-backend
+.PHONY: port-debug port-clean compare-projects demo-backend demo
 
 # Port Configuration
 # Human developer ports (default)
@@ -40,6 +40,17 @@ dev: install-frontend ## Run both backend and frontend for human developers (por
 	@echo "| 💡 For AI agent development: make agentic-dev (ports 8101, 5274)          |"
 	@echo "==============================================================================="
 	npm --prefix frontend run dev
+
+demo: install-frontend ## Run both backend and frontend for human developers (ports 8100, 5273)
+	@echo "==============================================================================="
+	@echo "| 🚀 Starting dev servers (HUMAN profile)...                                |"
+	@echo "|                                                                             |"
+	@echo "| 🌐 Frontend: http://localhost:5273                                         |"
+	@echo "| 🔍 Backend API: http://localhost:8100                                      |"
+	@echo "|                                                                             |"
+	@echo "| 💡 For AI agent development: make agentic-dev (ports 8101, 5274)          |"
+	@echo "==============================================================================="
+	BLOCKED_DOMAINS=work,clients npm --prefix frontend run dev
 
 dev-backend: ## Run backend server only (human dev - port 8100)
 	BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main
