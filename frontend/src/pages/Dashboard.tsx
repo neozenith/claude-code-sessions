@@ -5,12 +5,12 @@ import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatNumber, formatProjectName } from '@/lib/formatters'
-import { CHART_COLORS } from '@/lib/chart-colors'
+import { CHART_COLORS, COST_COLOR } from '@/lib/chart-colors'
 import type { SummaryData, UsageData, TopProjectWeekly } from '@/lib/api-client'
 
 export default function Dashboard() {
   const { filters, buildApiQuery } = useFilters()
-  const { mergeLayout } = usePlotlyTheme()
+  const { colors, mergeLayout } = usePlotlyTheme()
   const { data: summary, loading: summaryLoading } = useApi<SummaryData[]>(`/summary${buildApiQuery()}`)
   const { data: monthly, loading: monthlyLoading } = useApi<UsageData[]>(`/usage/monthly${buildApiQuery()}`)
   const { data: topProjectsData, loading: topProjectsLoading } = useApi<TopProjectWeekly[]>(
@@ -81,21 +81,38 @@ export default function Dashboard() {
     return monthly.filter((row) => row.project_id === filters.project)
   }, [monthly, filters.project])
 
+  // Aggregate monthly costs and token usage by model
+  const { monthlyCosts, tokensByModel, models, sortedMonths } = useMemo(() => {
+    const costs: Record<string, number> = {}
+    const byModel: Record<string, Record<string, number>> = {}
+    const uniqueModels = new Set<string>()
+
+    filteredMonthly.forEach((row) => {
+      const month = row.time_bucket
+      const model = row.model_id || 'unknown'
+
+      costs[month] = (costs[month] || 0) + Number(row.total_cost_usd)
+
+      uniqueModels.add(model)
+      if (!byModel[model]) byModel[model] = {}
+      byModel[model][month] = (byModel[model][month] || 0) +
+        Number(row.total_input_tokens) + Number(row.total_output_tokens)
+    })
+
+    return {
+      monthlyCosts: costs,
+      tokensByModel: byModel,
+      models: Array.from(uniqueModels).sort(),
+      sortedMonths: Object.keys(costs).sort(),
+    }
+  }, [filteredMonthly])
+
   // Early return after all hooks
   if (summaryLoading || monthlyLoading || topProjectsLoading) {
     return <div className="text-center py-8">Loading...</div>
   }
 
   const summaryData = summary?.[0]
-
-  // Aggregate monthly costs
-  const monthlyCosts: Record<string, number> = {}
-  filteredMonthly.forEach((row) => {
-    const month = row.time_bucket
-    monthlyCosts[month] = (monthlyCosts[month] || 0) + Number(row.total_cost_usd)
-  })
-
-  const sortedMonths = Object.keys(monthlyCosts).sort()
 
   return (
     <div className="space-y-6">
@@ -141,30 +158,63 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Monthly Costs Table */}
+      {/* Monthly Costs + Token Usage Combo Chart */}
       <Card>
         <CardHeader>
-          <CardTitle>Monthly Costs</CardTitle>
+          <CardTitle>Monthly Costs &amp; Token Usage by Model</CardTitle>
         </CardHeader>
         <CardContent>
-          <div className="overflow-x-auto">
-            <table className="w-full">
-              <thead>
-                <tr className="border-b">
-                  <th className="text-left py-3 px-4 font-medium">Month</th>
-                  <th className="text-right py-3 px-4 font-medium">Cost (USD)</th>
-                </tr>
-              </thead>
-              <tbody>
-                {sortedMonths.map((month) => (
-                  <tr key={month} className="border-b last:border-0 hover:bg-muted/50">
-                    <td className="py-3 px-4">{month}</td>
-                    <td className="py-3 px-4 text-right font-mono">${monthlyCosts[month].toFixed(2)}</td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
+          <Plot
+            data={[
+              // Stacked bar traces for token usage per model (primary y-axis)
+              ...models.map((model, idx) => ({
+                x: sortedMonths,
+                y: sortedMonths.map((m) => tokensByModel[model]?.[m] || 0),
+                type: 'bar' as const,
+                name: model.replace('claude-', ''),
+                marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
+                text: sortedMonths.map((m) => formatNumber(tokensByModel[model]?.[m] || 0)),
+                textposition: 'inside' as const,
+                textfont: { size: 10 },
+                hovertemplate: '%{x}<br>%{fullData.name}<br>%{y:,} tokens<extra></extra>',
+              })),
+              // Area chart for monthly cost (secondary y-axis, layered on top)
+              {
+                x: sortedMonths,
+                y: sortedMonths.map((m) => monthlyCosts[m]),
+                type: 'scatter' as const,
+                mode: 'text+lines' as const,
+                name: 'Cost (USD)',
+                fill: 'tozeroy' as const,
+                fillcolor: 'rgba(16, 185, 129, 0.15)',
+                line: { color: COST_COLOR, width: 2.5 },
+                text: sortedMonths.map((m) => `$${monthlyCosts[m].toFixed(0)}`),
+                textposition: 'top center' as const,
+                textfont: { color: COST_COLOR, size: 11, weight: 600 },
+                yaxis: 'y2' as const,
+                hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
+              },
+            ]}
+            layout={mergeLayout({
+              autosize: true,
+              margin: { l: 70, r: 140, t: 30, b: 50 },
+              xaxis: { title: { text: 'Month' } },
+              yaxis: { title: { text: 'Total Tokens' }, tickformat: ',.0s' },
+              yaxis2: {
+                title: { text: 'Cost (USD)' },
+                overlaying: 'y',
+                side: 'right',
+                tickprefix: '$',
+                color: colors.text,
+                gridcolor: 'transparent',
+              },
+              showlegend: true,
+              legend: { x: 1.12, y: 1, orientation: 'v' as const, xanchor: 'left' as const },
+              barmode: 'stack',
+            })}
+            useResizeHandler
+            style={{ width: '100%', height: '400px' }}
+          />
         </CardContent>
       </Card>
 
