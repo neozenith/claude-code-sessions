@@ -23,8 +23,10 @@ install: install-backend install-frontend ## Install all dependencies
 install-backend: ## Install backend dependencies with uv
 	uv sync --all-groups
 
-install-frontend: ## Install frontend dependencies
+install-frontend: frontend/node_modules/.frontend_deps ## Install frontend dependencies
+frontend/node_modules/.frontend_deps: frontend/package.json frontend/package-lock.json
 	npm --prefix frontend install
+	touch $@
 
 # =============================================================================
 # Human Developer Targets (default ports)
