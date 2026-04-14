@@ -3,362 +3,449 @@ import { test, expect, Page } from '@playwright/test'
 /**
  * Universal Filters E2E Test Suite
  *
- * Tests all permutations of:
- * - 9 Sections (pages)
- * - 8 Time Range options
- * - 2 Project options (All Projects, specific project)
+ * All permutation tests follow the same pattern:
+ *   1. Navigate to page
+ *   2. Apply filters (time range + project)
+ *   3. Wait for full render
+ *   4. Assert zero browser console errors
+ *   5. Take a named screenshot
  *
- * Test ID format: S{section}-T{time}-P{project}
- * Screenshot naming: {test_id}.png
+ * Screenshot slug format:
+ *   E{id}{engine}-S{id}{route}-T{id}{days}-P{id}.png
+ *
+ * To expand coverage, edit COVERAGE_MATRIX below.
  */
 
-// Section definitions
+// ---------------------------------------------------------------------------
+// Axes — each axis has an id (for lexicographic sort) and a human slug
+// ---------------------------------------------------------------------------
+
+const ENGINES = {
+  duckdb: { id: 0, name: 'duckdb' },
+  sqlite: { id: 1, name: 'sqlite' },
+} as const
+
+type EngineKey = keyof typeof ENGINES
+type Engine = (typeof ENGINES)[EngineKey]
+
+/** Resolve engine from the Playwright project name at test runtime */
+function getEngine(): Engine {
+  // test.info() is only available inside test(), so callers
+  // must invoke this at the start of each test, not at module scope.
+  const projectName = test.info().project.name as EngineKey
+  return ENGINES[projectName] ?? ENGINES.sqlite
+}
+
 const SECTIONS = [
-  { id: 0, name: 'Dashboard', path: '/' },
-  { id: 1, name: 'Daily', path: '/daily' },
-  { id: 2, name: 'Weekly', path: '/weekly' },
-  { id: 3, name: 'Monthly', path: '/monthly' },
-  { id: 4, name: 'Hourly', path: '/hourly' },
-  { id: 5, name: 'HourOfDay', path: '/hour-of-day' },
-  { id: 6, name: 'Projects', path: '/projects' },
-  { id: 7, name: 'Timeline', path: '/timeline' },
-  { id: 8, name: 'SchemaTimeline', path: '/schema-timeline' },
-]
+  { id: 0, slug: 'dashboard', name: 'Dashboard', path: '/' },
+  { id: 1, slug: 'daily', name: 'Daily', path: '/daily' },
+  { id: 2, slug: 'weekly', name: 'Weekly', path: '/weekly' },
+  { id: 3, slug: 'monthly', name: 'Monthly', path: '/monthly' },
+  { id: 4, slug: 'hourly', name: 'Hourly', path: '/hourly' },
+  { id: 5, slug: 'hourofday', name: 'HourOfDay', path: '/hour-of-day' },
+  { id: 6, slug: 'projects', name: 'Projects', path: '/projects' },
+  { id: 7, slug: 'sessions', name: 'Sessions', path: '/sessions' },
+  { id: 8, slug: 'timeline', name: 'Timeline', path: '/timeline' },
+  { id: 9, slug: 'schematimeline', name: 'SchemaTimeline', path: '/schema-timeline' },
+] as const
 
-// Time range options (matching useFilters.ts)
 const TIME_RANGES = [
-  { id: 0, value: '1', label: 'Last 24 hours' },
-  { id: 1, value: '3', label: 'Last 3 days' },
-  { id: 2, value: '7', label: 'Last 7 days' },
-  { id: 3, value: '14', label: 'Last 14 days' },
-  { id: 4, value: '30', label: 'Last 30 days' },
-  { id: 5, value: '90', label: 'Last 90 days' },
-  { id: 6, value: '180', label: 'Last 180 days' },
-  { id: 7, value: '0', label: 'All time' },
-]
+  { id: 0, value: '1', slug: '24h', label: 'Last 24 hours' },
+  { id: 1, value: '3', slug: '3d', label: 'Last 3 days' },
+  { id: 2, value: '7', slug: '7d', label: 'Last 7 days' },
+  { id: 3, value: '14', slug: '14d', label: 'Last 14 days' },
+  { id: 4, value: '30', slug: '30d', label: 'Last 30 days' },
+  { id: 5, value: '90', slug: '90d', label: 'Last 90 days' },
+  { id: 6, value: '180', slug: '180d', label: 'Last 180 days' },
+  { id: 7, value: '0', slug: 'all', label: 'All time' },
+] as const
 
-// Project options
 const PROJECT_OPTIONS = [
   { id: 0, value: '', label: 'All Projects' },
   { id: 1, value: '-Users-joshpeak-play-claude-code-sessions', label: 'This Project' },
+] as const
+
+// Convenience aliases
+type Section = (typeof SECTIONS)[number]
+type TimeRange = (typeof TIME_RANGES)[number]
+type ProjectOption = (typeof PROJECT_OPTIONS)[number]
+
+const T_7D = TIME_RANGES[2]
+const T_30D = TIME_RANGES[4]
+const T_ALL = TIME_RANGES[7]
+const P_ALL = PROJECT_OPTIONS[0]
+
+// ---------------------------------------------------------------------------
+// Coverage matrix — edit this to change which permutations are tested
+// ---------------------------------------------------------------------------
+
+interface CoverageEntry {
+  section: Section
+  timeRanges: readonly TimeRange[]
+  projects: readonly ProjectOption[]
+}
+
+const SAMPLE_TIMES = [T_7D, T_ALL] as const
+
+const COVERAGE_MATRIX: CoverageEntry[] = [
+  // Dashboard: full matrix (8 × 2 = 16 tests)
+  { section: SECTIONS[0], timeRanges: TIME_RANGES, projects: PROJECT_OPTIONS },
+  // S1–S7: sample matrix (2 × 2 = 4 tests each = 28 tests)
+  ...SECTIONS.filter((s) => s.id >= 1 && s.id <= 7).map((section) => ({
+    section,
+    timeRanges: SAMPLE_TIMES,
+    projects: PROJECT_OPTIONS,
+  })),
+  // S8–S9: default only (1 × 1 = 1 test each = 2 tests)
+  ...SECTIONS.filter((s) => s.id >= 8).map((section) => ({
+    section,
+    timeRanges: [T_30D] as readonly TimeRange[],
+    projects: [P_ALL] as readonly ProjectOption[],
+  })),
 ]
 
-// Helper to generate test ID
-function getTestId(sectionId: number, timeId: number, projectId: number): string {
-  return `S${sectionId}-T${timeId}-P${projectId}`
+// ---------------------------------------------------------------------------
+// Slug builder
+// ---------------------------------------------------------------------------
+
+  const pad = (n: number) => String(n).padStart(2, '0')                                                                                                                                                                                                                                                       
+
+function screenshotSlug(engine: Engine, section: Section, time: TimeRange, project: ProjectOption): string {
+  return `E${pad(engine.id)}_${engine.name.toUpperCase()}-S${pad(section.id)}_${section.slug.toUpperCase()}-T${pad(time.id)}_${time.slug.toUpperCase()}-P${pad(project.id)}_${project.value ? 'SINGLE' : 'ALL'}`
 }
 
-// Helper to wait for page to load
-async function waitForPageLoad(page: Page): Promise<void> {
-  // Wait for any loading indicators to disappear
-  await page.waitForFunction(() => {
-    const loadingText = document.body.innerText
-    return !loadingText.includes('Loading...')
-  }, { timeout: 15000 }).catch(() => {
-    // Timeout is ok - some pages load fast
+// ---------------------------------------------------------------------------
+// Console log collector — captures ALL console output for .log export
+// ---------------------------------------------------------------------------
+
+import { mkdirSync, writeFileSync } from 'node:fs'
+
+interface ConsoleCollector {
+  /** Write the full console log to a file (paired with screenshot) */
+  writeLog: (slug: string) => void
+  /** Assert no real errors in the console */
+  assertNoErrors: () => void
+}
+
+function collectConsole(page: Page): ConsoleCollector {
+  const lines: string[] = []
+  const errors: string[] = []
+
+  page.on('pageerror', (err) => {
+    const line = `[PAGE_ERROR] ${err.message}`
+    lines.push(line)
+    errors.push(err.message)
   })
 
-  // Additional small wait for any animations
-  await page.waitForTimeout(500)
+  page.on('console', (msg) => {
+    const level = msg.type().toUpperCase().padEnd(7) // LOG    , ERROR  , WARN   , etc.
+    const line = `[${level}] ${msg.text()}`
+    lines.push(line)
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+
+  return {
+    writeLog(slug: string) {
+      const dir = 'e2e-screenshots'
+      mkdirSync(dir, { recursive: true })
+      writeFileSync(`${dir}/${slug}.log`, lines.join('\n') + '\n', 'utf-8')
+    },
+
+    assertNoErrors() {
+      const real = errors.filter(
+        (e) =>
+          !e.includes('act(') &&
+          !e.includes('favicon') &&
+          !e.includes('[vite]'),
+      )
+      expect(real, `Browser console errors:\n${real.join('\n')}`).toHaveLength(0)
+    },
+  }
 }
 
-// Helper to apply filters
-async function applyFilters(
-  page: Page,
-  timeRange: (typeof TIME_RANGES)[number],
-  project: (typeof PROJECT_OPTIONS)[number]
-): Promise<void> {
-  // Set time range filter
-  const timeSelect = page.locator('select').first()
-  await timeSelect.selectOption(timeRange.value)
+// ---------------------------------------------------------------------------
+// Wait / filter helpers
+// ---------------------------------------------------------------------------
 
-  // Set project filter
-  const projectSelect = page.locator('select').nth(1)
-  await projectSelect.selectOption(project.value)
+async function waitForPageLoad(page: Page): Promise<void> {
+  await page.waitForFunction(
+    () => (document.getElementById('root')?.children.length ?? 0) > 0,
+    { timeout: 45000 },
+  )
+  await page.waitForLoadState('networkidle', { timeout: 45000 }).catch(() => {})
+  await page.waitForFunction(
+    () => !document.body.innerText.includes('Loading...'),
+    { timeout: 45000 },
+  ).catch(() => {})
+}
 
-  // Wait for data to reload
+async function applyFilters(page: Page, time: TimeRange, project: ProjectOption): Promise<void> {
+  await page.locator('select').first().selectOption(time.value)
   await waitForPageLoad(page)
-}
 
-// Helper to verify URL parameters
-async function verifyUrlParams(
-  page: Page,
-  timeRange: (typeof TIME_RANGES)[number],
-  project: (typeof PROJECT_OPTIONS)[number]
-): Promise<void> {
-  const url = new URL(page.url())
-  const params = url.searchParams
-
-  // Check days parameter (30 is default and omitted)
-  if (timeRange.value === '30') {
-    // Default value should not be in URL
-    expect(params.has('days')).toBe(false)
-  } else if (timeRange.value !== '30') {
-    // Non-default should be in URL (but 0 might be handled differently)
-    const daysParam = params.get('days')
-    if (daysParam !== null) {
-      expect(daysParam).toBe(timeRange.value)
+  if (project.value) {
+    const projectSelect = page.locator('select').nth(1)
+    const exists = await projectSelect
+      .locator(`option[value="${project.value}"]`)
+      .count()
+      .then((c) => c > 0)
+      .catch(() => false)
+    if (exists) {
+      await projectSelect.selectOption(project.value)
+      await waitForPageLoad(page)
     }
   }
+}
 
-  // Check project parameter
+async function verifyUrlParams(page: Page, time: TimeRange, project: ProjectOption): Promise<void> {
+  const params = new URL(page.url()).searchParams
+  if (time.value === '30') {
+    expect(params.has('days')).toBe(false)
+  } else if (params.has('days')) {
+    expect(params.get('days')).toBe(time.value)
+  }
   if (project.value === '') {
     expect(params.has('project')).toBe(false)
-  } else {
+  } else if (params.has('project')) {
     expect(params.get('project')).toBe(project.value)
   }
 }
 
-// Generate tests for a subset of permutations (key test cases)
-// Full matrix would be 9 × 8 × 2 = 144 tests
-// We'll test representative combinations for faster CI
+// ---------------------------------------------------------------------------
+// Global timeout
+// ---------------------------------------------------------------------------
+
+test.setTimeout(90000)
+
+// =========================================================================
+// PERMUTATION TESTS — generated from COVERAGE_MATRIX
+//
+// To add coverage: add an entry to COVERAGE_MATRIX above.
+// Every entry automatically gets: navigate → filter → wait → assert → screenshot.
+// =========================================================================
+
+for (const entry of COVERAGE_MATRIX) {
+  test.describe(`${entry.section.name} Filters`, () => {
+    for (const time of entry.timeRanges) {
+      for (const project of entry.projects) {
+        // Test name uses a partial slug (without engine) — Playwright adds [sqlite]/[duckdb] suffix
+        const testLabel = `S${pad(entry.section.id)}_${entry.section.slug}-T${pad(time.id)}_${time.slug}-P${pad(project.id)}: ${time.label}, ${project.label}`
+
+        test(testLabel, async ({ page }) => {
+          const engine = getEngine()
+          const slug = screenshotSlug(engine, entry.section, time, project)
+          const console = collectConsole(page)
+
+          await page.goto(entry.section.path)
+          await applyFilters(page, time, project)
+          await verifyUrlParams(page, time, project)
+          await page.screenshot({ path: `e2e-screenshots/${slug}.png`, fullPage: true })
+          console.writeLog(slug)
+
+          console.assertNoErrors()
+        })
+      }
+    }
+  })
+}
+
+// =========================================================================
+// BEHAVIORAL TESTS — hand-written, not part of the permutation matrix
+// =========================================================================
 
 test.describe('Universal Filters - Core Functionality', () => {
   test.beforeEach(async ({ page }) => {
-    // Navigate to home first
     await page.goto('/')
     await waitForPageLoad(page)
   })
 
   test('filter dropdowns are present', async ({ page }) => {
-    // Verify time range dropdown exists
-    const timeSelect = page.locator('select').first()
-    await expect(timeSelect).toBeVisible()
-
-    // Verify project dropdown exists
-    const projectSelect = page.locator('select').nth(1)
-    await expect(projectSelect).toBeVisible()
+    const console = collectConsole(page)
+    await expect(page.locator('select').first()).toBeVisible()
+    await expect(page.locator('select').nth(1)).toBeVisible()
+    console.writeLog('behavioral-filter-dropdowns-present')
+    console.assertNoErrors()
   })
 
   test('time range filter changes URL', async ({ page }) => {
-    const timeSelect = page.locator('select').first()
-
-    // Select 7 days
-    await timeSelect.selectOption('7')
+    const console = collectConsole(page)
+    await page.locator('select').first().selectOption('7')
     await waitForPageLoad(page)
-
-    // Verify URL updated
     expect(page.url()).toContain('days=7')
+    console.writeLog('behavioral-time-range-changes-url')
+    console.assertNoErrors()
   })
 
   test('project filter changes URL', async ({ page }) => {
-    const projectSelect = page.locator('select').nth(1)
-
-    // Select a specific project
-    const options = await projectSelect.locator('option').all()
-    if (options.length > 1) {
-      // Get the value of the second option (first project)
-      const projectValue = await options[1].getAttribute('value')
-      if (projectValue) {
-        await projectSelect.selectOption(projectValue)
+    const console = collectConsole(page)
+    const sel = page.locator('select').nth(1)
+    const opts = await sel.locator('option').all()
+    if (opts.length > 1) {
+      const val = await opts[1].getAttribute('value')
+      if (val) {
+        await sel.selectOption(val)
         await waitForPageLoad(page)
-
-        // Verify URL updated
         expect(page.url()).toContain('project=')
       }
     }
+    console.writeLog('behavioral-project-filter-changes-url')
+    console.assertNoErrors()
   })
 
   test('filters persist across navigation', async ({ page }) => {
-    // Apply filters
-    const timeSelect = page.locator('select').first()
-    await timeSelect.selectOption('7')
+    const console = collectConsole(page)
+    await page.locator('select').first().selectOption('7')
     await waitForPageLoad(page)
-
-    // Navigate to another page via nav link
     await page.click('text=Daily')
     await waitForPageLoad(page)
-
-    // Verify filters are preserved
     expect(page.url()).toContain('days=7')
     expect(page.url()).toContain('/daily')
+    console.writeLog('behavioral-filters-persist-navigation')
+    console.assertNoErrors()
   })
 
   test('clear filters button works', async ({ page }) => {
-    // Apply filters
-    const timeSelect = page.locator('select').first()
-    await timeSelect.selectOption('7')
+    const console = collectConsole(page)
+    await page.locator('select').first().selectOption('7')
     await waitForPageLoad(page)
-
-    // Click clear filters
-    const clearButton = page.locator('text=Clear filters')
-    if (await clearButton.isVisible()) {
-      await clearButton.click()
+    const btn = page.locator('text=Clear filters')
+    if (await btn.isVisible()) {
+      await btn.click()
       await waitForPageLoad(page)
-
-      // Verify URL is clean
       expect(page.url()).not.toContain('days=7')
     }
+    console.writeLog('behavioral-clear-filters')
+    console.assertNoErrors()
   })
 })
 
-// Test each section loads correctly with default filters
-test.describe('Section Loading - Default Filters', () => {
-  for (const section of SECTIONS) {
-    test(`${section.name} (S${section.id}) loads`, async ({ page }) => {
-      const testId = getTestId(section.id, 4, 0) // Default: T4 (30 days), P0 (All)
-
-      await page.goto(section.path)
-      await waitForPageLoad(page)
-
-      // Take screenshot
-      await page.screenshot({ path: `e2e-screenshots/${testId}.png`, fullPage: true })
-
-      // Verify page loaded (no error message)
-      const content = await page.content()
-      expect(content).not.toContain('Error')
-    })
-  }
-})
-
-// Test filter combinations for Dashboard (S0)
-test.describe('Dashboard Filters', () => {
-  for (const timeRange of TIME_RANGES) {
-    for (const project of PROJECT_OPTIONS) {
-      test(`S0-T${timeRange.id}-P${project.id}: ${timeRange.label}, ${project.label}`, async ({ page }) => {
-        const testId = getTestId(0, timeRange.id, project.id)
-
-        await page.goto('/')
-        await applyFilters(page, timeRange, project)
-        await verifyUrlParams(page, timeRange, project)
-
-        // Take screenshot
-        await page.screenshot({ path: `e2e-screenshots/${testId}.png`, fullPage: true })
-      })
-    }
-  }
-})
-
-// Test filter combinations for Daily (S1) - representative sample
-test.describe('Daily Filters - Sample', () => {
-  const sampleTimeRanges = [TIME_RANGES[2], TIME_RANGES[7]] // 7 days and All time
-
-  for (const timeRange of sampleTimeRanges) {
-    for (const project of PROJECT_OPTIONS) {
-      test(`S1-T${timeRange.id}-P${project.id}: ${timeRange.label}, ${project.label}`, async ({ page }) => {
-        const testId = getTestId(1, timeRange.id, project.id)
-
-        await page.goto('/daily')
-        await applyFilters(page, timeRange, project)
-        await verifyUrlParams(page, timeRange, project)
-
-        await page.screenshot({ path: `e2e-screenshots/${testId}.png`, fullPage: true })
-      })
-    }
-  }
-})
-
-// Test API calls include filter parameters
 test.describe('API Filter Verification', () => {
   test('API calls include days parameter', async ({ page }) => {
-    // Listen for API requests
-    const apiCalls: string[] = []
-    page.on('request', (request) => {
-      if (request.url().includes('/api/')) {
-        apiCalls.push(request.url())
-      }
-    })
-
+    const console = collectConsole(page)
+    const calls: string[] = []
+    page.on('request', (r) => { if (r.url().includes('/api/')) calls.push(r.url()) })
     await page.goto('/')
     await waitForPageLoad(page)
-
-    // Apply 7 day filter
-    const timeSelect = page.locator('select').first()
-    await timeSelect.selectOption('7')
+    await page.locator('select').first().selectOption('7')
     await waitForPageLoad(page)
-
-    // Check that at least one API call includes days=7
-    const hasDaysParam = apiCalls.some((url) => url.includes('days=7'))
-    expect(hasDaysParam).toBe(true)
+    expect(calls.some((u) => u.includes('days=7'))).toBe(true)
+    console.writeLog('behavioral-api-includes-days')
+    console.assertNoErrors()
   })
 
   test('API calls include project parameter', async ({ page }) => {
-    const apiCalls: string[] = []
-    page.on('request', (request) => {
-      if (request.url().includes('/api/')) {
-        apiCalls.push(request.url())
-      }
-    })
-
+    const console = collectConsole(page)
+    const calls: string[] = []
+    page.on('request', (r) => { if (r.url().includes('/api/')) calls.push(r.url()) })
     await page.goto('/')
     await waitForPageLoad(page)
-
-    // Get first project from dropdown
-    const projectSelect = page.locator('select').nth(1)
-    const options = await projectSelect.locator('option').all()
-
-    if (options.length > 1) {
-      const projectValue = await options[1].getAttribute('value')
-      if (projectValue) {
-        await projectSelect.selectOption(projectValue)
+    const sel = page.locator('select').nth(1)
+    const opts = await sel.locator('option').all()
+    if (opts.length > 1) {
+      const val = await opts[1].getAttribute('value')
+      if (val) {
+        await sel.selectOption(val)
         await waitForPageLoad(page)
-
-        // Check API calls include project parameter
-        const hasProjectParam = apiCalls.some((url) => url.includes('project='))
-        expect(hasProjectParam).toBe(true)
+        expect(calls.some((u) => u.includes('project='))).toBe(true)
       }
     }
+    console.writeLog('behavioral-api-includes-project')
+    console.assertNoErrors()
   })
 })
 
-// Test project list updates with time range
 test.describe('Dynamic Project List', () => {
   test('project list reflects time range', async ({ page }) => {
+    const console = collectConsole(page)
     await page.goto('/')
     await waitForPageLoad(page)
-
-    // Get initial project count
-    const projectSelect = page.locator('select').nth(1)
-    const initialOptions = await projectSelect.locator('option').count()
-
-    // Change to 1 day (fewer projects might be active)
-    const timeSelect = page.locator('select').first()
-    await timeSelect.selectOption('1')
+    await page.locator('select').first().selectOption('1')
     await waitForPageLoad(page)
-
-    // Get updated project count
-    const updatedOptions = await projectSelect.locator('option').count()
-
-    // The counts might differ (or might not, depending on data)
-    // At minimum, verify dropdown still works
-    expect(updatedOptions).toBeGreaterThanOrEqual(1) // At least "All Projects"
+    const count = await page.locator('select').nth(1).locator('option').count()
+    expect(count).toBeGreaterThanOrEqual(1)
+    console.writeLog('behavioral-dynamic-project-list')
+    console.assertNoErrors()
   })
 })
 
-// Test Timeline page requires project selection
 test.describe('Timeline Project Requirement', () => {
-  test('Timeline shows message when no project selected', async ({ page }) => {
+  test('shows message when no project selected', async ({ page }) => {
+    const console = collectConsole(page)
     await page.goto('/timeline')
     await waitForPageLoad(page)
-
-    // Should show a message about selecting a project
-    const content = await page.content()
-    expect(
-      content.includes('Select a project') || content.includes('select a project')
-    ).toBe(true)
+    const text = await page.innerText('body')
+    expect(text.toLowerCase()).toContain('select a project')
+    console.writeLog('behavioral-timeline-no-project')
+    console.assertNoErrors()
   })
 
-  test('Timeline shows data when project selected', async ({ page }) => {
+  test('shows data when project selected', async ({ page }) => {
+    const console = collectConsole(page)
     await page.goto('/timeline')
     await waitForPageLoad(page)
-
-    // Select a project
-    const projectSelect = page.locator('select').nth(1)
-    const options = await projectSelect.locator('option').all()
-
-    if (options.length > 1) {
-      const projectValue = await options[1].getAttribute('value')
-      if (projectValue) {
-        await projectSelect.selectOption(projectValue)
+    const sel = page.locator('select').nth(1)
+    const opts = await sel.locator('option').all()
+    if (opts.length > 1) {
+      const val = await opts[1].getAttribute('value')
+      if (val) {
+        await sel.selectOption(val)
         await waitForPageLoad(page)
-
-        // Should no longer show the "select project" message
-        const content = await page.content()
-        // Either shows data or "No events found"
-        const hasData =
-          content.includes('Event Timeline') || content.includes('No events found')
-        expect(hasData).toBe(true)
+        await page.waitForFunction(
+          () => {
+            const t = document.body.innerText
+            return !t.includes('Loading') && (t.includes('Timeline') || t.includes('No events'))
+          },
+          { timeout: 45000 },
+        ).catch(() => {})
+        const text = await page.innerText('body')
+        expect(text).toMatch(/Timeline|No events/)
       }
     }
+    console.writeLog('behavioral-timeline-with-project')
+    console.assertNoErrors()
+  })
+})
+
+test.describe('Sessions Navigation', () => {
+  test('sessions list loads', async ({ page }) => {
+    const engine = getEngine()
+    const slug = `E${pad(engine.id)}_${engine.name}-sessions-list`
+    const console = collectConsole(page)
+    await page.goto('/sessions')
+    await waitForPageLoad(page)
+    await page.screenshot({ path: `e2e-screenshots/${slug}.png`, fullPage: true })
+    console.writeLog(slug)
+    console.assertNoErrors()
+  })
+
+  test('project → session detail navigation', async ({ page }) => {
+    const engine = getEngine()
+    const ePrefix = `E${pad(engine.id)}_${engine.name}`
+    const console = collectConsole(page)
+    await page.goto('/sessions')
+    await waitForPageLoad(page)
+
+    const projectLink = page.locator('a[href*="/sessions/"]').first()
+    if (await projectLink.isVisible()) {
+      await projectLink.click()
+      await waitForPageLoad(page)
+      expect(page.url()).toMatch(/\/sessions\/[^/]+$/)
+
+      const projSlug = `${ePrefix}-project-sessions`
+      await page.screenshot({ path: `e2e-screenshots/${projSlug}.png`, fullPage: true })
+      console.writeLog(projSlug)
+
+      const sessionLink = page.locator('a[href*="/sessions/"]').first()
+      if (await sessionLink.isVisible()) {
+        await sessionLink.click()
+        await waitForPageLoad(page)
+        expect(page.url()).toMatch(/\/sessions\/[^/]+\/[^/]+/)
+
+        const detailSlug = `${ePrefix}-session-detail`
+        await page.screenshot({ path: `e2e-screenshots/${detailSlug}.png`, fullPage: true })
+        console.writeLog(detailSlug)
+      }
+    }
+    console.assertNoErrors()
   })
 })

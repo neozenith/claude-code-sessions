@@ -34,6 +34,7 @@ def test_client() -> TestClient:
 # =============================================================================
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestTimelineEndpoint:
     """Tests for the /api/timeline/events/{project_id} endpoint."""
 
@@ -182,6 +183,7 @@ class TestTimelineSessionOrdering:
 # =============================================================================
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestHealthEndpoint:
     """Tests for health endpoint."""
 

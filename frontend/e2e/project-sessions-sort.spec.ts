@@ -10,12 +10,35 @@ import { test, expect, Page } from '@playwright/test'
 
 const TEST_PROJECT_ID = '-Users-joshpeak-play-claude-code-sessions'
 
+test.setTimeout(60000)
+
 async function waitForPageLoad(page: Page): Promise<void> {
   await page.waitForFunction(
+    () => (document.getElementById('root')?.children.length ?? 0) > 0,
+    { timeout: 45000 },
+  )
+  await page.waitForLoadState('networkidle', { timeout: 45000 }).catch(() => {})
+  await page.waitForFunction(
     () => !document.body.innerText.includes('Loading...'),
-    { timeout: 15000 }
+    { timeout: 45000 },
   ).catch(() => {})
-  await page.waitForTimeout(300)
+}
+
+function collectConsoleErrors(page: Page) {
+  const errors: string[] = []
+  page.on('pageerror', (err) => errors.push(err.message))
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  return {
+    errors,
+    assertNoErrors() {
+      const real = errors.filter(
+        (e) => !e.includes('act(') && !e.includes('favicon') && !e.includes('[vite]'),
+      )
+      expect(real, `Browser console errors:\n${real.join('\n')}`).toHaveLength(0)
+    },
+  }
 }
 
 async function navigateToProjectSessions(page: Page): Promise<void> {

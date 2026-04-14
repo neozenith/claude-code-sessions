@@ -1,53 +1,74 @@
 import { defineConfig, devices } from '@playwright/test'
 
 /**
- * Playwright configuration for E2E filter tests.
+ * Playwright configuration — runs tests against BOTH database backends
+ * in a single test session.
+ *
+ * Two Playwright projects (duckdb, sqlite) each start their own
+ * backend + frontend server pair on different ports. All screenshots
+ * and logs land in e2e-screenshots/ with engine-prefixed slugs.
+ *
+ * Usage:
+ *   npx playwright test                    # both engines
+ *   npx playwright test --project=sqlite   # just sqlite
+ *   npx playwright test --project=duckdb   # just duckdb
+ *
  * @see https://playwright.dev/docs/test-configuration
  */
 export default defineConfig({
   testDir: './e2e',
-  /* Run tests in files in parallel */
   fullyParallel: true,
-  /* Fail the build on CI if you accidentally left test.only in the source code */
   forbidOnly: !!process.env.CI,
-  /* Retry on CI only */
   retries: process.env.CI ? 2 : 0,
-  /* Opt out of parallel tests on CI */
   workers: process.env.CI ? 1 : undefined,
-  /* Reporter to use */
   reporter: [
     ['list'],
     ['html', { outputFolder: 'playwright-report' }],
   ],
-  /* Shared settings for all projects */
+  outputDir: 'e2e-screenshots',
+  timeout: 90000,
+  expect: { timeout: 10000 },
   use: {
-    /* Base URL to use in actions like `await page.goto('/')` */
-    baseURL: process.env.PLAYWRIGHT_BASE_URL || 'http://localhost:5274',
-    /* Collect trace when retrying the failed test */
     trace: 'on-first-retry',
-    /* Screenshot settings */
     screenshot: 'only-on-failure',
   },
-  /* Configure projects for major browsers */
+  globalSetup: './e2e/global-setup.ts',
+
   projects: [
     {
-      name: 'chromium',
-      use: { ...devices['Desktop Chrome'] },
+      name: 'sqlite',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'http://localhost:5274',
+      },
+    },
+    {
+      name: 'duckdb',
+      use: {
+        ...devices['Desktop Chrome'],
+        baseURL: 'http://localhost:5275',
+      },
     },
   ],
-  /* Output folder for screenshots */
-  outputDir: 'e2e-screenshots',
-  /* Timeout for each test */
-  timeout: 30000,
-  /* Timeout for expect() assertions */
-  expect: {
-    timeout: 10000,
-  },
-  /* Run your local dev server before starting the tests */
-  webServer: {
-    command: 'npm run agentic-dev',
-    url: 'http://localhost:5274',
-    reuseExistingServer: !process.env.CI,
-    timeout: 120000,
-  },
+
+  webServer: [
+    {
+      command:
+        'concurrently --kill-others --names "be,fe" ' +
+        '"BACKEND_PORT=8101 uv run python -m claude_code_sessions.main --backend sqlite" ' +
+        '"VITE_BACKEND_URL=http://localhost:8101 npx vite --port 5274"',
+      url: 'http://localhost:8101/api/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+    },
+    {
+      command:
+        'concurrently --kill-others --names "be,fe" ' +
+        '"BACKEND_PORT=8102 uv run python -m claude_code_sessions.main --backend duckdb" ' +
+        '"VITE_BACKEND_URL=http://localhost:8102 npx vite --port 5275"',
+      url: 'http://localhost:8102/api/health',
+      reuseExistingServer: !process.env.CI,
+      timeout: 120000,
+    },
+  ],
 })

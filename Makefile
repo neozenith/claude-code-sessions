@@ -1,6 +1,8 @@
 .PHONY: help install dev dev-backend dev-frontend build test lint clean sync-projects sync-watch
 .PHONY: agentic-dev-backend agentic-dev-frontend agentic-dev format typecheck
 .PHONY: port-debug port-clean compare-projects demo-backend demo
+.PHONY: dev-backend-sqlite agentic-dev-backend-sqlite
+.PHONY: test-contract test-frontend-e2e-duckdb test-frontend-e2e-sqlite
 
 # Port Configuration
 # Human developer ports (default)
@@ -78,6 +80,12 @@ agentic-dev: install-frontend ## Run both servers for AI agent development (port
 agentic-dev-backend: ## Run backend server only (AI agent - port 8101)
 	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) uv run python -m claude_code_sessions.main
 
+dev-backend-sqlite: ## Run backend with SQLite cached backend (port 8100)
+	BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main --backend sqlite
+
+agentic-dev-backend-sqlite: ## Run backend with SQLite cached backend (AI agent - port 8101)
+	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) uv run python -m claude_code_sessions.main --backend sqlite
+
 demo-backend: ## Run backend in demo mode (blocks work, clients domains)
 	BLOCKED_DOMAINS=work,clients BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main
 
@@ -99,12 +107,36 @@ test-backend: ## Run backend tests
 test-frontend: ## Run frontend tests
 	npm --prefix frontend run test
 
-test-frontend-e2e: ## Run frontend end-to-end tests
+test-contract: ## Run API contract tests against both backends
+	@echo "Starting DuckDB backend on :8101..."
+	@BACKEND_PORT=8101 uv run python -m claude_code_sessions.main --backend duckdb & echo $$! > tmp/.duckdb.pid
+	@echo "Starting SQLite backend on :8102..."
+	@BACKEND_PORT=8102 uv run python -m claude_code_sessions.main --backend sqlite & echo $$! > tmp/.sqlite.pid
+	@sleep 8
+	@echo "Running contract tests..."
+	-npm --prefix frontend run test:contract
+	@echo "Stopping backends..."
+	@kill $$(cat tmp/.duckdb.pid) $$(cat tmp/.sqlite.pid) 2>/dev/null; rm -f tmp/.duckdb.pid tmp/.sqlite.pid
+
+test-frontend-e2e: ## Run frontend E2E tests (both backends in one session)
 	npm --prefix frontend run test:e2e
+
+test-frontend-e2e-duckdb: ## Run frontend E2E tests against DuckDB only
+	npm --prefix frontend run test:e2e -- --project=duckdb
+
+test-frontend-e2e-sqlite: ## Run frontend E2E tests against SQLite only
+	npm --prefix frontend run test:e2e -- --project=sqlite
 
 # =============================================================================
 # Code Quality
 # =============================================================================
+
+fix: audit-fix format lint-fix 
+
+audit-fix: audit-fix-frontend
+
+audit-fix-frontend: ## Fix frontend vulnerabilities
+	npm --prefix frontend audit fix --force
 
 lint: lint-backend lint-frontend ## Lint all code
 
@@ -112,6 +144,7 @@ lint-backend: ## Lint backend code with ruff
 	uv run ruff check src/
 
 lint-frontend: ## Lint frontend code
+	npm --prefix frontend audit --audit-level=high
 	npm --prefix frontend run lint
 
 format: ## Format code with ruff
@@ -126,7 +159,7 @@ typecheck-backend: ## Type check backend with mypy
 typecheck-frontend: ## Run TypeScript type checking
 	npm --prefix frontend run typecheck
 
-ci: typecheck lint test ## Run all checks (typecheck, lint, test)
+ci: typecheck lint test test-frontend-e2e ## Run all checks (typecheck, lint, test)
 
 # =============================================================================
 # Data Management

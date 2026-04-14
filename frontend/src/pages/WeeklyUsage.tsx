@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/plotly'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
@@ -189,7 +189,7 @@ export default function WeeklyUsage() {
                 x: sortedWeeks,
                 y: sortedWeeks.map((w) => modelCosts[model]?.[w] || 0),
                 type: 'bar' as const,
-                name: model.replace('claude-', ''),
+                name: (model ?? 'unknown').replace('claude-', ''),
                 marker: { color: chartColors[idx % chartColors.length] },
                 text: sortedWeeks.map((w) => {
                   const cost = modelCosts[model]?.[w] || 0
@@ -231,7 +231,7 @@ export default function WeeklyUsage() {
                   x: sortedWeeks,
                   y: sortedWeeks.map((w) => modelTokens[model]?.[w]?.input || 0),
                   type: 'bar' as const,
-                  name: model.replace('claude-', '') + ' (input)',
+                  name: (model ?? 'unknown').replace('claude-', '') + ' (input)',
                   marker: { color: inputColors[idx % inputColors.length] },
                   text: sortedWeeks.map((w) => {
                     const input = modelTokens[model]?.[w]?.input || 0
@@ -253,7 +253,7 @@ export default function WeeklyUsage() {
                   x: sortedWeeks,
                   y: sortedWeeks.map((w) => -(modelTokens[model]?.[w]?.output || 0)),
                   type: 'bar' as const,
-                  name: model.replace('claude-', '') + ' (output)',
+                  name: (model ?? 'unknown').replace('claude-', '') + ' (output)',
                   marker: { color: outputColors[idx % outputColors.length] },
                   text: sortedWeeks.map((w) => {
                     const output = modelTokens[model]?.[w]?.output || 0

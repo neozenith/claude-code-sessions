@@ -7,10 +7,22 @@ Tests all endpoints with:
 - Project filter only
 - Both filters combined
 - Edge cases
+
+API endpoint tests are parametrized via ``db_backend`` fixture to run
+against both the DuckDB and SQLite backends.
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
+from claude_code_sessions.config import (
+    HOME_PROJECTS_PATH,
+    PRICING_CSV_PATH,
+    PROJECTS_PATH,
+    QUERIES_PATH,
+)
+from claude_code_sessions.database import DuckDBDatabase
+from claude_code_sessions.database.sqlite.filters import days_clause, domain_clause, project_clause
 from claude_code_sessions.main import app
 
 client = TestClient(app)
@@ -20,65 +32,116 @@ client = TestClient(app)
 # This is the current project which should have recent activity
 TEST_PROJECT_ID = "-Users-joshpeak-play-claude-code-sessions"
 
+# DuckDB instance for testing internal helpers directly
+_duckdb = DuckDBDatabase(
+    queries_path=QUERIES_PATH,
+    pricing_csv_path=PRICING_CSV_PATH,
+    local_projects_path=PROJECTS_PATH,
+    home_projects_path=HOME_PROJECTS_PATH,
+)
+
 
 class TestBuildFilters:
-    """Test the build_filters helper function."""
+    """Test the _build_filters helper on the DuckDB Database implementation."""
 
     def test_no_filters(self) -> None:
-        """build_filters with no args returns empty strings."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters()
+        """_build_filters with no args returns empty strings."""
+        filters = _duckdb._build_filters()
         assert filters["DAYS_FILTER"] == ""
         assert filters["PROJECT_FILTER"] == ""
 
     def test_days_filter_only(self) -> None:
-        """build_filters with days returns proper SQL clause."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters(days=7)
+        """_build_filters with days returns proper SQL clause."""
+        filters = _duckdb._build_filters(days=7)
         assert "7 days" in filters["DAYS_FILTER"]
         assert "INTERVAL" in filters["DAYS_FILTER"]
         assert filters["PROJECT_FILTER"] == ""
 
     def test_project_filter_only(self) -> None:
-        """build_filters with project returns proper SQL clause."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters(project="test-project")
+        """_build_filters with project returns proper SQL clause."""
+        filters = _duckdb._build_filters(project="test-project")
         assert filters["DAYS_FILTER"] == ""
         assert "test-project" in filters["PROJECT_FILTER"]
         assert "regexp_extract" in filters["PROJECT_FILTER"]
 
     def test_both_filters(self) -> None:
-        """build_filters with both args returns both clauses."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters(days=30, project="my-project")
+        """_build_filters with both args returns both clauses."""
+        filters = _duckdb._build_filters(days=30, project="my-project")
         assert "30 days" in filters["DAYS_FILTER"]
         assert "my-project" in filters["PROJECT_FILTER"]
 
     def test_days_zero_means_all_time(self) -> None:
-        """build_filters with days=0 returns empty days filter."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters(days=0)
+        """_build_filters with days=0 returns empty days filter."""
+        filters = _duckdb._build_filters(days=0)
         assert filters["DAYS_FILTER"] == ""
 
     def test_sql_injection_prevention(self) -> None:
-        """build_filters escapes single quotes in project ID."""
-        from claude_code_sessions.main import build_filters
-
-        filters = build_filters(project="test'; DROP TABLE users; --")
-        # Single quotes should be escaped to double single quotes
-        # Result should be: 'test''; DROP TABLE users; --'
-        # The quote after 'test' is escaped as ''
+        """_build_filters escapes single quotes in project ID."""
+        filters = _duckdb._build_filters(project="test'; DROP TABLE users; --")
         assert "''" in filters["PROJECT_FILTER"]
-        # Original unescaped injection attempt should not be present
-        # Looking for the pattern that would indicate unescaped injection
-        assert "= 'test';" not in filters["PROJECT_FILTER"]  # Would be dangerous
+        assert "= 'test';" not in filters["PROJECT_FILTER"]
 
 
+class TestSQLiteBuildFilters:
+    """Test the SQLite filter clause builders."""
+
+    def test_days_clause_empty_when_none(self) -> None:
+        """No days produces empty clause."""
+        assert days_clause(None) == ""
+
+    def test_days_clause_empty_when_zero(self) -> None:
+        """days=0 produces empty clause."""
+        assert days_clause(0) == ""
+
+    def test_days_clause_empty_when_negative(self) -> None:
+        """Negative days produces empty clause."""
+        assert days_clause(-5) == ""
+
+    def test_days_clause_with_value(self) -> None:
+        """Positive days produces proper SQLite datetime clause."""
+        result = days_clause(7)
+        assert "datetime('now', '-7 days')" in result
+        assert result.startswith("AND ")
+
+    def test_days_clause_custom_column(self) -> None:
+        """Custom column name is used in the clause."""
+        result = days_clause(30, col="s.last_timestamp")
+        assert "s.last_timestamp" in result
+
+    def test_project_clause_empty_when_none(self) -> None:
+        """No project produces empty clause."""
+        assert project_clause(None) == ""
+
+    def test_project_clause_with_value(self) -> None:
+        """Project ID produces proper equality clause."""
+        result = project_clause("my-project")
+        assert "my-project" in result
+        assert result.startswith("AND ")
+
+    def test_project_clause_sql_injection_prevention(self) -> None:
+        """Single quotes are escaped to prevent SQL injection."""
+        result = project_clause("test'; DROP TABLE users; --")
+        assert "''" in result
+        assert "= 'test';" not in result
+
+    def test_project_clause_custom_column(self) -> None:
+        """Custom column name is used in the clause."""
+        result = project_clause("proj", col="s.project_id")
+        assert "s.project_id" in result
+
+    def test_domain_clause_empty_when_no_blocked(self) -> None:
+        """No blocked domains produces empty clause."""
+        # domain_clause reads BLOCKED_DOMAINS at call time; if empty, returns ""
+        # This test relies on the test environment having no blocked domains
+        # (the default for dev/CI). If it fails, BLOCKED_DOMAINS is non-empty.
+        from claude_code_sessions.config import BLOCKED_DOMAINS
+
+        if not BLOCKED_DOMAINS:
+            result = domain_clause(PROJECTS_PATH)
+            assert result == ""
+
+
+@pytest.mark.usefixtures("db_backend")
 class TestSummaryEndpoint:
     """Test GET /api/summary endpoint."""
 
@@ -118,6 +181,7 @@ class TestSummaryEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestDailyUsageEndpoint:
     """Test GET /api/usage/daily endpoint."""
 
@@ -141,7 +205,6 @@ class TestDailyUsageEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
-        # All returned rows should be for the filtered project
         for row in data:
             assert row.get("project_id") == TEST_PROJECT_ID
 
@@ -151,6 +214,7 @@ class TestDailyUsageEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestWeeklyUsageEndpoint:
     """Test GET /api/usage/weekly endpoint."""
 
@@ -180,6 +244,7 @@ class TestWeeklyUsageEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestMonthlyUsageEndpoint:
     """Test GET /api/usage/monthly endpoint."""
 
@@ -209,6 +274,7 @@ class TestMonthlyUsageEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestHourlyUsageEndpoint:
     """Test GET /api/usage/hourly endpoint."""
 
@@ -238,6 +304,7 @@ class TestHourlyUsageEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestSessionsEndpoint:
     """Test GET /api/usage/sessions endpoint."""
 
@@ -267,6 +334,7 @@ class TestSessionsEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestProjectsEndpoint:
     """Test GET /api/projects endpoint."""
 
@@ -276,9 +344,7 @@ class TestProjectsEndpoint:
         assert response.status_code == 200
         data = response.json()
         assert isinstance(data, list)
-        # Should have at least one project
         assert len(data) > 0
-        # Each project should have expected fields
         for project in data:
             assert "project_id" in project
             assert "total_cost_usd" in project
@@ -306,6 +372,7 @@ class TestProjectsEndpoint:
         assert costs == sorted(costs, reverse=True)
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestTopProjectsWeeklyEndpoint:
     """Test GET /api/usage/top-projects-weekly endpoint."""
 
@@ -323,7 +390,11 @@ class TestTopProjectsWeeklyEndpoint:
 
 
 class TestSchemaTimelineEndpoint:
-    """Test GET /api/schema-timeline endpoint."""
+    """Test GET /api/schema-timeline endpoint.
+
+    Not parametrized — schema timeline is a DuckDB-specific feature.
+    The SQLite backend returns [] for this endpoint.
+    """
 
     def test_schema_timeline_no_filters(self) -> None:
         """Schema timeline returns data with no filters."""
@@ -348,6 +419,7 @@ class TestSchemaTimelineEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestTimelineEventsEndpoint:
     """Test GET /api/timeline/events/{project_id} endpoint."""
 
@@ -364,49 +436,36 @@ class TestTimelineEventsEndpoint:
         assert response.status_code == 200
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestFilterConsistency:
     """Test that filters are applied consistently across endpoints."""
 
     def test_project_filter_reduces_results(self) -> None:
         """Project filter should reduce or equal results vs no filter."""
-        # Get all daily data
         all_response = client.get("/api/usage/daily")
         all_data = all_response.json()
-
-        # Get filtered daily data
         filtered_response = client.get(f"/api/usage/daily?project={TEST_PROJECT_ID}")
         filtered_data = filtered_response.json()
-
-        # Filtered should be <= all
         assert len(filtered_data) <= len(all_data)
 
     def test_days_filter_reduces_results(self) -> None:
         """Days filter should reduce or equal results vs all time."""
-        # Get all time data
         all_response = client.get("/api/usage/daily?days=0")
         all_data = all_response.json()
-
-        # Get 7 days data
         filtered_response = client.get("/api/usage/daily?days=7")
         filtered_data = filtered_response.json()
-
-        # 7 days should be <= all time
         assert len(filtered_data) <= len(all_data)
 
     def test_combined_filters_reduce_more(self) -> None:
         """Combined filters should reduce results further."""
-        # Get days-only filter
         days_response = client.get("/api/usage/daily?days=30")
         days_data = days_response.json()
-
-        # Get combined filter
         combined_response = client.get(f"/api/usage/daily?days=30&project={TEST_PROJECT_ID}")
         combined_data = combined_response.json()
-
-        # Combined should be <= days-only
         assert len(combined_data) <= len(days_data)
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestEdgeCases:
     """Test edge cases and error conditions."""
 
@@ -430,6 +489,5 @@ class TestEdgeCases:
 
     def test_special_characters_in_project(self) -> None:
         """Special characters in project ID are handled."""
-        # URL-encoded special characters
         response = client.get("/api/usage/daily?project=test%2Fproject")
         assert response.status_code == 200

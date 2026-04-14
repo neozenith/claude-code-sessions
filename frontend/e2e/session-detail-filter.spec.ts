@@ -8,16 +8,32 @@ import { test, expect, Page } from '@playwright/test'
  * and that page-local params don't leak into global navigation.
  */
 
+test.setTimeout(60000)
+
 const TEST_PROJECT_ID = '-Users-joshpeak-play-claude-code-sessions'
-// Use a known session — the first session in the project sorted by last_active desc.
-// We discover it dynamically to avoid hardcoding a UUID.
 let TEST_SESSION_ID = ''
+
+function collectConsoleErrors(page: Page) {
+  const errors: string[] = []
+  page.on('pageerror', (err) => errors.push(err.message))
+  page.on('console', (msg) => {
+    if (msg.type() === 'error') errors.push(msg.text())
+  })
+  return {
+    errors,
+    assertNoErrors() {
+      const real = errors.filter(
+        (e) => !e.includes('act(') && !e.includes('favicon') && !e.includes('[vite]'),
+      )
+      expect(real, `Browser console errors:\n${real.join('\n')}`).toHaveLength(0)
+    },
+  }
+}
 
 async function discoverSessionId(page: Page): Promise<string> {
   await page.goto(`/sessions/${encodeURIComponent(TEST_PROJECT_ID)}`)
-  await page.waitForSelector('tbody tr a', { timeout: 15000 })
+  await page.waitForSelector('tbody tr a', { timeout: 30000 })
   const href = await page.locator('tbody tr a').first().getAttribute('href')
-  // href = /sessions/<project>/<session_id>
   const parts = href?.split('/') ?? []
   return parts[parts.length - 1] ?? ''
 }
@@ -25,10 +41,9 @@ async function discoverSessionId(page: Page): Promise<string> {
 async function navigateToSession(page: Page, sessionId: string, extraParams = ''): Promise<void> {
   const url = `/sessions/${encodeURIComponent(TEST_PROJECT_ID)}/${encodeURIComponent(sessionId)}${extraParams}`
   await page.goto(url)
-  // Wait for events to load — header changes from "Loading..." to "Event Timeline"
   await page.waitForFunction(
     () => document.body.innerText.includes('Event Timeline'),
-    { timeout: 20000 }
+    { timeout: 45000 },
   )
   await page.waitForTimeout(300)
 }
@@ -57,12 +72,12 @@ test.describe('Session Detail - Message Kind Filter', () => {
     })
   })
 
-  test('dropdown has all 9 options (All + 8 kinds)', async ({ page }) => {
+  test('dropdown has all 10 options (All + 9 kinds)', async ({ page }) => {
     await navigateToSession(page, TEST_SESSION_ID)
 
     const dropdown = page.getByTestId('msg-kind-filter')
     const options = dropdown.locator('option')
-    await expect(options).toHaveCount(9)
+    await expect(options).toHaveCount(10)
 
     // Verify the first option is "All messages"
     await expect(options.first()).toHaveText('All messages')

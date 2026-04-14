@@ -3,6 +3,8 @@ Tests for domain filtering functionality.
 
 Tests config helpers (extract_domain, is_project_blocked),
 SQL filter generation, build_filters integration, and the /api/domains endpoint.
+
+API endpoint tests are parametrized via ``db_backend`` fixture.
 """
 
 from unittest.mock import patch
@@ -10,10 +12,26 @@ from unittest.mock import patch
 import pytest
 from fastapi.testclient import TestClient
 
-from claude_code_sessions.config import extract_domain, is_project_blocked
-from claude_code_sessions.main import _build_domain_filter_sql, app, build_filters
+from claude_code_sessions.config import (
+    HOME_PROJECTS_PATH,
+    PRICING_CSV_PATH,
+    PROJECTS_PATH,
+    QUERIES_PATH,
+    extract_domain,
+    is_project_blocked,
+)
+from claude_code_sessions.database import DuckDBDatabase
+from claude_code_sessions.main import app
 
 client = TestClient(app)
+
+# DuckDB instance for testing internal helpers directly
+_duckdb = DuckDBDatabase(
+    queries_path=QUERIES_PATH,
+    pricing_csv_path=PRICING_CSV_PATH,
+    local_projects_path=PROJECTS_PATH,
+    home_projects_path=HOME_PROJECTS_PATH,
+)
 
 
 class TestExtractDomain:
@@ -84,58 +102,59 @@ class TestIsProjectBlocked:
 
 
 class TestBuildDomainFilterSql:
-    """Test _build_domain_filter_sql() SQL generation."""
+    """Test _build_domain_filter_sql() SQL generation (DuckDB-specific)."""
 
-    @patch("claude_code_sessions.main.BLOCKED_DOMAINS", [])
+    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", [])
     def test_empty_returns_empty_string(self) -> None:
         """No blocked domains produces empty SQL."""
-        assert _build_domain_filter_sql() == ""
+        assert _duckdb._build_domain_filter_sql() == ""
 
-    @patch("claude_code_sessions.main.BLOCKED_DOMAINS", ["work"])
+    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work"])
     def test_single_domain(self) -> None:
         """Single blocked domain produces one NOT LIKE clause."""
-        sql = _build_domain_filter_sql()
+        sql = _duckdb._build_domain_filter_sql()
         assert "NOT LIKE" in sql
         assert "-work-%" in sql
         assert sql.count("NOT LIKE") == 1
 
-    @patch("claude_code_sessions.main.BLOCKED_DOMAINS", ["work", "clients"])
+    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work", "clients"])
     def test_multiple_domains(self) -> None:
         """Multiple blocked domains produce multiple NOT LIKE clauses."""
-        sql = _build_domain_filter_sql()
+        sql = _duckdb._build_domain_filter_sql()
         assert "-work-%" in sql
         assert "-clients-%" in sql
         assert sql.count("NOT LIKE") == 2
 
-    @patch("claude_code_sessions.main.BLOCKED_DOMAINS", ["work"])
+    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work"])
     def test_uses_home_prefix(self) -> None:
         """SQL pattern includes HOME_PREFIX for correct matching."""
-        from claude_code_sessions.main import HOME_PREFIX
+        from claude_code_sessions.config import HOME_PREFIX
 
-        sql = _build_domain_filter_sql()
+        sql = _duckdb._build_domain_filter_sql()
         assert HOME_PREFIX in sql
 
 
 class TestBuildFiltersIncludesDomain:
-    """Test that build_filters() includes DOMAIN_FILTER key."""
+    """Test that _build_filters() includes DOMAIN_FILTER key (DuckDB-specific)."""
 
     def test_domain_filter_always_present(self) -> None:
-        """build_filters() always includes DOMAIN_FILTER key."""
-        filters = build_filters()
+        """_build_filters() always includes DOMAIN_FILTER key."""
+        filters = _duckdb._build_filters()
         assert "DOMAIN_FILTER" in filters
 
     def test_domain_filter_with_args(self) -> None:
         """DOMAIN_FILTER is present regardless of other filter args."""
-        filters = build_filters(days=7, project="test-project")
+        filters = _duckdb._build_filters(days=7, project="test-project")
         assert "DOMAIN_FILTER" in filters
 
-    @patch("claude_code_sessions.main.BLOCKED_DOMAINS", [])
+    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", [])
     def test_domain_filter_empty_when_no_blocked(self) -> None:
         """DOMAIN_FILTER is empty string when no domains are blocked."""
-        filters = build_filters()
+        filters = _duckdb._build_filters()
         assert filters["DOMAIN_FILTER"] == ""
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestDomainsEndpoint:
     """Test GET /api/domains endpoint."""
 
@@ -166,27 +185,31 @@ class TestDomainsEndpoint:
         assert data["all"] == sorted(data["all"])
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestDomainGuardEndpoints:
-    """Test that direct-access endpoints enforce domain blocking."""
+    """Test that direct-access endpoints enforce domain blocking.
 
-    @patch("claude_code_sessions.main.is_project_blocked", return_value=True)
-    def test_timeline_events_blocked(self, _mock: object) -> None:
-        """Timeline events returns 404 for blocked project."""
+    Uses the ``project_blocked`` parametrized fixture (True/False) combined
+    with ``db_backend`` (duckdb/sqlite) — each test runs 4 times automatically.
+    """
+
+    def test_timeline_events_domain_guard(self, project_blocked: bool) -> None:
+        """Timeline events returns 404 when blocked, succeeds when not."""
         response = client.get("/api/timeline/events/-Users-joshpeak-work-secret")
-        assert response.status_code == 404
+        if project_blocked:
+            assert response.status_code == 404
+        else:
+            # Not blocked — should not get a domain-guard 404
+            assert response.status_code != 404 or "not found" not in response.json().get(
+                "detail", ""
+            ).lower()
 
-    @patch("claude_code_sessions.main.is_project_blocked", return_value=True)
-    def test_session_events_blocked(self, _mock: object) -> None:
-        """Session events returns 404 for blocked project."""
+    def test_session_events_domain_guard(self, project_blocked: bool) -> None:
+        """Session events returns 404 when blocked, succeeds when not."""
         response = client.get("/api/sessions/-Users-joshpeak-work-secret/fake-session-id")
-        assert response.status_code == 404
-
-    @patch("claude_code_sessions.main.is_project_blocked", return_value=False)
-    def test_timeline_events_not_blocked(self, _mock: object) -> None:
-        """Timeline events proceeds when project is not blocked."""
-        # Will likely return empty data but should not 404 from domain guard
-        response = client.get("/api/timeline/events/-Users-joshpeak-play-test")
-        # Could be 200 (data found) or 500 (no data) — not 404 from domain guard
-        assert response.status_code != 404 or "not found" not in response.json().get(
-            "detail", ""
-        ).lower()
+        if project_blocked:
+            assert response.status_code == 404
+        else:
+            assert response.status_code != 404 or "not found" not in response.json().get(
+                "detail", ""
+            ).lower()

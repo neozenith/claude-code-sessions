@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/plotly'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
@@ -194,7 +194,7 @@ export default function MonthlyUsage() {
                 x: sortedMonths,
                 y: sortedMonths.map((m) => costsByModel[model]?.[m] || 0),
                 type: 'bar' as const,
-                name: model.replace('claude-', ''),
+                name: (model ?? 'unknown').replace('claude-', ''),
                 marker: { color: chartColors[idx % chartColors.length] },
                 text: sortedMonths.map((m) => {
                   const cost = costsByModel[model]?.[m] || 0
@@ -236,7 +236,7 @@ export default function MonthlyUsage() {
                   x: sortedMonths,
                   y: sortedMonths.map((m) => tokensByModel[model]?.[m]?.input || 0),
                   type: 'bar' as const,
-                  name: model.replace('claude-', '') + ' (input)',
+                  name: (model ?? 'unknown').replace('claude-', '') + ' (input)',
                   marker: { color: inputColors[idx % inputColors.length] },
                   text: sortedMonths.map((m) => {
                     const input = tokensByModel[model]?.[m]?.input || 0
@@ -258,7 +258,7 @@ export default function MonthlyUsage() {
                   x: sortedMonths,
                   y: sortedMonths.map((m) => -(tokensByModel[model]?.[m]?.output || 0)),
                   type: 'bar' as const,
-                  name: model.replace('claude-', '') + ' (output)',
+                  name: (model ?? 'unknown').replace('claude-', '') + ' (output)',
                   marker: { color: outputColors[idx % outputColors.length] },
                   text: sortedMonths.map((m) => {
                     const output = tokensByModel[model]?.[m]?.output || 0

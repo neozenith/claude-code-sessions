@@ -1,5 +1,5 @@
 import { useMemo } from 'react'
-import Plot from 'react-plotly.js'
+import Plot from '@/lib/plotly'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
@@ -171,7 +171,7 @@ export default function Dashboard() {
                 x: sortedMonths,
                 y: sortedMonths.map((m) => tokensByModel[model]?.[m] || 0),
                 type: 'bar' as const,
-                name: model.replace('claude-', ''),
+                name: (model ?? 'unknown').replace('claude-', ''),
                 marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
                 text: sortedMonths.map((m) => formatNumber(tokensByModel[model]?.[m] || 0)),
                 textposition: 'inside' as const,

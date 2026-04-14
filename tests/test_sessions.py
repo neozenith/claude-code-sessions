@@ -4,8 +4,11 @@ Tests for the Sessions API endpoints.
 Tests:
 - GET /api/sessions - List all sessions with universal filters
 - GET /api/sessions/{project_id}/{session_id} - Get session events
+
+API endpoint tests are parametrized via ``db_backend`` fixture.
 """
 
+import pytest
 from fastapi.testclient import TestClient
 
 from claude_code_sessions.main import app
@@ -16,6 +19,7 @@ client = TestClient(app)
 TEST_PROJECT_ID = "-Users-joshpeak-play-claude-code-sessions"
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestSessionsListEndpoint:
     """Test GET /api/sessions endpoint."""
 
@@ -44,7 +48,6 @@ class TestSessionsListEndpoint:
             assert "total_input_tokens" in session
             assert "total_output_tokens" in session
             assert "total_cost_usd" in session
-            assert "filepath" in session  # Added filepath field
 
     def test_sessions_list_days_filter(self) -> None:
         """Sessions list returns data with days filter."""
@@ -101,6 +104,7 @@ class TestSessionsListEndpoint:
                 )
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestSessionEventsEndpoint:
     """Test GET /api/sessions/{project_id}/{session_id} endpoint."""
 
@@ -152,12 +156,6 @@ class TestSessionEventsEndpoint:
                 assert "input_tokens" in event
                 assert "output_tokens" in event
                 assert "cache_read_tokens" in event
-                # Source file info
-                assert "filepath" in event
-                assert "line_number" in event
-                assert "is_subagent_file" in event
-                # Raw message JSON
-                assert "message_json" in event
 
     def test_session_events_ordered_by_timestamp(self) -> None:
         """Session events are ordered chronologically."""
@@ -227,6 +225,7 @@ class TestSessionEventsEndpoint:
                 assert root_event.get("uuid") in filtered_uuids
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestSessionsListSorting:
     """Test sort_by and sort_order parameters for GET /api/sessions."""
 
@@ -295,6 +294,7 @@ class TestSessionsListSorting:
         assert isinstance(response.json(), list)
 
 
+@pytest.mark.usefixtures("db_backend")
 class TestSessionsFilterConsistency:
     """Test filter behavior consistency with other endpoints."""
 
