@@ -227,6 +227,26 @@ export class ApiClient {
       params
     )
   }
+
+  /** On-demand raw JSONL line for a single event (not stored in cache). */
+  async getEventRawJson(
+    projectId: string,
+    sessionId: string,
+    eventUuid: string,
+  ): Promise<ApiResult<EventRawJson>> {
+    return this.get(
+      `/sessions/${encodeURIComponent(projectId)}` +
+        `/${encodeURIComponent(sessionId)}` +
+        `/events/${encodeURIComponent(eventUuid)}/raw`,
+    )
+  }
+}
+
+/** Response shape from GET /api/sessions/{p}/{s}/events/{uuid}/raw */
+export interface EventRawJson {
+  event_uuid: string
+  raw_json: string | null
+  found: boolean
 }
 
 // =========================================================================

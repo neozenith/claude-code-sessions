@@ -119,15 +119,34 @@ function screenshotSlug(engine: Engine, section: Section, time: TimeRange, proje
 // ---------------------------------------------------------------------------
 
 import { mkdirSync, writeFileSync } from 'node:fs'
+import type { Request as PlaywrightRequest } from '@playwright/test'
 
-interface ConsoleCollector {
-  /** Write the full console log to a file (paired with screenshot) */
+interface NetworkTiming {
+  url: string
+  method: string
+  status: number | null
+  /** Start time in ms, relative to when the test started (test_start_ms). */
+  start_offset_ms: number
+  /** Wall-clock milliseconds from request sent to response received. */
+  duration_ms: number
+  /** Resource type: xhr, fetch, document, script, stylesheet, image, etc. */
+  resource_type: string
+  /** Whether this is a backend API call (/api/...) */
+  is_api: boolean
+}
+
+interface TestCollector {
+  /** Write console log + network timing files paired with the screenshot */
   writeLog: (slug: string) => void
   /** Assert no real errors in the console */
   assertNoErrors: () => void
 }
 
-function collectConsole(page: Page): ConsoleCollector {
+function collectTestIO(page: Page): TestCollector {
+  // Test start timestamp — all start_offset_ms values are relative to this
+  const testStart = Date.now()
+
+  // Console capture
   const lines: string[] = []
   const errors: string[] = []
 
@@ -138,10 +157,52 @@ function collectConsole(page: Page): ConsoleCollector {
   })
 
   page.on('console', (msg) => {
-    const level = msg.type().toUpperCase().padEnd(7) // LOG    , ERROR  , WARN   , etc.
+    const level = msg.type().toUpperCase().padEnd(7)
     const line = `[${level}] ${msg.text()}`
     lines.push(line)
     if (msg.type() === 'error') errors.push(msg.text())
+  })
+
+  // Network capture — key by Request object (unique reference) to handle
+  // concurrent requests to the same URL correctly.
+  const network: NetworkTiming[] = []
+  const pending = new Map<PlaywrightRequest, number>()
+
+  page.on('request', (req) => {
+    pending.set(req, Date.now())
+  })
+
+  page.on('requestfinished', async (req) => {
+    const start = pending.get(req)
+    if (start === undefined) return
+    pending.delete(req)
+
+    const res = await req.response()
+    const url = req.url()
+    network.push({
+      url,
+      method: req.method(),
+      status: res ? res.status() : null,
+      start_offset_ms: start - testStart,
+      duration_ms: Date.now() - start,
+      resource_type: req.resourceType(),
+      is_api: url.includes('/api/'),
+    })
+  })
+
+  page.on('requestfailed', (req) => {
+    const start = pending.get(req)
+    if (start === undefined) return
+    pending.delete(req)
+    network.push({
+      url: req.url(),
+      method: req.method(),
+      status: null,
+      start_offset_ms: start - testStart,
+      duration_ms: Date.now() - start,
+      resource_type: req.resourceType(),
+      is_api: req.url().includes('/api/'),
+    })
   })
 
   return {
@@ -149,6 +210,42 @@ function collectConsole(page: Page): ConsoleCollector {
       const dir = 'e2e-screenshots'
       mkdirSync(dir, { recursive: true })
       writeFileSync(`${dir}/${slug}.log`, lines.join('\n') + '\n', 'utf-8')
+
+      // Network summary — designed for both performance analysis AND
+      // timeline/Gantt reconstruction. Each request has:
+      //   start_offset_ms: when it began, relative to test_start_ms
+      //   duration_ms:     how long it ran
+      // Together these let a tool plot [start, start+duration] bars per request.
+      const apiCalls = network.filter((n) => n.is_api)
+      const wallClockEnd = network.reduce(
+        (max, n) => Math.max(max, n.start_offset_ms + n.duration_ms),
+        0,
+      )
+      const summary = {
+        test_start_ms: testStart,
+        wall_clock_duration_ms: wallClockEnd,
+        total_requests: network.length,
+        total_duration_ms: network.reduce((s, n) => s + n.duration_ms, 0),
+        api_requests: apiCalls.length,
+        api_duration_ms: apiCalls.reduce((s, n) => s + n.duration_ms, 0),
+        slowest_api: [...apiCalls]
+          .sort((a, b) => b.duration_ms - a.duration_ms)
+          .slice(0, 5)
+          .map((n) => ({
+            url: n.url,
+            start_offset_ms: n.start_offset_ms,
+            duration_ms: n.duration_ms,
+            status: n.status,
+          })),
+        // Sorted by start_offset so all_requests reads chronologically —
+        // natural order for rendering a Gantt chart
+        all_requests: [...network].sort((a, b) => a.start_offset_ms - b.start_offset_ms),
+      }
+      writeFileSync(
+        `${dir}/${slug}.network.json`,
+        JSON.stringify(summary, null, 2) + '\n',
+        'utf-8',
+      )
     },
 
     assertNoErrors() {
@@ -162,6 +259,9 @@ function collectConsole(page: Page): ConsoleCollector {
     },
   }
 }
+
+// Legacy alias for existing call sites
+const collectConsole = collectTestIO
 
 // ---------------------------------------------------------------------------
 // Wait / filter helpers

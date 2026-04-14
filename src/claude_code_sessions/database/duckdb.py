@@ -20,6 +20,7 @@ from claude_code_sessions.config import (
     extract_domain,
     is_project_blocked,
 )
+from claude_code_sessions.database.raw_json import read_jsonl_line
 from claude_code_sessions.session_parser import (
     events_to_response,
     filter_event_tree,
@@ -206,6 +207,24 @@ class DuckDBDatabase:
         if event_uuid:
             events = filter_event_tree(events, event_uuid)
         return events_to_response(events)
+
+    def get_event_raw_json(
+        self, project_id: str, session_id: str, event_uuid: str
+    ) -> str | None:
+        """Fetch raw JSON line from the source JSONL file on demand.
+
+        The DuckDB path already reads JSONL per request, so we parse the
+        session and find the event by uuid, then use its (filepath,
+        line_number) to read the raw line from disk.
+        """
+        if is_project_blocked(project_id):
+            raise LookupError(f"Project not found: {project_id}")
+
+        events = parse_session(self.projects_path, project_id, session_id)
+        for ev in events:
+            if ev.uuid == event_uuid:
+                return read_jsonl_line(Path(ev.filepath), ev.line_number)
+        return None
 
     def get_domains(self) -> dict[str, list[str]]:
         projects_path = self.projects_path

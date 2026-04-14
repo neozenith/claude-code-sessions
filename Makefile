@@ -3,6 +3,7 @@
 .PHONY: port-debug port-clean compare-projects demo-backend demo
 .PHONY: dev-backend-sqlite agentic-dev-backend-sqlite
 .PHONY: test-contract test-frontend-e2e-duckdb test-frontend-e2e-sqlite
+.PHONY: e2e-baseline e2e-after e2e-compare
 
 # Port Configuration
 # Human developer ports (default)
@@ -123,6 +124,27 @@ test-frontend-e2e: ## Run frontend E2E tests (both backends in one session)
 
 test-frontend-e2e-duckdb: ## Run frontend E2E tests against DuckDB only
 	npm --prefix frontend run test:e2e -- --project=duckdb
+
+e2e-baseline: ## Snapshot current e2e perf numbers as baseline (before change)
+	@echo "Running full e2e suite for baseline capture..."
+	npm --prefix frontend run test:e2e
+	@rm -rf docs/perf/baseline
+	@mkdir -p docs/perf/baseline
+	@cp frontend/e2e-screenshots/*.network.json docs/perf/baseline/
+	@echo "Baseline captured in docs/perf/baseline/ ($$(ls docs/perf/baseline/*.network.json | wc -l | tr -d ' ') files)"
+
+e2e-after: ## Snapshot current e2e perf numbers after a change
+	@echo "Running full e2e suite for after-change capture..."
+	npm --prefix frontend run test:e2e
+	@rm -rf docs/perf/after
+	@mkdir -p docs/perf/after
+	@cp frontend/e2e-screenshots/*.network.json docs/perf/after/
+	@echo "After snapshot in docs/perf/after/ ($$(ls docs/perf/after/*.network.json | wc -l | tr -d ' ') files)"
+
+e2e-compare: ## Compare baseline vs after, regression-gate on p95 (requires both snapshots)
+	uv run scripts/compare_runs.py docs/perf/baseline docs/perf/after \
+	    --threshold 10 \
+	    --output docs/perf/report.md
 
 test-frontend-e2e-sqlite: ## Run frontend E2E tests against SQLite only
 	npm --prefix frontend run test:e2e -- --project=sqlite

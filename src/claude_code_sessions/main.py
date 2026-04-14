@@ -178,6 +178,24 @@ async def get_session_events(
     return get_db().get_session_events(project_id, session_id, event_uuid=event_uuid)
 
 
+@app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
+async def get_event_raw_json(
+    project_id: str,
+    session_id: str,
+    event_uuid: str,
+) -> dict[str, Any]:
+    """On-demand raw JSONL line for one event.
+
+    The cache no longer stores ``raw_json`` (a 2+ GB duplicate of the source
+    files). This endpoint reads the specific line from disk via the
+    (filepath, line_number) coordinate recorded during ingestion.
+    """
+    line = get_db().get_event_raw_json(project_id, session_id, event_uuid)
+    if line is None:
+        return {"event_uuid": event_uuid, "raw_json": None, "found": False}
+    return {"event_uuid": event_uuid, "raw_json": line, "found": True}
+
+
 @app.get("/api/domains")
 async def get_domains() -> dict[str, list[str]]:
     return get_db().get_domains()

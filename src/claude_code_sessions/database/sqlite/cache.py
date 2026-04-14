@@ -302,7 +302,12 @@ class CacheManager:
             "cache_5m_tokens": cache_5m_tokens,
             "token_rate": token_rate, "billable_tokens": billable_tokens,
             "total_cost_usd": total_cost_usd,
-            "line_number": line_number, "raw_json": json.dumps(raw),
+            # raw_json is intentionally empty — the source-of-truth for the
+            # raw payload is the JSONL file on disk (see source_files.filepath
+            # + line_number). Storing a duplicate copy here was costing 2+ GB
+            # and leaking thinking-block signatures into the cache. Use
+            # `SQLiteDatabase.get_event_raw_json(event_id)` to fetch on demand.
+            "line_number": line_number, "raw_json": "",
         }
 
     @staticmethod
@@ -422,14 +427,26 @@ class CacheManager:
         return {"files_updated": len(files_to_update), "events_added": total_events}
 
     def ensure_ready(self, projects_path: Path) -> None:
-        """Ensure cache exists, schema is current, and data is fresh."""
+        """Ensure cache exists, schema is current, and data is fresh.
+
+        The schema SQL uses ``CREATE X IF NOT EXISTS`` throughout, so running
+        ``init_schema()`` on every startup is safe and idempotent — and it
+        picks up new additive schema changes (new indexes, new columns via
+        ALTER TABLE, etc.) without forcing a full rebuild.
+        """
         if not self.db_path.exists():
             log.info("Cache not found — initializing from scratch")
             self.init_schema()
             self.update(projects_path)
-        elif self.needs_rebuild():
+            return
+
+        if self.needs_rebuild():
             log.info("Schema version mismatch — rebuilding cache")
             self.reset()
             self.update(projects_path)
-        else:
-            self.update(projects_path)
+            return
+
+        # Existing cache with matching version — still run init_schema() to
+        # apply any additive changes (new indexes), then incrementally update.
+        self.init_schema()
+        self.update(projects_path)

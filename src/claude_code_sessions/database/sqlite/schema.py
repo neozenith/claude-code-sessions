@@ -108,6 +108,17 @@ CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
 CREATE INDEX IF NOT EXISTS idx_source_files_project_session
     ON source_files(project_id, session_id);
 
+-- Covering index for analytical GROUP BY queries. Lets SQLite answer
+-- /api/summary, /api/usage/{daily,weekly,monthly,hourly}, and /api/projects
+-- index-only without touching the main table. Leading (timestamp) supports
+-- the universal days-filter range scan; trailing columns cover every measure
+-- the aggregation queries need.
+CREATE INDEX IF NOT EXISTS idx_events_covering ON events(
+    timestamp, project_id, session_id, model_id,
+    input_tokens, output_tokens,
+    cache_read_tokens, cache_creation_tokens, total_cost_usd
+);
+
 CREATE VIRTUAL TABLE IF NOT EXISTS events_fts USING fts5(
     message_content, content='events', content_rowid='id'
 );

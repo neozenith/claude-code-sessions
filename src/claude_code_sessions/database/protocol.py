@@ -96,6 +96,18 @@ class Database(Protocol):
         """All events for a specific session including subagent events."""
         ...
 
+    def get_event_raw_json(
+        self, project_id: str, session_id: str, event_uuid: str
+    ) -> str | None:
+        """Fetch a single event's raw JSONL line from the source file on disk.
+
+        Returns the raw line as stored in the JSONL source, or None if the
+        event isn't found. This is an on-demand alternative to storing the
+        raw payload in the cache — the ``events`` table tracks
+        (source_file_id, line_number) which lets us seek to the right line.
+        """
+        ...
+
     def get_domains(self) -> dict[str, list[str]]:
         """Domain filtering status: available, blocked, and all discovered domains."""
         ...

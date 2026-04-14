@@ -15,6 +15,7 @@ from claude_code_sessions.config import (
     extract_domain,
     is_project_blocked,
 )
+from claude_code_sessions.database.raw_json import read_jsonl_line
 from claude_code_sessions.database.sqlite.cache import CacheManager
 from claude_code_sessions.database.sqlite.filters import (
     days_clause,
@@ -337,11 +338,39 @@ class SQLiteDatabase:
                 CASE WHEN e.is_sidechain = 1 THEN 1 ELSE 0 END AS is_meta,
                 e.input_tokens, e.output_tokens,
                 e.cache_read_tokens, e.cache_creation_tokens,
-                e.raw_json AS message_json
+                -- raw_json intentionally omitted: fetch on demand via
+                -- get_event_raw_json(project_id, session_id, uuid)
+                NULL AS message_json
             FROM events e
             WHERE e.project_id = ? AND e.session_id = ? {uuid_clause}
-            ORDER BY e.timestamp
+            -- NULL timestamps (e.g. last-prompt markers) sort to the END so
+            -- the chronologically first real event appears at position 0.
+            ORDER BY e.timestamp IS NULL, e.timestamp
         """, params)
+
+    def get_event_raw_json(
+        self, project_id: str, session_id: str, event_uuid: str
+    ) -> str | None:
+        """Fetch raw JSON line from the source JSONL file on demand."""
+        if is_project_blocked(project_id):
+            raise LookupError(f"Project not found: {project_id}")
+
+        cursor = self._cache.conn.cursor()
+        row = cursor.execute(
+            """
+            SELECT sf.filepath, e.line_number
+            FROM events e
+            JOIN source_files sf ON sf.id = e.source_file_id
+            WHERE e.project_id = ? AND e.session_id = ? AND e.uuid = ?
+            LIMIT 1
+            """,
+            (project_id, session_id, event_uuid),
+        ).fetchone()
+
+        if row is None:
+            return None
+
+        return read_jsonl_line(Path(row["filepath"]), int(row["line_number"]))
 
     def get_domains(self) -> dict[str, list[str]]:
         projects_path = self.projects_path

@@ -226,17 +226,60 @@ function ContentItem({ item, depth = 0 }: { item: MessageContentItem; depth?: nu
 function EventCard({
   event,
   eventMap,
+  projectId,
+  sessionId,
   onUuidClick,
   onFilterClick,
   isHighlighted,
 }: {
   event: SessionEvent
   eventMap: Map<string, SessionEvent>
+  projectId: string
+  sessionId: string
   onUuidClick: (uuid: string) => void
   onFilterClick: (uuid: string) => void
   isHighlighted?: boolean
 }) {
   const [showJson, setShowJson] = useState(false)
+  // Raw JSON is fetched on demand — not stored in the cache any more
+  const [rawJson, setRawJson] = useState<string | null>(null)
+  const [rawJsonLoading, setRawJsonLoading] = useState(false)
+  const [rawJsonError, setRawJsonError] = useState<string | null>(null)
+
+  const handleToggleJson = async () => {
+    const willShow = !showJson
+    setShowJson(willShow)
+
+    // Fetch on first open, only if we have a uuid to look up
+    if (willShow && rawJson === null && !rawJsonLoading && event.uuid) {
+      setRawJsonLoading(true)
+      setRawJsonError(null)
+      try {
+        const url =
+          `/api/sessions/${encodeURIComponent(projectId)}` +
+          `/${encodeURIComponent(sessionId)}` +
+          `/events/${encodeURIComponent(event.uuid)}/raw`
+        const res = await fetch(url)
+        if (!res.ok) throw new Error(`HTTP ${res.status}`)
+        const body = (await res.json()) as { raw_json: string | null; found: boolean }
+        if (!body.found || body.raw_json === null) {
+          setRawJsonError('Event not found in source JSONL file')
+        } else {
+          // Pretty-print — the API returns the line as-is
+          try {
+            const parsed = JSON.parse(body.raw_json)
+            setRawJson(JSON.stringify(parsed, null, 2))
+          } catch {
+            setRawJson(body.raw_json)
+          }
+        }
+      } catch (err) {
+        setRawJsonError(err instanceof Error ? err.message : 'Fetch failed')
+      } finally {
+        setRawJsonLoading(false)
+      }
+    }
+  }
 
   const config = getMessageKindConfig(event.message_kind)
   const Icon = config.icon
@@ -359,11 +402,13 @@ function EventCard({
         {event.parent_uuid && <ClickableUuid uuid={event.parent_uuid} label="parent" />}
       </div>
 
-      {/* Collapsible raw JSON */}
+      {/* Collapsible raw JSON — fetched on demand from source JSONL */}
       <div className="mt-3 border-t pt-2">
         <button
-          onClick={() => setShowJson(!showJson)}
+          onClick={handleToggleJson}
           className="flex items-center gap-1 text-xs text-muted-foreground hover:text-foreground transition-colors"
+          disabled={!event.uuid}
+          title={event.uuid ? undefined : 'This event has no UUID and cannot be looked up'}
         >
           {showJson ? <ChevronDown className="h-3 w-3" /> : <ChevronRight className="h-3 w-3" />}
           <Code className="h-3 w-3" />
@@ -371,7 +416,11 @@ function EventCard({
         </button>
         {showJson && (
           <pre className="mt-2 p-3 bg-muted/50 rounded text-xs font-mono overflow-x-auto max-h-96 overflow-y-auto">
-            {JSON.stringify(event.message_json, null, 2)}
+            {rawJsonLoading
+              ? 'Loading raw JSON from source file…'
+              : rawJsonError
+                ? `Error: ${rawJsonError}`
+                : rawJson ?? '(no data)'}
           </pre>
         )}
       </div>
@@ -680,6 +729,8 @@ export default function SessionDetail() {
                   key={event.uuid ? `${event.uuid}-${index}` : `event-${index}`}
                   event={event}
                   eventMap={eventMap}
+                  projectId={projectId ?? ''}
+                  sessionId={sessionId ?? ''}
                   onUuidClick={handleUuidClick}
                   onFilterClick={handleFilterClick}
                   isHighlighted={event.uuid === highlightedUuid}
