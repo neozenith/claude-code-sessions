@@ -149,4 +149,92 @@ CREATE INDEX IF NOT EXISTS idx_event_edges_forward
 CREATE INDEX IF NOT EXISTS idx_event_edges_reverse
     ON event_edges(project_id, session_id, parent_event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_file_id);
+
+-- =====================================================================
+-- Dimensional aggregation tables (star schema)
+-- =====================================================================
+-- These tables pre-aggregate event measures at four time granularities.
+-- Analytical endpoints (/api/summary, /api/usage/{daily,weekly,monthly,hourly})
+-- read from these instead of GROUP BY-ing over millions of events.
+--
+-- Grain: (time_bucket, project_id, session_id, model_id)
+-- Dimensions: time_bucket (ISO string), project_id, session_id, model_id
+-- Measures (additive): event_count, input_tokens, output_tokens,
+--                      cache_read_tokens, cache_creation_tokens,
+--                      total_cost_usd, billable_tokens
+--
+-- Session uniqueness: COUNT(DISTINCT session_id) at query time — measures
+-- stay additive per Kimball's dimensional-modelling rule.
+--
+-- session_id / model_id use '' as a sentinel for NULL so the PRIMARY KEY
+-- uniqueness check works (SQLite's PK treats NULLs as non-equal).
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS agg_hourly (
+    time_bucket TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    billable_tokens REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_time ON agg_hourly(time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_hourly_project_time ON agg_hourly(project_id, time_bucket);
+
+CREATE TABLE IF NOT EXISTS agg_daily (
+    time_bucket TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    billable_tokens REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_time ON agg_daily(time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_daily_project_time ON agg_daily(project_id, time_bucket);
+
+CREATE TABLE IF NOT EXISTS agg_weekly (
+    time_bucket TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    billable_tokens REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_weekly_time ON agg_weekly(time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_weekly_project_time ON agg_weekly(project_id, time_bucket);
+
+CREATE TABLE IF NOT EXISTS agg_monthly (
+    time_bucket TEXT NOT NULL,
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL DEFAULT '',
+    model_id TEXT NOT NULL DEFAULT '',
+    event_count INTEGER NOT NULL DEFAULT 0,
+    input_tokens INTEGER NOT NULL DEFAULT 0,
+    output_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
+    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
+    total_cost_usd REAL NOT NULL DEFAULT 0.0,
+    billable_tokens REAL NOT NULL DEFAULT 0.0,
+    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
+);
+CREATE INDEX IF NOT EXISTS idx_agg_monthly_time ON agg_monthly(time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_monthly_project_time ON agg_monthly(project_id, time_bucket);
 """

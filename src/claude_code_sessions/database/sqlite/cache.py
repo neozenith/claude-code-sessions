@@ -194,6 +194,9 @@ class CacheManager:
              project_id, detected_session_id, file_type),
         )
         source_file_id = cursor.lastrowid
+        # Expose the new id to the caller so update() can scope agg refresh
+        # to the timestamp window of the files it just ingested.
+        file_info["source_file_id"] = source_file_id
 
         for event in events_data:
             cursor.execute(
@@ -334,6 +337,137 @@ class CacheManager:
 
     # -- Aggregates ----------------------------------------------------------
 
+    # SQLite expressions that truncate timestamp to each granularity.
+    # Used by refresh_aggregates_for_range() to rebuild agg_* tables.
+    _AGG_BUCKET_EXPRS: dict[str, str] = {
+        "hourly":  "strftime('%Y-%m-%dT%H:00:00', timestamp)",
+        "daily":   "date(timestamp)",
+        "weekly":  "date(timestamp, 'weekday 0', '-6 days')",
+        "monthly": "strftime('%Y-%m-01', timestamp)",
+    }
+
+    def _refresh_one_agg(
+        self, cursor: sqlite3.Cursor, granularity: str, bucket_expr: str,
+        start: str | None, end: str | None,
+    ) -> int:
+        """Delete + re-insert agg rows for one granularity in a time range.
+
+        If start/end are None, processes the entire events table (cold rebuild).
+        Returns the number of agg rows inserted.
+        """
+        table = f"agg_{granularity}"
+
+        if start is None or end is None:
+            cursor.execute(f"DELETE FROM {table}")
+        else:
+            cursor.execute(
+                f"DELETE FROM {table} WHERE time_bucket >= ? AND time_bucket <= ?",
+                (start, end),
+            )
+
+        # Build the range predicate for the INSERT SELECT
+        range_clause = ""
+        range_params: tuple[Any, ...] = ()
+        if start is not None and end is not None:
+            # Filter the source events by the bucketed range. We use the
+            # computed time_bucket for the filter so only events whose bucket
+            # falls inside [start, end] are processed — matches the DELETE.
+            range_clause = f"AND {bucket_expr} BETWEEN ? AND ?"
+            range_params = (start, end)
+
+        cursor.execute(f"""
+            INSERT INTO {table} (
+                time_bucket, project_id, session_id, model_id,
+                event_count,
+                input_tokens, output_tokens,
+                cache_read_tokens, cache_creation_tokens,
+                total_cost_usd, billable_tokens
+            )
+            SELECT
+                {bucket_expr} AS time_bucket,
+                project_id,
+                COALESCE(session_id, ''),
+                COALESCE(model_id, ''),
+                COUNT(*),
+                COALESCE(SUM(input_tokens), 0),
+                COALESCE(SUM(output_tokens), 0),
+                COALESCE(SUM(cache_read_tokens), 0),
+                COALESCE(SUM(cache_creation_tokens), 0),
+                COALESCE(SUM(total_cost_usd), 0.0),
+                COALESCE(SUM(billable_tokens), 0.0)
+            FROM events
+            WHERE timestamp IS NOT NULL
+              {range_clause}
+            GROUP BY {bucket_expr}, project_id,
+                     COALESCE(session_id, ''), COALESCE(model_id, '')
+        """, range_params)
+
+        return cursor.rowcount
+
+    def _agg_tables_empty(self) -> bool:
+        """True if ALL agg tables are empty (first run after schema upgrade)."""
+        cursor = self.conn.cursor()
+        for granularity in self._AGG_BUCKET_EXPRS:
+            count = cursor.execute(f"SELECT COUNT(*) FROM agg_{granularity}").fetchone()[0]
+            if count > 0:
+                return False
+        return True
+
+    def _timestamp_window_for_files(
+        self, source_file_ids: list[int],
+    ) -> tuple[str, str] | None:
+        """Return (min_ts, max_ts) across events from the given source files.
+
+        Returns None if no events have timestamps (edge case: ingested files
+        contained no dated events).
+        """
+        if not source_file_ids:
+            return None
+        placeholders = ",".join("?" * len(source_file_ids))
+        row = self.conn.execute(
+            f"""
+            SELECT MIN(timestamp), MAX(timestamp)
+            FROM events
+            WHERE timestamp IS NOT NULL
+              AND source_file_id IN ({placeholders})
+            """,
+            tuple(source_file_ids),
+        ).fetchone()
+        if row is None or row[0] is None:
+            return None
+        return str(row[0]), str(row[1])
+
+    def refresh_aggregates_for_range(
+        self, start_bucket: str | None = None, end_bucket: str | None = None,
+    ) -> dict[str, int]:
+        """Refresh all four agg_* tables for the given time range.
+
+        Pass ``start_bucket=None, end_bucket=None`` to do a full cold rebuild
+        (wipes each table and re-populates from scratch).
+
+        The range is expressed in ISO timestamp form, matching the format
+        produced by each granularity's bucket expression. A safe strategy is
+        to pass (MIN(affected_timestamp), MAX(affected_timestamp)) — the
+        per-granularity filter handles the truncation.
+        """
+        t0 = time.monotonic()
+        cursor = self.conn.cursor()
+        counts: dict[str, int] = {}
+        for granularity, expr in self._AGG_BUCKET_EXPRS.items():
+            counts[granularity] = self._refresh_one_agg(
+                cursor, granularity, expr, start_bucket, end_bucket,
+            )
+        self.conn.commit()
+        elapsed_ms = (time.monotonic() - t0) * 1000
+        range_desc = "full" if start_bucket is None else f"{start_bucket}..{end_bucket}"
+        log.info(
+            "Refreshed agg tables (%s): %s (%.0f ms)",
+            range_desc,
+            ", ".join(f"{g}={c}" for g, c in counts.items()),
+            elapsed_ms,
+        )
+        return counts
+
     def rebuild_aggregates(self) -> None:
         """Rebuild projects and sessions tables from events."""
         t0 = time.monotonic()
@@ -392,6 +526,13 @@ class CacheManager:
         files_to_update = self.get_files_needing_update(all_files)
         if not files_to_update:
             log.info("Cache is up to date — no files changed")
+            # Even when no files changed, the agg_* tables may be empty
+            # (first start after the schema upgrade that added them). In
+            # that case we still need to do a full population from the
+            # already-present events.
+            if self._agg_tables_empty():
+                log.info("Dimensional aggregates empty — backfilling from events")
+                self.refresh_aggregates_for_range()
             return {"files_updated": 0, "events_added": 0}
 
         new_count = sum(1 for f in files_to_update if f.get("reason") == "new")
@@ -402,9 +543,15 @@ class CacheManager:
         )
 
         total_events = 0
+        affected_source_file_ids: list[int] = []
         for i, file_info in enumerate(files_to_update, 1):
             events_added = self.ingest_file(file_info)
             total_events += events_added
+            # Track the source_file_ids that were (re-)ingested so we can
+            # scope the agg refresh to just their timestamp window.
+            sfid = file_info.get("source_file_id")
+            if isinstance(sfid, int):
+                affected_source_file_ids.append(sfid)
             if i % 50 == 0 or i == len(files_to_update):
                 log.info(
                     "  Ingested %d/%d files (%d events so far)",
@@ -412,7 +559,21 @@ class CacheManager:
                 )
         self.conn.commit()
 
+        # Session/project roll-ups (kept as full rebuild — cheap, tiny tables)
         self.rebuild_aggregates()
+
+        # Dimensional agg_* tables — incremental by affected time range.
+        # If the agg tables are empty (first run after the schema addition),
+        # this takes the full-rebuild path. Otherwise we scope to the window
+        # of timestamps that were just ingested.
+        if self._agg_tables_empty():
+            log.info("Dimensional aggregates empty — doing full cold rebuild")
+            self.refresh_aggregates_for_range()
+        elif affected_source_file_ids:
+            window = self._timestamp_window_for_files(affected_source_file_ids)
+            if window is not None:
+                self.refresh_aggregates_for_range(window[0], window[1])
+
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
             ("last_update_at", datetime.now(UTC).isoformat()),

@@ -80,114 +80,132 @@ class SQLiteDatabase:
 
     # -- Public query methods ------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # Dimensional-aggregate readers
+    # ------------------------------------------------------------------
+    # All time-bucketed analytical queries read from agg_{granularity}
+    # tables instead of GROUP BY-ing over millions of events. The tables
+    # are maintained incrementally by CacheManager after each ingest.
+
+    def _agg_filters(
+        self, days: int | None, project: str | None, time_col: str = "a.time_bucket",
+    ) -> str:
+        """Filter clauses for agg_* reads. Re-uses days/project/domain clauses
+        but scoped to the agg table column aliases."""
+        parts = [
+            days_clause(days, time_col),
+            project_clause(project, "a.project_id"),
+            domain_clause(self.projects_path, "a.project_id"),
+        ]
+        return " ".join(p for p in parts if p)
+
     def get_summary(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        f = self._filters(days, project)
+        # Roll-up from agg_daily — finest granularity that still gives us
+        # a small row count for any sensible time window.
+        f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
-                COUNT(*) AS total_events,
-                COUNT(DISTINCT e.session_id) AS total_sessions,
-                COALESCE(SUM(e.input_tokens), 0) AS total_input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS total_output_tokens,
-                COALESCE(SUM(e.cache_read_tokens), 0) AS total_cache_read_tokens,
-                COALESCE(SUM(e.cache_creation_tokens), 0) AS total_cache_creation_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS grand_total_cost_usd,
-                SUM(CASE WHEN e.is_sidechain = 1 THEN e.input_tokens ELSE 0 END)
-                    AS subagent_input_tokens,
-                SUM(CASE WHEN e.is_sidechain = 1 THEN e.output_tokens ELSE 0 END)
-                    AS subagent_output_tokens,
-                SUM(CASE WHEN e.is_sidechain = 0 THEN e.input_tokens ELSE 0 END)
-                    AS main_input_tokens,
-                SUM(CASE WHEN e.is_sidechain = 0 THEN e.output_tokens ELSE 0 END)
-                    AS main_output_tokens
-            FROM events e
+                COALESCE(SUM(a.event_count), 0) AS total_events,
+                COUNT(DISTINCT a.session_id) AS total_sessions,
+                COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens,
+                COALESCE(SUM(a.output_tokens), 0) AS total_output_tokens,
+                COALESCE(SUM(a.cache_read_tokens), 0) AS total_cache_read_tokens,
+                COALESCE(SUM(a.cache_creation_tokens), 0) AS total_cache_creation_tokens,
+                ROUND(COALESCE(SUM(a.total_cost_usd), 0), 4) AS grand_total_cost_usd
+            FROM agg_daily a
             WHERE 1=1 {f}
         """)
 
     def get_daily_usage(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        f = self._filters(days, project)
+        f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
-                e.project_id, e.model_id,
-                DATE(e.timestamp) AS time_bucket,
-                COUNT(*) AS event_count,
-                COUNT(DISTINCT e.session_id) AS session_count,
-                COALESCE(SUM(e.input_tokens), 0) AS total_input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS total_output_tokens,
-                COALESCE(SUM(e.cache_read_tokens), 0) AS total_cache_read_input_tokens,
-                COALESCE(SUM(e.cache_creation_tokens), 0) AS total_cache_creation_input_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS total_cost_usd
-            FROM events e
-            WHERE e.timestamp IS NOT NULL {f}
-            GROUP BY e.project_id, e.model_id, DATE(e.timestamp)
-            ORDER BY time_bucket DESC
+                a.project_id,
+                NULLIF(a.model_id, '') AS model_id,
+                a.time_bucket,
+                SUM(a.event_count) AS event_count,
+                COUNT(DISTINCT NULLIF(a.session_id, '')) AS session_count,
+                SUM(a.input_tokens) AS total_input_tokens,
+                SUM(a.output_tokens) AS total_output_tokens,
+                SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
+                SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
+                ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
+            FROM agg_daily a
+            WHERE 1=1 {f}
+            GROUP BY a.project_id, a.model_id, a.time_bucket
+            ORDER BY a.time_bucket DESC
         """)
 
     def get_weekly_usage(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        f = self._filters(days, project)
+        f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
-                e.project_id, e.model_id,
-                DATE(e.timestamp, 'weekday 0', '-6 days') AS time_bucket,
-                COUNT(*) AS event_count,
-                COUNT(DISTINCT e.session_id) AS session_count,
-                COALESCE(SUM(e.input_tokens), 0) AS total_input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS total_output_tokens,
-                COALESCE(SUM(e.cache_read_tokens), 0) AS total_cache_read_input_tokens,
-                COALESCE(SUM(e.cache_creation_tokens), 0) AS total_cache_creation_input_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS total_cost_usd
-            FROM events e
-            WHERE e.timestamp IS NOT NULL {f}
-            GROUP BY e.project_id, e.model_id, DATE(e.timestamp, 'weekday 0', '-6 days')
-            ORDER BY time_bucket DESC
+                a.project_id,
+                NULLIF(a.model_id, '') AS model_id,
+                a.time_bucket,
+                SUM(a.event_count) AS event_count,
+                COUNT(DISTINCT NULLIF(a.session_id, '')) AS session_count,
+                SUM(a.input_tokens) AS total_input_tokens,
+                SUM(a.output_tokens) AS total_output_tokens,
+                SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
+                SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
+                ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
+            FROM agg_weekly a
+            WHERE 1=1 {f}
+            GROUP BY a.project_id, a.model_id, a.time_bucket
+            ORDER BY a.time_bucket DESC
         """)
 
     def get_monthly_usage(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        f = self._filters(days, project)
+        f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
-                e.project_id, e.model_id,
-                STRFTIME('%Y-%m-01', e.timestamp) AS time_bucket,
-                COUNT(*) AS event_count,
-                COUNT(DISTINCT e.session_id) AS session_count,
-                COALESCE(SUM(e.input_tokens), 0) AS total_input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS total_output_tokens,
-                COALESCE(SUM(e.cache_read_tokens), 0) AS total_cache_read_input_tokens,
-                COALESCE(SUM(e.cache_creation_tokens), 0) AS total_cache_creation_input_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS total_cost_usd
-            FROM events e
-            WHERE e.timestamp IS NOT NULL {f}
-            GROUP BY e.project_id, e.model_id, STRFTIME('%Y-%m-01', e.timestamp)
-            ORDER BY time_bucket DESC
+                a.project_id,
+                NULLIF(a.model_id, '') AS model_id,
+                a.time_bucket,
+                SUM(a.event_count) AS event_count,
+                COUNT(DISTINCT NULLIF(a.session_id, '')) AS session_count,
+                SUM(a.input_tokens) AS total_input_tokens,
+                SUM(a.output_tokens) AS total_output_tokens,
+                SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
+                SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
+                ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
+            FROM agg_monthly a
+            WHERE 1=1 {f}
+            GROUP BY a.project_id, a.model_id, a.time_bucket
+            ORDER BY a.time_bucket DESC
         """)
 
     def get_hourly_usage(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        f = self._filters(days, project, col_ts="e.timestamp_local")
+        # Read from agg_hourly. time_bucket is ISO "YYYY-MM-DDTHH:00:00" —
+        # we derive the (date, hour_of_day) tuple the frontend expects.
+        f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
-                e.project_id,
-                DATE(e.timestamp_local) AS time_bucket,
-                CAST(STRFTIME('%H', e.timestamp_local) AS INTEGER) AS hour_of_day,
-                COUNT(*) AS event_count,
-                COUNT(DISTINCT e.session_id) AS session_count,
-                COALESCE(SUM(e.input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(e.input_tokens), 0) + COALESCE(SUM(e.output_tokens), 0)
-                    AS total_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS total_cost_usd
-            FROM events e
-            WHERE e.timestamp_local IS NOT NULL {f}
-            GROUP BY e.project_id, DATE(e.timestamp_local),
-                     CAST(STRFTIME('%H', e.timestamp_local) AS INTEGER)
+                a.project_id,
+                SUBSTR(a.time_bucket, 1, 10) AS time_bucket,
+                CAST(SUBSTR(a.time_bucket, 12, 2) AS INTEGER) AS hour_of_day,
+                SUM(a.event_count) AS event_count,
+                COUNT(DISTINCT NULLIF(a.session_id, '')) AS session_count,
+                SUM(a.input_tokens) AS input_tokens,
+                SUM(a.output_tokens) AS output_tokens,
+                SUM(a.input_tokens) + SUM(a.output_tokens) AS total_tokens,
+                ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
+            FROM agg_hourly a
+            WHERE 1=1 {f}
+            GROUP BY a.project_id,
+                     SUBSTR(a.time_bucket, 1, 10),
+                     CAST(SUBSTR(a.time_bucket, 12, 2) AS INTEGER)
             ORDER BY time_bucket DESC, hour_of_day
         """)
 
@@ -257,30 +275,37 @@ class SQLiteDatabase:
         """)
 
     def get_top_projects_weekly(self, *, days: int | None = None) -> list[dict[str, Any]]:
+        # Two-stage query over agg_weekly:
+        #   1. Find top 3 projects by total cost in the window
+        #   2. Return their weekly breakdown
+        # Both stages read from the pre-aggregated table — tiny rows.
         effective_days = days if days is not None else 56
-        f = self._filters(effective_days)
+        f = self._agg_filters(effective_days, project=None)
         return self._q(f"""
             WITH top_projects AS (
-                SELECT e.project_id, ROUND(SUM(e.total_cost_usd), 4) AS total_cost
-                FROM events e WHERE e.timestamp IS NOT NULL {f}
-                GROUP BY e.project_id ORDER BY total_cost DESC LIMIT 3
+                SELECT a.project_id, ROUND(SUM(a.total_cost_usd), 4) AS total_cost
+                FROM agg_weekly a
+                WHERE 1=1 {f}
+                GROUP BY a.project_id
+                ORDER BY total_cost DESC
+                LIMIT 3
             )
-            SELECT e.project_id,
-                DATE(e.timestamp, 'weekday 0', '-6 days') AS time_bucket,
-                COUNT(*) AS event_count,
-                COUNT(DISTINCT e.session_id) AS session_count,
-                COALESCE(SUM(e.input_tokens), 0) AS input_tokens,
-                COALESCE(SUM(e.output_tokens), 0) AS output_tokens,
-                COALESCE(SUM(e.input_tokens), 0) + COALESCE(SUM(e.output_tokens), 0)
-                    AS total_tokens,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0), 4) AS cost_usd,
-                ROUND(COALESCE(SUM(e.total_cost_usd), 0) /
-                    NULLIF(COUNT(DISTINCT e.session_id), 0), 4) AS cost_per_session
-            FROM events e
-            JOIN top_projects tp ON e.project_id = tp.project_id
-            WHERE e.timestamp IS NOT NULL {f}
-            GROUP BY e.project_id, DATE(e.timestamp, 'weekday 0', '-6 days')
-            ORDER BY e.project_id, time_bucket
+            SELECT a.project_id,
+                a.time_bucket,
+                SUM(a.event_count) AS event_count,
+                COUNT(DISTINCT NULLIF(a.session_id, '')) AS session_count,
+                SUM(a.input_tokens) AS input_tokens,
+                SUM(a.output_tokens) AS output_tokens,
+                SUM(a.input_tokens) + SUM(a.output_tokens) AS total_tokens,
+                ROUND(SUM(a.total_cost_usd), 4) AS cost_usd,
+                ROUND(SUM(a.total_cost_usd) /
+                    NULLIF(COUNT(DISTINCT NULLIF(a.session_id, '')), 0), 4)
+                    AS cost_per_session
+            FROM agg_weekly a
+            JOIN top_projects tp ON a.project_id = tp.project_id
+            WHERE 1=1 {f}
+            GROUP BY a.project_id, a.time_bucket
+            ORDER BY a.project_id, a.time_bucket
         """)
 
     def get_timeline_events(
