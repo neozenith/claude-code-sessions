@@ -83,9 +83,9 @@ class SQLiteDatabase:
     # ------------------------------------------------------------------
     # Dimensional-aggregate readers
     # ------------------------------------------------------------------
-    # All time-bucketed analytical queries read from agg_{granularity}
-    # tables instead of GROUP BY-ing over millions of events. The tables
-    # are maintained incrementally by CacheManager after each ingest.
+    # All time-bucketed analytical queries read from the `agg` table
+    # (filtered by `granularity`) instead of GROUP BY-ing over millions
+    # of events. The table is maintained incrementally by CacheManager.
 
     def _agg_filters(
         self, days: int | None, project: str | None, time_col: str = "a.time_bucket",
@@ -107,6 +107,7 @@ class SQLiteDatabase:
         f = self._agg_filters(days, project)
         return self._q(f"""
             SELECT
+                COUNT(DISTINCT a.project_id) AS total_projects,
                 COALESCE(SUM(a.event_count), 0) AS total_events,
                 COUNT(DISTINCT a.session_id) AS total_sessions,
                 COALESCE(SUM(a.input_tokens), 0) AS total_input_tokens,
@@ -114,8 +115,8 @@ class SQLiteDatabase:
                 COALESCE(SUM(a.cache_read_tokens), 0) AS total_cache_read_tokens,
                 COALESCE(SUM(a.cache_creation_tokens), 0) AS total_cache_creation_tokens,
                 ROUND(COALESCE(SUM(a.total_cost_usd), 0), 4) AS grand_total_cost_usd
-            FROM agg_daily a
-            WHERE 1=1 {f}
+            FROM agg a
+            WHERE a.granularity = 'daily' {f}
         """)
 
     def get_daily_usage(
@@ -134,8 +135,8 @@ class SQLiteDatabase:
                 SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
                 SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
                 ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
-            FROM agg_daily a
-            WHERE 1=1 {f}
+            FROM agg a
+            WHERE a.granularity = 'daily' {f}
             GROUP BY a.project_id, a.model_id, a.time_bucket
             ORDER BY a.time_bucket DESC
         """)
@@ -156,8 +157,8 @@ class SQLiteDatabase:
                 SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
                 SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
                 ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
-            FROM agg_weekly a
-            WHERE 1=1 {f}
+            FROM agg a
+            WHERE a.granularity = 'weekly' {f}
             GROUP BY a.project_id, a.model_id, a.time_bucket
             ORDER BY a.time_bucket DESC
         """)
@@ -178,8 +179,8 @@ class SQLiteDatabase:
                 SUM(a.cache_read_tokens) AS total_cache_read_input_tokens,
                 SUM(a.cache_creation_tokens) AS total_cache_creation_input_tokens,
                 ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
-            FROM agg_monthly a
-            WHERE 1=1 {f}
+            FROM agg a
+            WHERE a.granularity = 'monthly' {f}
             GROUP BY a.project_id, a.model_id, a.time_bucket
             ORDER BY a.time_bucket DESC
         """)
@@ -201,8 +202,8 @@ class SQLiteDatabase:
                 SUM(a.output_tokens) AS output_tokens,
                 SUM(a.input_tokens) + SUM(a.output_tokens) AS total_tokens,
                 ROUND(SUM(a.total_cost_usd), 4) AS total_cost_usd
-            FROM agg_hourly a
-            WHERE 1=1 {f}
+            FROM agg a
+            WHERE a.granularity = 'hourly' {f}
             GROUP BY a.project_id,
                      SUBSTR(a.time_bucket, 1, 10),
                      CAST(SUBSTR(a.time_bucket, 12, 2) AS INTEGER)
@@ -284,8 +285,8 @@ class SQLiteDatabase:
         return self._q(f"""
             WITH top_projects AS (
                 SELECT a.project_id, ROUND(SUM(a.total_cost_usd), 4) AS total_cost
-                FROM agg_weekly a
-                WHERE 1=1 {f}
+                FROM agg a
+                WHERE a.granularity = 'weekly' {f}
                 GROUP BY a.project_id
                 ORDER BY total_cost DESC
                 LIMIT 3
@@ -301,9 +302,9 @@ class SQLiteDatabase:
                 ROUND(SUM(a.total_cost_usd) /
                     NULLIF(COUNT(DISTINCT NULLIF(a.session_id, '')), 0), 4)
                     AS cost_per_session
-            FROM agg_weekly a
+            FROM agg a
             JOIN top_projects tp ON a.project_id = tp.project_id
-            WHERE 1=1 {f}
+            WHERE a.granularity = 'weekly' {f}
             GROUP BY a.project_id, a.time_bucket
             ORDER BY a.project_id, a.time_bucket
         """)

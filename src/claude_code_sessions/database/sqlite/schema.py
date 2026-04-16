@@ -12,7 +12,7 @@ from pathlib import Path
 CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
 
 # Must match the introspect script's version so both tools coexist.
-SCHEMA_VERSION = "5"
+SCHEMA_VERSION = "6"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -170,7 +170,8 @@ CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_fil
 -- uniqueness check works (SQLite's PK treats NULLs as non-equal).
 -- =====================================================================
 
-CREATE TABLE IF NOT EXISTS agg_hourly (
+CREATE TABLE IF NOT EXISTS agg (
+    granularity TEXT NOT NULL,  -- 'hourly', 'daily', 'weekly', 'monthly'
     time_bucket TEXT NOT NULL,
     project_id TEXT NOT NULL,
     session_id TEXT NOT NULL DEFAULT '',
@@ -182,59 +183,10 @@ CREATE TABLE IF NOT EXISTS agg_hourly (
     cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
     total_cost_usd REAL NOT NULL DEFAULT 0.0,
     billable_tokens REAL NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
+    PRIMARY KEY (granularity, time_bucket, project_id, session_id, model_id)
 );
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_time ON agg_hourly(time_bucket);
-CREATE INDEX IF NOT EXISTS idx_agg_hourly_project_time ON agg_hourly(project_id, time_bucket);
-
-CREATE TABLE IF NOT EXISTS agg_daily (
-    time_bucket TEXT NOT NULL,
-    project_id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    model_id TEXT NOT NULL DEFAULT '',
-    event_count INTEGER NOT NULL DEFAULT 0,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-    total_cost_usd REAL NOT NULL DEFAULT 0.0,
-    billable_tokens REAL NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_time ON agg_daily(time_bucket);
-CREATE INDEX IF NOT EXISTS idx_agg_daily_project_time ON agg_daily(project_id, time_bucket);
-
-CREATE TABLE IF NOT EXISTS agg_weekly (
-    time_bucket TEXT NOT NULL,
-    project_id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    model_id TEXT NOT NULL DEFAULT '',
-    event_count INTEGER NOT NULL DEFAULT 0,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-    total_cost_usd REAL NOT NULL DEFAULT 0.0,
-    billable_tokens REAL NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_weekly_time ON agg_weekly(time_bucket);
-CREATE INDEX IF NOT EXISTS idx_agg_weekly_project_time ON agg_weekly(project_id, time_bucket);
-
-CREATE TABLE IF NOT EXISTS agg_monthly (
-    time_bucket TEXT NOT NULL,
-    project_id TEXT NOT NULL,
-    session_id TEXT NOT NULL DEFAULT '',
-    model_id TEXT NOT NULL DEFAULT '',
-    event_count INTEGER NOT NULL DEFAULT 0,
-    input_tokens INTEGER NOT NULL DEFAULT 0,
-    output_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_read_tokens INTEGER NOT NULL DEFAULT 0,
-    cache_creation_tokens INTEGER NOT NULL DEFAULT 0,
-    total_cost_usd REAL NOT NULL DEFAULT 0.0,
-    billable_tokens REAL NOT NULL DEFAULT 0.0,
-    PRIMARY KEY (time_bucket, project_id, session_id, model_id)
-);
-CREATE INDEX IF NOT EXISTS idx_agg_monthly_time ON agg_monthly(time_bucket);
-CREATE INDEX IF NOT EXISTS idx_agg_monthly_project_time ON agg_monthly(project_id, time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_granularity_time
+    ON agg(granularity, time_bucket);
+CREATE INDEX IF NOT EXISTS idx_agg_granularity_project_time
+    ON agg(granularity, project_id, time_bucket);
 """

@@ -355,35 +355,30 @@ class CacheManager:
         If start/end are None, processes the entire events table (cold rebuild).
         Returns the number of agg rows inserted.
         """
-        table = f"agg_{granularity}"
-
         if start is None or end is None:
-            cursor.execute(f"DELETE FROM {table}")
+            cursor.execute("DELETE FROM agg WHERE granularity = ?", (granularity,))
         else:
             cursor.execute(
-                f"DELETE FROM {table} WHERE time_bucket >= ? AND time_bucket <= ?",
-                (start, end),
+                "DELETE FROM agg WHERE granularity = ? AND time_bucket >= ? AND time_bucket <= ?",
+                (granularity, start, end),
             )
 
-        # Build the range predicate for the INSERT SELECT
         range_clause = ""
         range_params: tuple[Any, ...] = ()
         if start is not None and end is not None:
-            # Filter the source events by the bucketed range. We use the
-            # computed time_bucket for the filter so only events whose bucket
-            # falls inside [start, end] are processed — matches the DELETE.
             range_clause = f"AND {bucket_expr} BETWEEN ? AND ?"
             range_params = (start, end)
 
         cursor.execute(f"""
-            INSERT INTO {table} (
-                time_bucket, project_id, session_id, model_id,
+            INSERT INTO agg (
+                granularity, time_bucket, project_id, session_id, model_id,
                 event_count,
                 input_tokens, output_tokens,
                 cache_read_tokens, cache_creation_tokens,
                 total_cost_usd, billable_tokens
             )
             SELECT
+                '{granularity}',
                 {bucket_expr} AS time_bucket,
                 project_id,
                 COALESCE(session_id, ''),
@@ -405,13 +400,8 @@ class CacheManager:
         return cursor.rowcount
 
     def _agg_tables_empty(self) -> bool:
-        """True if ALL agg tables are empty (first run after schema upgrade)."""
-        cursor = self.conn.cursor()
-        for granularity in self._AGG_BUCKET_EXPRS:
-            count = cursor.execute(f"SELECT COUNT(*) FROM agg_{granularity}").fetchone()[0]
-            if count > 0:
-                return False
-        return True
+        """True if the agg table is empty (first run after schema upgrade)."""
+        return self.conn.execute("SELECT COUNT(*) FROM agg").fetchone()[0] == 0
 
     def _timestamp_window_for_files(
         self, source_file_ids: list[int],
