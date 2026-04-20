@@ -309,16 +309,24 @@ Each origin gets its own SQLite table populated by its own parser:
 
 ### 3.3 Pricing
 
-`pricing.csv` grows from `(model_family)` → `(origin, model_family)` with
-rows for Anthropic's 3 families and OpenAI's gpt-5 / gpt-5-codex / o-series /
-gpt-5.4. **Cost is always the hypothetical API list-price** for both origins
-— the project does not model subscription billing on either side. The
-dashboard answers "how much compute are you consuming, priced in API
-dollars?" not "how much cash did you hand over this month?" This mirrors the
-existing Claude Code posture (users on Max/Pro subscriptions still see
+The hardcoded `PRICING` dict in
+`src/claude_code_sessions/database/sqlite/pricing.py` grows from
+`{family: {...}}` to `{origin: {family: {...}}}` — an outer origin key wraps
+per-family entries. Anthropic's 3 families stay shape-identical; OpenAI's
+gpt-5 / gpt-5-codex / o-series / gpt-5.4 get added under a new `codex`
+sub-dict. **Cost is always the hypothetical API list-price** for both
+origins — the project does not model subscription billing on either side.
+The dashboard answers "how much compute are you consuming, priced in API
+dollars?" not "how much cash did you hand over this month?" This mirrors
+the existing Claude Code posture (users on Max/Pro subscriptions still see
 imputed API cost). `subscription_plan` is stored on `events_codex` as a
 **diagnostic label only** (for a small Plus/Pro badge in session detail
 views) and has **zero effect** on cost math.
+
+The introspect skill at
+`.claude/skills/introspect/scripts/introspect_sessions.py` keeps its own
+copy of the dict per MEMORY.md; any pricing change lands in both files in
+the same commit.
 
 ### 3.4 Target architecture
 
@@ -715,46 +723,93 @@ each `token_count` boundary.
 
 ### G4: Pricing Catalog Extension
 
-**Current**: `src/claude_code_sessions/data/pricing.csv` has 3 rows
-(`opus`, `sonnet`, `haiku`). `pricing.py:model_family()` checks for
-opus/sonnet/haiku substrings. SQL templates embed the same `LIKE` CASE.
+**Current**: `src/claude_code_sessions/database/sqlite/pricing.py` is the
+**single source of truth** for pricing (no CSV — the CSV that earlier
+drafts of this plan referenced has been removed from the project). The
+module holds a hardcoded `PRICING` dict keyed by family only
+(`opus`/`sonnet`/`haiku`), each entry carrying `input`, `output`,
+`cache_read_mult`, `cache_write_mult`. `compute_event_costs()` dispatches
+on model family via `model_family(model_id)`, returns `(0.0, 0.0, 0.0)`
+for any unknown family (this is the behaviour ADR-G4.2 replaces). The
+introspect skill at
+`.claude/skills/introspect/scripts/introspect_sessions.py` carries its
+own identical copy of the dict (per MEMORY.md) that must stay in sync.
 
-**Gap**: Extend to OpenAI families; add per-origin dispatch; handle
-`subscription_plan → $0` semantics.
+**Gap**: Extend the dict to a two-level `{origin: {family: {...}}}`
+structure; add OpenAI families; replace the silent-$0 unknown fallback
+with the two-tier dispatch from ADR-G4.2; propagate the same change to
+the introspect skill's copy.
 
 **Output(s)**:
-- Rewrite `pricing.csv` with composite key `(origin, model_family)`:
-  ```csv
-  origin,model_family,base_input_price,cache_read_price,cache_write_5m_price,cache_write_1h_price,output_price
-  claude_code,opus,15.00,1.50,18.75,30.00,75.00
-  claude_code,sonnet,3.00,0.30,3.75,6.00,15.00
-  claude_code,haiku,1.00,0.10,1.25,2.00,5.00
-  codex,gpt-5,1.25,0.125,,,10.00
-  codex,gpt-5-codex,1.25,0.125,,,10.00
-  codex,gpt-5-mini,0.25,0.025,,,2.00
-  codex,gpt-5-nano,0.05,0.005,,,0.40
-  codex,gpt-5.4,1.25,0.125,,,10.00
-  codex,o1,15.00,7.50,,,60.00
-  codex,o3,2.00,0.50,,,8.00
+- **Restructure** `PRICING` in
+  `src/claude_code_sessions/database/sqlite/pricing.py` from
+  `{family: {...}}` to `{origin: {family: {...}}}`:
+  ```python
+  # Anthropic prices: per million tokens, from the canonical rate card.
+  # OpenAI prices: best-effort per-million from list price as of the
+  # plan's last verification pass (<!-- LINK_NOT_VERIFIED:
+  # https://openai.com/pricing --> and
+  # <!-- LINK_NOT_VERIFIED: https://www.anthropic.com/pricing -->).
+  # Any pricing change lands here AND in
+  # .claude/skills/introspect/scripts/introspect_sessions.py in the same commit.
+  PRICING: dict[str, dict[str, dict[str, float]]] = {
+      "claude_code": {
+          "opus":   {"input": 15.0, "output": 75.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
+          "sonnet": {"input":  3.0, "output": 15.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
+          "haiku":  {"input":  1.0, "output":  5.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
+      },
+      "codex": {
+          # OpenAI doesn't bill cache writes separately → cache_write_mult = 0.0.
+          # Reasoning output tokens are already included in output_tokens per
+          # OpenAI's API contract and billed at the output rate, so no separate
+          # reasoning_mult field is needed.
+          "gpt-5":       {"input": 1.25, "output": 10.0, "cache_read_mult": 0.1,  "cache_write_mult": 0.0},
+          "gpt-5-codex": {"input": 1.25, "output": 10.0, "cache_read_mult": 0.1,  "cache_write_mult": 0.0},
+          "gpt-5-mini":  {"input": 0.25, "output":  2.0, "cache_read_mult": 0.1,  "cache_write_mult": 0.0},
+          "gpt-5-nano":  {"input": 0.05, "output":  0.4, "cache_read_mult": 0.1,  "cache_write_mult": 0.0},
+          "gpt-5.4":     {"input": 1.25, "output": 10.0, "cache_read_mult": 0.1,  "cache_write_mult": 0.0},
+          "o1":          {"input": 15.0, "output": 60.0, "cache_read_mult": 0.5,  "cache_write_mult": 0.0},
+          "o3":          {"input":  2.0, "output":  8.0, "cache_read_mult": 0.25, "cache_write_mult": 0.0},
+      },
+  }
   ```
   <!-- ASSUMPTION: OpenAI prices are representative pending Phase 3 verification -->
-  <!-- LINK_NOT_VERIFIED: https://openai.com/pricing -->
-  <!-- LINK_NOT_VERIFIED: https://www.anthropic.com/pricing -->
-- Split `src/claude_code_sessions/database/sqlite/pricing.py` into:
-  - `claude_model_family(model_id) -> str` (existing logic).
-  - `codex_model_family(model_id) -> str` (prefix/contains match).
-  - `compute_event_costs(origin, model_id, *, input_tokens, output_tokens,
-    cache_read_tokens, cache_creation_tokens=0, reasoning_tokens=0) ->
-    (rate, billable, cost)` — dispatches on `origin`. For Codex:
-    `fresh_input = input - cache_read_tokens`,
-    `cost = (fresh_input*base + cache_read*cache_read_rate +
-    output*output_rate) / 1e6`. **Subscription plan is NOT a parameter**
-    — cost is always list-price, consistent with the Claude path's
-    existing behaviour.
+- **Rename the existing** `model_family()` function to
+  `claude_model_family()` (unchanged logic). **Add** `codex_model_family()`
+  that maps an OpenAI-shaped model ID to its family key with prefix
+  matching (e.g. `"gpt-5-codex-2026-01"` → `"gpt-5-codex"`,
+  `"gpt-6"` → `"gpt-5"` per ADR-G4.2's GPT-family fallback).
+- **Extend** `compute_event_costs()` to take `origin: str` as its first
+  positional parameter. Dispatch:
+  - `origin == "claude_code"` → today's logic, unchanged.
+  - `origin == "codex"` → look up family via `codex_model_family()`; if
+    family is `None` (model ID didn't match any OpenAI prefix), return
+    `(0.0, 0.0, 0.0)` — this is the locally-hosted $0 branch per
+    ADR-G4.2. If family matched by imputation (not an exact dict key),
+    record it on a module-level `IMPUTED_MODEL_FAMILIES: set[str]` so
+    `/api/summary.imputed_model_families[]` can enumerate them.
+  - Formula for Codex: `fresh_input = input_tokens - cache_read_tokens`
+    (per ADR-G2.1 — Codex `input_tokens` is inclusive of cached);
+    `cost = (fresh_input * input_rate
+              + cache_read_tokens * input_rate * cache_read_mult
+              + output_tokens * output_rate) / 1e6`.
+    Reasoning tokens are already in `output_tokens` per OpenAI API
+    convention, so no separate term.
+- **Mirror the restructure** into
+  `.claude/skills/introspect/scripts/introspect_sessions.py` in the same
+  commit — per MEMORY.md the two copies must remain identical.
 - Cost is computed **at ingest** in `compute_event_costs()` and written
   to `events_codex.total_cost_usd`. Dashboard queries read the
-  precomputed value; no per-query pricing join is introduced (preserves
-  the existing SQLite-cache pattern).
+  precomputed value; no per-query pricing join is introduced.
+
+**Pricing-data sourcing task** (action item, not a plan artefact):
+the prices in the dict above are best-effort placeholders. Before G4 is
+declared complete, the OpenAI families must be verified against the live
+pricing page (or the Azure OpenAI catalog, whichever is more stable).
+Prices that can't be independently confirmed get flagged in a
+`PRICING_VERIFIED_AT: dict[str, str]` companion dict that records the
+ISO date the value was last confirmed — so future maintainers know the
+vintage without re-doing the research.
 
 **ADRs**:
 - **ADR-G4.1** (**RESOLVED**): Cost model for Codex sessions is the same
@@ -775,7 +830,8 @@ opus/sonnet/haiku substrings. SQL templates embed the same `LIKE` CASE.
      `codex_model_family()`): substitute the **nearest known GPT family**
      as a best-effort price (default: `gpt-5` rates). Surface in
      `/api/summary.imputed_model_families[]` so the operator sees
-     "we priced `gpt-6` as if it were `gpt-5`" and can add a real CSV row.
+     "we priced `gpt-6` as if it were `gpt-5`" and can add a real entry
+     to the `PRICING` dict.
   2. **Model ID does not match OpenAI naming** (e.g. `llama3:70b`,
      `qwen2.5-coder:32b`, anything Ollama serves): assume locally-hosted,
      `cost_usd = 0.0`. This is the **correct answer**, not a silent
@@ -786,12 +842,16 @@ opus/sonnet/haiku substrings. SQL templates embed the same `LIKE` CASE.
   sentinel would be noise for the common case. GPT-family unknowns still
   get the imputed-best-effort treatment consistent with the project's
   "hypothetical API list-price" posture (ADR-G4.1).
-- **ADR-G4.3** (**RESOLVED**): Cache-write columns for Codex rows.
-  **Decision**: null/empty cells in `pricing.csv`; cost formula
-  `COALESCE(col, 0)` treats absence as zero. **Rationale**: honest
-  encoding — `NULL` means "concept doesn't apply for this origin," not
-  "free cache writes" (which `0.00` would imply). Shared table,
-  per-origin semantics, no fragmentation.
+- **ADR-G4.3** (**RESOLVED**): Cache-write pricing for Codex families.
+  **Decision**: `cache_write_mult = 0.0` on every `codex` family entry
+  (OpenAI does not bill cache writes separately, so the contribution to
+  the cost formula is zero). Anthropic's `cache_write_mult = 1.25`
+  remains unchanged on the `claude_code` sub-dict. **Rationale**: a
+  literal `0.0` expresses the billing reality honestly; the same cost
+  formula works across both origins without special-casing; no shape
+  drift between the two sub-dicts. (Note: this resolution supersedes an
+  earlier draft that used nullable CSV columns — the CSV no longer
+  exists; the dict is the single source of truth.)
 
 ---
 
