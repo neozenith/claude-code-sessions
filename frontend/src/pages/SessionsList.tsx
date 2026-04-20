@@ -14,6 +14,24 @@ interface ProjectSummary {
   subagent_count: number
   total_cost: number
   last_active: string | null
+  // Call counts aggregated across all sessions in this project. Used
+  // together with `event_count` to compute per-event call ratios shown
+  // on the project cards (tool%, skill%, make%).
+  tool_call_count: number
+  skill_call_count: number
+  make_target_call_count: number
+  /** Mode of per-session `top_skill` — i.e. which skill was the #1
+   * skill in the largest number of sessions. Ties broken alphabetically
+   * to match the backend's ORDER BY. ``null`` when no session in the
+   * project recorded a skill call. */
+  top_skill: string | null
+}
+
+/** Format a raw ratio (calls / events) as a percentage with one decimal
+ * of precision. Returns "—" when the denominator is zero. */
+function formatRatio(numerator: number, denominator: number): string {
+  if (!denominator) return '—'
+  return `${((numerator / denominator) * 100).toFixed(1)}%`
 }
 
 export default function SessionsList() {
@@ -25,6 +43,13 @@ export default function SessionsList() {
     if (!sessions) return []
 
     const projectMap = new Map<string, ProjectSummary>()
+    // Per-project tally of how often each skill appeared as a session's
+    // `top_skill`. After the main reduce, we pick the mode as the
+    // project-level top skill. This is an approximation (the true
+    // project-wide top skill would require the per-skill-per-session
+    // counts) but "most-winning skill across sessions" is a reasonable
+    // proxy given what's already in the sessions response.
+    const topSkillCounts = new Map<string, Map<string, number>>()
 
     sessions.forEach((session) => {
       const existing = projectMap.get(session.project_id)
@@ -35,6 +60,9 @@ export default function SessionsList() {
         existing.event_count += Number(session.event_count) || 0
         existing.subagent_count += Number(session.subagent_count) || 0
         existing.total_cost += Number(session.total_cost_usd) || 0
+        existing.tool_call_count += Number(session.tool_call_count) || 0
+        existing.skill_call_count += Number(session.skill_call_count) || 0
+        existing.make_target_call_count += Number(session.make_target_call_count) || 0
         // Keep the most recent timestamp
         if (lastActive && (!existing.last_active || lastActive > existing.last_active)) {
           existing.last_active = lastActive
@@ -47,8 +75,38 @@ export default function SessionsList() {
           subagent_count: Number(session.subagent_count) || 0,
           total_cost: Number(session.total_cost_usd) || 0,
           last_active: lastActive || null,
+          tool_call_count: Number(session.tool_call_count) || 0,
+          skill_call_count: Number(session.skill_call_count) || 0,
+          make_target_call_count: Number(session.make_target_call_count) || 0,
+          top_skill: null,
         })
       }
+
+      // Accumulate per-project top-skill votes.
+      if (session.top_skill) {
+        const tally = topSkillCounts.get(session.project_id) ?? new Map<string, number>()
+        tally.set(session.top_skill, (tally.get(session.top_skill) ?? 0) + 1)
+        topSkillCounts.set(session.project_id, tally)
+      }
+    })
+
+    // Resolve each project's top skill by picking the mode of the votes.
+    // Ties broken alphabetically so the result is deterministic.
+    projectMap.forEach((summary, projectId) => {
+      const tally = topSkillCounts.get(projectId)
+      if (!tally || tally.size === 0) return
+      let best: string | null = null
+      let bestCount = -1
+      for (const [skill, count] of tally) {
+        if (
+          count > bestCount ||
+          (count === bestCount && best !== null && skill.localeCompare(best) < 0)
+        ) {
+          best = skill
+          bestCount = count
+        }
+      }
+      summary.top_skill = best
     })
 
     // Sort by most recent activity
@@ -179,6 +237,42 @@ export default function SessionsList() {
                       <p className="font-semibold font-mono">{formatCurrency(project.total_cost)}</p>
                     </div>
                   </div>
+
+                  {/* Call-density ratios — project-wide totals divided by
+                      event count, giving "what fraction of events involved
+                      this kind of call". */}
+                  <div className="grid grid-cols-3 gap-4 text-sm mt-4 pt-4 border-t">
+                    <div
+                      title={`${project.tool_call_count.toLocaleString()} tool calls across ${project.event_count.toLocaleString()} events`}
+                    >
+                      <p className="text-muted-foreground">Tool %</p>
+                      <p className="font-semibold font-mono">
+                        {formatRatio(project.tool_call_count, project.event_count)}
+                      </p>
+                    </div>
+                    <div
+                      title={`${project.skill_call_count.toLocaleString()} skill invocations across ${project.event_count.toLocaleString()} events`}
+                    >
+                      <p className="text-muted-foreground">Skill %</p>
+                      <p className="font-semibold font-mono">
+                        {formatRatio(project.skill_call_count, project.event_count)}
+                      </p>
+                    </div>
+                    <div
+                      title={`${project.make_target_call_count.toLocaleString()} make targets across ${project.event_count.toLocaleString()} events`}
+                    >
+                      <p className="text-muted-foreground">Make %</p>
+                      <p className="font-semibold font-mono">
+                        {formatRatio(project.make_target_call_count, project.event_count)}
+                      </p>
+                    </div>
+                  </div>
+
+                  <div className="text-sm mt-3">
+                    <p className="text-muted-foreground">Top skill</p>
+                    <p className="font-semibold truncate">{project.top_skill ?? '—'}</p>
+                  </div>
+
                   {project.last_active && (
                     <p className="text-xs text-muted-foreground mt-3">
                       Last active: {new Date(project.last_active).toLocaleString()}

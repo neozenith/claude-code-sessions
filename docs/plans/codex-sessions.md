@@ -2,6 +2,54 @@
 
 <!-- WARNING: External URLs (OpenAI/Anthropic pricing, CLI docs) not yet verified. Search for LINK_NOT_VERIFIED to review in Phase 3. -->
 
+---
+
+<details>
+<summary><b>Table of Contents</b></summary>
+<!--TOC-->
+
+- [Gap Analysis: Dual-Source Ingestion for Claude Code + Codex CLI Sessions](#gap-analysis-dual-source-ingestion-for-claude-code--codex-cli-sessions)
+  - [1. Overview](#1-overview)
+    - [Design Principles](#design-principles)
+    - [Gap Index](#gap-index)
+    - [Dependencies](#dependencies)
+  - [2. Current State](#2-current-state)
+    - [2.1 Ingestion](#21-ingestion)
+    - [2.2 Schema assumptions (Claude-only)](#22-schema-assumptions-claude-only)
+    - [2.3 Storage](#23-storage)
+    - [2.4 Pricing](#24-pricing)
+    - [2.5 API + frontend](#25-api--frontend)
+    - [2.6 Tests](#26-tests)
+  - [3. Desired State](#3-desired-state)
+    - [3.1 Codex JSONL schema (derived from ad-hoc `duckdb` CLI probe against 9 local files, 350 events — used only for Phase-1 schema discovery, not part of the runtime)](#31-codex-jsonl-schema-derived-from-ad-hoc-duckdb-cli-probe-against-9-local-files-350-events--used-only-for-phase-1-schema-discovery-not-part-of-the-runtime)
+    - [3.2 Per-origin storage (no premature union)](#32-per-origin-storage-no-premature-union)
+    - [3.3 Pricing](#33-pricing)
+    - [3.4 Target architecture](#34-target-architecture)
+  - [4. Gap Analysis](#4-gap-analysis)
+    - [Gap Map](#gap-map)
+    - [Dependencies](#dependencies-1)
+    - [G1: File Discovery Across Two Source Trees](#g1-file-discovery-across-two-source-trees)
+    - [G2: Per-Origin Event Tables](#g2-per-origin-event-tables)
+    - [G3: Codex-Specific Token Attribution](#g3-codex-specific-token-attribution)
+    - [G4: Pricing Catalog Extension](#g4-pricing-catalog-extension)
+    - [G5: Project Identity from Initial `cwd`](#g5-project-identity-from-initial-cwd)
+    - [G6: Sync Tooling](#g6-sync-tooling)
+    - [G7: Semantic Mapping (Empirical Catalog)](#g7-semantic-mapping-empirical-catalog)
+    - [G8: Unified `events` View/Table](#g8-unified-events-viewtable)
+    - [G9: API + Frontend Surfacing](#g9-api--frontend-surfacing)
+    - [G10: Test Coverage](#g10-test-coverage)
+  - [5. Success Measures](#5-success-measures)
+    - [Project Quality Bar (CI Gates)](#project-quality-bar-ci-gates)
+    - [Domain-Specific Measures](#domain-specific-measures)
+  - [6. Negative Measures](#6-negative-measures)
+    - [Quality Bar Violations (Type 2 Failures — "looks done but isn't")](#quality-bar-violations-type-2-failures--looks-done-but-isnt)
+    - [Domain-Specific Failures](#domain-specific-failures)
+
+<!--TOC-->
+</details>
+
+---
+
 ## 1. Overview
 
 Today the project ingests **only** Claude Code JSONL sessions from `~/.claude/projects/`.
@@ -1053,9 +1101,13 @@ All gates must pass before this feature ships:
 - **G4**: `total_cost_usd` for a Codex session with `subscription_plan =
   'plus'` is **equal to** the imputed API list-price cost for the same
   token counts — identical to what a non-subscription session with the
-  same tokens would produce. (Cost is invariant to plan.) Unknown models
-  surface in `/api/summary.unknown_models[]` with a non-zero count and
-  `cost_usd = NULL` on their event rows.
+  same tokens would produce. (Cost is invariant to plan.) Per ADR-G4.2:
+  an unknown model whose ID matches an OpenAI prefix (e.g. `gpt-`, `o1`,
+  `o3`) is costed at the nearest known GPT family's rate and listed in
+  `/api/summary.imputed_model_families[]`; an unknown model whose ID
+  does **not** match an OpenAI prefix (e.g. `llama3:70b`,
+  `qwen2.5-coder:32b`) is treated as locally-hosted with
+  `cost_usd = 0.0` — this is the correct answer, not a diagnostic signal.
 - **G5**: A project with both Claude and Codex sessions in the same
   `cwd` resolves to **one `project_id`** and appears as a single row in
   `/api/projects` with summed cost. Every row in `events_codex` for a
@@ -1119,10 +1171,16 @@ All gates must pass before this feature ships:
   `turn_context` silently attributes to `NULL` model → $0 cost →
   under-reported totals. Must surface `"unknown_codex"` sentinel and a
   non-zero count in `/api/summary.unknown_models`.
-- **G4 (pricing)**: unseen OpenAI model falls through to `$0` via
-  `model_family='unknown'` and a missing CSV row. Must produce
-  `cost_usd = NULL` (not zero) and surface in diagnostics; dashboard
-  renders "unknown" badge, not a zero cost.
+- **G4 (pricing)**: a GPT-shaped unknown model (e.g. `gpt-6`) silently
+  falls through to the locally-hosted `$0` branch instead of being
+  imputed at gpt-5 rates — per ADR-G4.2, GPT-prefix models must route
+  through the imputed-best-effort path and surface in
+  `/api/summary.imputed_model_families[]`. Test: a fixture with
+  `turn_model = 'gpt-6'` produces non-zero `total_cost_usd` and a
+  non-empty `imputed_model_families[]` entry. Symmetrically: a locally
+  hosted model (e.g. `llama3:70b`) must NOT appear in
+  `imputed_model_families[]` — its $0 cost is the correct answer, and
+  surfacing it as a diagnostic would be noise.
 - **G5 (project identity)**: parser accidentally recomputes `project_id`
   per event from `turn_cwd` instead of from the session-constant
   `session_meta.cwd`, producing multiple `project_id`s for one session.
