@@ -248,15 +248,60 @@ class SQLiteDatabase:
         }
         col = sort_map.get(sort_by, "s.last_timestamp")
         direction = "ASC" if sort_order.strip().lower() == "asc" else "DESC"
+        # Per-session call-type counts + top-skill name are computed from the
+        # `event_calls` fact table. Two CTEs:
+        #   - call_counts: pivots rows by call_type into one row per session
+        #   - top_skills : ROW_NUMBER() over skill invocations per session,
+        #                  tied on call_name ASC for a stable winner.
+        # LEFT JOIN so sessions without any calls still appear (counts=0,
+        # top_skill=NULL).
         return self._q(f"""
+            WITH call_counts AS (
+                SELECT
+                    project_id,
+                    session_id,
+                    SUM(CASE WHEN call_type = 'tool' THEN 1 ELSE 0 END)
+                        AS tool_call_count,
+                    SUM(CASE WHEN call_type = 'skill' THEN 1 ELSE 0 END)
+                        AS skill_call_count,
+                    SUM(CASE WHEN call_type = 'make_target' THEN 1 ELSE 0 END)
+                        AS make_target_call_count
+                FROM event_calls
+                GROUP BY project_id, session_id
+            ),
+            skill_rank AS (
+                SELECT
+                    project_id,
+                    session_id,
+                    call_name,
+                    COUNT(*) AS n,
+                    ROW_NUMBER() OVER (
+                        PARTITION BY project_id, session_id
+                        ORDER BY COUNT(*) DESC, call_name ASC
+                    ) AS rn
+                FROM event_calls
+                WHERE call_type = 'skill'
+                GROUP BY project_id, session_id, call_name
+            )
             SELECT
                 s.project_id, s.session_id,
                 s.first_timestamp, s.last_timestamp,
                 s.event_count, s.subagent_count,
                 s.total_input_tokens, s.total_output_tokens,
                 s.total_cache_read_tokens, s.total_cache_creation_tokens,
-                ROUND(COALESCE(s.total_cost_usd, 0), 4) AS total_cost_usd
+                ROUND(COALESCE(s.total_cost_usd, 0), 4) AS total_cost_usd,
+                COALESCE(cc.tool_call_count, 0) AS tool_call_count,
+                COALESCE(cc.skill_call_count, 0) AS skill_call_count,
+                COALESCE(cc.make_target_call_count, 0) AS make_target_call_count,
+                ts.call_name AS top_skill
             FROM sessions s
+            LEFT JOIN call_counts cc
+                ON cc.project_id = s.project_id
+               AND cc.session_id = s.session_id
+            LEFT JOIN skill_rank ts
+                ON ts.project_id = s.project_id
+               AND ts.session_id = s.session_id
+               AND ts.rn = 1
             WHERE 1=1 {f}
             ORDER BY {col} {direction}
         """)
@@ -315,8 +360,8 @@ class SQLiteDatabase:
         if is_project_blocked(project_id):
             raise LookupError(f"Project not found: {project_id}")
         day_filter = days_clause(days)
-        # Column names match the DuckDB backend + the frontend
-        # `TimelineEvent` type in `api-client.ts`:
+        # Column names match the frontend `TimelineEvent` type in
+        # `api-client.ts`:
         #   event_seq, timestamp_utc, timestamp_local, first_event_time,
         #   input_tokens, output_tokens, cache_read_tokens,
         #   cache_creation_tokens, cache_5m_tokens, total_tokens,
@@ -358,7 +403,10 @@ class SQLiteDatabase:
     def get_schema_timeline(
         self, *, days: int | None = None, project: str | None = None
     ) -> list[dict[str, Any]]:
-        # Schema timeline is a DuckDB-specific feature (JSON path introspection).
+        # Schema timeline was a DuckDB-only feature (JSON path
+        # introspection over the raw JSONL files). Retained as a stub so
+        # the frontend SchemaTimeline page doesn't 404; it will show the
+        # empty-state. Re-implement if you need schema-evolution tracking.
         return []
 
     def get_session_events(

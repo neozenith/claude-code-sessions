@@ -8,20 +8,13 @@ Tests all endpoints with:
 - Both filters combined
 - Edge cases
 
-API endpoint tests are parametrized via ``db_backend`` fixture to run
-against both the DuckDB and SQLite backends.
+API endpoint tests run against the SQLite backend via the ``db_backend``
+fixture. (The DuckDB backend was removed; the fixture name is retained.)
 """
 
 import pytest
 from fastapi.testclient import TestClient
 
-from claude_code_sessions.config import (
-    HOME_PROJECTS_PATH,
-    PRICING_CSV_PATH,
-    PROJECTS_PATH,
-    QUERIES_PATH,
-)
-from claude_code_sessions.database import DuckDBDatabase
 from claude_code_sessions.database.sqlite.filters import days_clause, domain_clause, project_clause
 from claude_code_sessions.main import app
 
@@ -31,55 +24,6 @@ client = TestClient(app)
 # Test data - use a known project ID from the test data
 # This is the current project which should have recent activity
 TEST_PROJECT_ID = "-Users-joshpeak-play-claude-code-sessions"
-
-# DuckDB instance for testing internal helpers directly
-_duckdb = DuckDBDatabase(
-    queries_path=QUERIES_PATH,
-    pricing_csv_path=PRICING_CSV_PATH,
-    local_projects_path=PROJECTS_PATH,
-    home_projects_path=HOME_PROJECTS_PATH,
-)
-
-
-class TestBuildFilters:
-    """Test the _build_filters helper on the DuckDB Database implementation."""
-
-    def test_no_filters(self) -> None:
-        """_build_filters with no args returns empty strings."""
-        filters = _duckdb._build_filters()
-        assert filters["DAYS_FILTER"] == ""
-        assert filters["PROJECT_FILTER"] == ""
-
-    def test_days_filter_only(self) -> None:
-        """_build_filters with days returns proper SQL clause."""
-        filters = _duckdb._build_filters(days=7)
-        assert "7 days" in filters["DAYS_FILTER"]
-        assert "INTERVAL" in filters["DAYS_FILTER"]
-        assert filters["PROJECT_FILTER"] == ""
-
-    def test_project_filter_only(self) -> None:
-        """_build_filters with project returns proper SQL clause."""
-        filters = _duckdb._build_filters(project="test-project")
-        assert filters["DAYS_FILTER"] == ""
-        assert "test-project" in filters["PROJECT_FILTER"]
-        assert "regexp_extract" in filters["PROJECT_FILTER"]
-
-    def test_both_filters(self) -> None:
-        """_build_filters with both args returns both clauses."""
-        filters = _duckdb._build_filters(days=30, project="my-project")
-        assert "30 days" in filters["DAYS_FILTER"]
-        assert "my-project" in filters["PROJECT_FILTER"]
-
-    def test_days_zero_means_all_time(self) -> None:
-        """_build_filters with days=0 returns empty days filter."""
-        filters = _duckdb._build_filters(days=0)
-        assert filters["DAYS_FILTER"] == ""
-
-    def test_sql_injection_prevention(self) -> None:
-        """_build_filters escapes single quotes in project ID."""
-        filters = _duckdb._build_filters(project="test'; DROP TABLE users; --")
-        assert "''" in filters["PROJECT_FILTER"]
-        assert "= 'test';" not in filters["PROJECT_FILTER"]
 
 
 class TestSQLiteBuildFilters:
@@ -134,7 +78,7 @@ class TestSQLiteBuildFilters:
         # domain_clause reads BLOCKED_DOMAINS at call time; if empty, returns ""
         # This test relies on the test environment having no blocked domains
         # (the default for dev/CI). If it fails, BLOCKED_DOMAINS is non-empty.
-        from claude_code_sessions.config import BLOCKED_DOMAINS
+        from claude_code_sessions.config import BLOCKED_DOMAINS, PROJECTS_PATH
 
         if not BLOCKED_DOMAINS:
             result = domain_clause(PROJECTS_PATH)

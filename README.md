@@ -1,6 +1,6 @@
 # Claude Code Sessions Analytics
 
-FastAPI + React dashboard for visualizing Claude Code session usage and costs from `~/.claude/projects/` JSONL files using DuckDB.
+FastAPI + React dashboard for visualizing Claude Code session usage and costs from `~/.claude/projects/` JSONL files, backed by an incrementally-built SQLite cache at `~/.claude/cache/introspect_sessions.db`.
 
 ## Architecture Diagrams
 
@@ -12,7 +12,7 @@ FastAPI + React dashboard for visualizing Claude Code session usage and costs fr
 
 | Diagram | Description |
 |---------|-------------|
-| [Architecture](docs/diagrams/architecture-overview.png) | FastAPI + React + DuckDB components and relationships ([source](docs/diagrams/architecture-overview.mmd)) |
+| [Architecture](docs/diagrams/architecture-overview.png) | FastAPI + React + SQLite components and relationships ([source](docs/diagrams/architecture-overview.mmd)) |
 | [Data Flow](docs/diagrams/data-flow-overview.png) | Processing pipeline from JSONL files to visualizations ([source](docs/diagrams/data-flow-overview.mmd)) |
 | [API Sequence](docs/diagrams/sequence-api.png) | Request/response flows for all API endpoints ([source](docs/diagrams/sequence-api.mmd)) |
 
@@ -44,7 +44,7 @@ make sync-projects        # Sync from ~/.claude/projects/
 
 **Backend:**
 - FastAPI - API framework
-- DuckDB - Analytics database
+- SQLite (stdlib `sqlite3`) - Cached analytics index, built incrementally from JSONL source files
 - uv - Package management
 
 **Frontend:**
@@ -56,12 +56,12 @@ make sync-projects        # Sync from ~/.claude/projects/
 
 ## Dashboard Features
 
-- **Dashboard** - Summary cards, monthly cost trends
-- **Hourly** - Heatmaps and polar charts (DoW � HoD) with Melbourne timezone
-- **Daily** - Cost and token trends
-- **Weekly** - Weekly breakdowns
-- **Monthly** - Monthly analysis with model distribution
-- **Projects** - Per-project usage statistics
+- **Dashboard** - Summary cards, monthly cost trends, top skills / sub-agents / CLIs / make targets
+- **Hourly** - Heatmaps and polar charts (DoW × HoD) with Melbourne timezone
+- **Hour of Day** - Radial cost/token charts
+- **Daily / Weekly / Monthly** - Diverging token bars by model with zero-aligned cost overlay
+- **Sessions** - Per-session drill-down with message-kind filter
+- **Timeline** - Event-level scatterplot per project
 
 ## Port Configuration
 
@@ -108,13 +108,9 @@ Session JSONL files contain:
 
 ## Pricing
 
-Model pricing is centralized in [`src/claude_code_sessions/pricing.py`](src/claude_code_sessions/pricing.py).
+Model pricing lives in [`src/claude_code_sessions/database/sqlite/pricing.py`](src/claude_code_sessions/database/sqlite/pricing.py) as a hardcoded dict keyed by model family (`opus`/`sonnet`/`haiku`). `compute_event_costs()` runs at ingest time and writes `total_cost_usd` directly onto each row of the SQLite `events` table — dashboard queries do plain `SUM(total_cost_usd)` with no runtime pricing lookup.
 
-This module provides:
-- `PRICING_TABLE` - List of all Claude model prices (per million tokens)
-- `get_pricing_cte()` - Generates SQL CTE for use in queries
-
-Pricing includes: base input, cache write (5m/1h), cache read, and output tokens.
+**Changing prices:** edit the dict, then rebuild the cache (bump `SCHEMA_VERSION` in `schema.py` or delete `~/.claude/cache/introspect_sessions.db`) so existing events get re-costed. The introspect skill at `.claude/skills/introspect/scripts/introspect_sessions.py` has its own copy of the same dict — keep in sync.
 
 Source: [Anthropic Pricing](https://www.anthropic.com/pricing)
 
@@ -127,8 +123,10 @@ Source: [Anthropic Pricing](https://www.anthropic.com/pricing)
 - `GET /api/usage/monthly` - Monthly breakdown
 - `GET /api/usage/hourly` - Hourly breakdown (last 14 days, Melbourne timezone)
 - `GET /api/usage/sessions` - Per-session details
-- `GET /api/projects` - Projects with stats
+- `GET /api/projects` - Projects with stats (used for the sidebar project filter)
 - `GET /api/usage/top-projects-weekly` - Top 3 projects (last 8 weeks)
+- `GET /api/calls/timeline` - Tool/skill/sub-agent/CLI/make-target call counts bucketed by time
+- `GET /api/calls/top` - Top-N distinct call names for a given call_type
 
 ## Development Notes
 

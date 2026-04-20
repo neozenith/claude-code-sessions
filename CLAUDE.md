@@ -2,16 +2,16 @@
 
 ## Project Overview
 
-FastAPI + React dashboard for visualizing Claude Code session usage and costs from `~/.claude/projects/` JSONL files using DuckDB.
+FastAPI + React dashboard for visualizing Claude Code session usage and costs from `~/.claude/projects/` JSONL files using a cached SQLite index.
 
 ## Architecture
 
 ```
 claude-code-sessions/
-├── src/claude_code_sessions/  # FastAPI + DuckDB backend
+├── src/claude_code_sessions/  # FastAPI + SQLite backend
 │   ├── main.py                # FastAPI app entry point
 │   ├── config.py              # Configuration
-│   └── queries/               # SQL query files
+│   └── database/sqlite/       # Cached SQLite index + query layer
 ├── frontend/                  # React + Vite + Tailwind + shadcn
 │   └── src/
 │       ├── components/ui/     # shadcn components
@@ -26,7 +26,7 @@ claude-code-sessions/
 
 ### Backend
 - **FastAPI** - API framework
-- **DuckDB** - Analytics database
+- **SQLite** - Cached analytics index (built incrementally from JSONL source files)
 - **uv** - Package and environment management
 - **ruff** - Formatting and linting
 - **mypy** - Strict type checking

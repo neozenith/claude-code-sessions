@@ -2,7 +2,7 @@
 .PHONY: agentic-dev-backend agentic-dev-frontend agentic-dev format typecheck
 .PHONY: port-debug port-clean compare-projects demo-backend demo
 .PHONY: dev-backend-sqlite agentic-dev-backend-sqlite
-.PHONY: test-contract test-frontend-e2e-duckdb test-frontend-e2e-sqlite
+.PHONY: test-frontend-e2e-last-failed
 .PHONY: e2e-baseline e2e-after e2e-compare
 
 # Port Configuration
@@ -81,12 +81,6 @@ agentic-dev: install-frontend ## Run both servers for AI agent development (port
 agentic-dev-backend: ## Run backend server only (AI agent - port 8101)
 	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) uv run python -m claude_code_sessions.main
 
-dev-backend-sqlite: ## Run backend with SQLite cached backend (port 8100)
-	BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main --backend sqlite
-
-agentic-dev-backend-sqlite: ## Run backend with SQLite cached backend (AI agent - port 8101)
-	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) uv run python -m claude_code_sessions.main --backend sqlite
-
 demo-backend: ## Run backend in demo mode (blocks work, clients domains)
 	BLOCKED_DOMAINS=work,clients BACKEND_PORT=$(BACKEND_PORT) uv run python -m claude_code_sessions.main
 
@@ -108,22 +102,11 @@ test-backend: ## Run backend tests
 test-frontend: ## Run frontend tests
 	npm --prefix frontend run test
 
-test-contract: ## Run API contract tests against both backends
-	@echo "Starting DuckDB backend on :8101..."
-	@BACKEND_PORT=8101 uv run python -m claude_code_sessions.main --backend duckdb & echo $$! > tmp/.duckdb.pid
-	@echo "Starting SQLite backend on :8102..."
-	@BACKEND_PORT=8102 uv run python -m claude_code_sessions.main --backend sqlite & echo $$! > tmp/.sqlite.pid
-	@sleep 8
-	@echo "Running contract tests..."
-	-npm --prefix frontend run test:contract
-	@echo "Stopping backends..."
-	@kill $$(cat tmp/.duckdb.pid) $$(cat tmp/.sqlite.pid) 2>/dev/null; rm -f tmp/.duckdb.pid tmp/.sqlite.pid
-
-test-frontend-e2e: ## Run frontend E2E tests (both backends in one session)
+test-frontend-e2e: ## Run frontend E2E tests
 	npm --prefix frontend run test:e2e
 
-test-frontend-e2e-duckdb: ## Run frontend E2E tests against DuckDB only
-	npm --prefix frontend run test:e2e -- --project=duckdb
+test-frontend-e2e-last-failed: ## Rerun only the e2e tests that failed last time
+	npm --prefix frontend run test:e2e -- --last-failed --reporter=list
 
 e2e-baseline: ## Snapshot current e2e perf numbers as baseline (before change)
 	@echo "Running full e2e suite for baseline capture..."

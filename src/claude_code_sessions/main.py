@@ -13,11 +13,9 @@ from claude_code_sessions.config import (
     BACKEND_HOST,
     BACKEND_PORT,
     HOME_PROJECTS_PATH,
-    PRICING_CSV_PATH,
     PROJECTS_PATH,
-    QUERIES_PATH,
 )
-from claude_code_sessions.database import Database, DuckDBDatabase, SQLiteDatabase
+from claude_code_sessions.database import Database, SQLiteDatabase
 
 log = logging.getLogger(__name__)
 
@@ -32,11 +30,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Default database backend — stored on app.state for proper lifecycle management.
-# Swapped by main() when --backend is specified, and by test fixtures for parametrized runs.
-app.state.db = DuckDBDatabase(
-    queries_path=QUERIES_PATH,
-    pricing_csv_path=PRICING_CSV_PATH,
+# Database backend — SQLite is now the only supported engine. Stored on
+# ``app.state`` for lifecycle management and so test fixtures can swap it
+# for an isolated in-memory instance without mutating a module-level
+# global.
+app.state.db = SQLiteDatabase(
     local_projects_path=PROJECTS_PATH,
     home_projects_path=HOME_PROJECTS_PATH,
 )
@@ -46,21 +44,6 @@ def get_db() -> Database:
     """Typed accessor for the current database backend."""
     db: Database = app.state.db
     return db
-
-
-def create_db(backend: str) -> Database:
-    """Factory: create the appropriate Database implementation."""
-    if backend == "sqlite":
-        return SQLiteDatabase(
-            local_projects_path=PROJECTS_PATH,
-            home_projects_path=HOME_PROJECTS_PATH,
-        )
-    return DuckDBDatabase(
-        queries_path=QUERIES_PATH,
-        pricing_csv_path=PRICING_CSV_PATH,
-        local_projects_path=PROJECTS_PATH,
-        home_projects_path=HOME_PROJECTS_PATH,
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -252,12 +235,6 @@ def main() -> None:
 
     parser = argparse.ArgumentParser(description="Claude Code Sessions Analytics API")
     parser.add_argument(
-        "--backend",
-        choices=["duckdb", "sqlite"],
-        default="sqlite",
-        help="Database backend: duckdb (stateless, full-scan) or sqlite (cached, incremental)",
-    )
-    parser.add_argument(
         "--block-domains",
         nargs="*",
         default=None,
@@ -273,10 +250,8 @@ def main() -> None:
     if config.BLOCKED_DOMAINS:
         log.warning("Domain filtering active — blocked domains: %s", config.BLOCKED_DOMAINS)
 
-    # Set backend on app.state — no global mutation needed
-    app.state.db = create_db(args.backend)
-    log.info("Using %s database backend", args.backend)
-
+    # Backend is pre-initialised at module load (SQLite only). No runtime
+    # swap needed here — the module-level ``app.state.db`` stands.
     uvicorn.run(app, host=BACKEND_HOST, port=BACKEND_PORT)
 
 

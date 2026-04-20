@@ -126,8 +126,9 @@ test.describe('Project Sessions - Sortable Columns', () => {
     await page.getByTestId('sort-cost').click()
     await waitForPageLoad(page)
 
-    // 6th column (index 5) is Cost
-    const costCells = page.locator('tbody tr td:nth-child(6)')
+    // 10th column is Cost (after Session ID, File, Last Active, Events,
+    // Subagents, Tool %, Skill %, Make %, Top skill).
+    const costCells = page.locator('tbody tr td:nth-child(10)')
     const costTexts = await costCells.allTextContents()
     const parseCost = (s: string) => parseFloat(s.replace(/[$,]/g, '')) || 0
     const costValuesDesc = costTexts.map(parseCost)
@@ -191,7 +192,7 @@ test.describe('Project Sessions - Sortable Columns', () => {
     await page.getByTestId('sort-cost').click()
     await waitForPageLoad(page)
 
-    const costCells = page.locator('tbody tr td:nth-child(6)')
+    const costCells = page.locator('tbody tr td:nth-child(10)')
     const texts = await costCells.allTextContents()
     const costs = texts.map((s) => parseFloat(s.replace(/[$,]/g, '')) || 0)
 

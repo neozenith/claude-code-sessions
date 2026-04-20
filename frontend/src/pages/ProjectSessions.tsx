@@ -5,7 +5,15 @@ import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName, formatSessionId, formatCurrency } from '@/lib/formatters'
 import type { SessionListItem } from '@/lib/api-client'
-import { ExternalLink, Clock, ChevronLeft, FileText, MessageSquare, Coins, ChevronUp, ChevronDown, ChevronsUpDown } from 'lucide-react'
+import { ExternalLink, Clock, ChevronLeft, FileText, MessageSquare, Coins, ChevronUp, ChevronDown, ChevronsUpDown, Wrench, Sparkles, Hammer } from 'lucide-react'
+
+// Format a raw ratio (calls / events) as a percentage string with one
+// decimal of precision. Returns "—" when there's no denominator.
+function formatRatio(numerator: number, denominator: number): string {
+  if (!denominator) return '—'
+  const pct = (numerator / denominator) * 100
+  return `${pct.toFixed(1)}%`
+}
 
 type SortColumn = 'last_active' | 'events' | 'subagents' | 'cost'
 type SortDirection = 'asc' | 'desc'
@@ -238,6 +246,33 @@ export default function ProjectSessions() {
                     <SortableHeader column="subagents" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right">
                       Subagents
                     </SortableHeader>
+                    {/* Call-density ratios — calls divided by events in this
+                        session. All three are averages (count / denominator)
+                        over the session's lifetime. */}
+                    <th
+                      className="text-right py-3 px-4 font-medium text-muted-foreground"
+                      title="Tool calls ÷ events (average per event)"
+                    >
+                      <Wrench className="inline h-4 w-4 mr-1" />
+                      Tool %
+                    </th>
+                    <th
+                      className="text-right py-3 px-4 font-medium text-muted-foreground"
+                      title="Skill invocations ÷ events"
+                    >
+                      <Sparkles className="inline h-4 w-4 mr-1" />
+                      Skill %
+                    </th>
+                    <th
+                      className="text-right py-3 px-4 font-medium text-muted-foreground"
+                      title="Make targets invoked ÷ events"
+                    >
+                      <Hammer className="inline h-4 w-4 mr-1" />
+                      Make %
+                    </th>
+                    <th className="text-left py-3 px-4 font-medium text-muted-foreground">
+                      Top skill
+                    </th>
                     <SortableHeader column="cost" sortBy={sortBy} sortDir={sortDir} onSort={handleSort} align="right">
                       Cost
                     </SortableHeader>
@@ -273,6 +308,27 @@ export default function ProjectSessions() {
                         ) : (
                           <span className="text-muted-foreground">-</span>
                         )}
+                      </td>
+                      <td
+                        className="py-3 px-4 text-right font-mono text-sm"
+                        title={`${session.tool_call_count} tool calls across ${session.event_count} events`}
+                      >
+                        {formatRatio(session.tool_call_count, session.event_count)}
+                      </td>
+                      <td
+                        className="py-3 px-4 text-right font-mono text-sm"
+                        title={`${session.skill_call_count} skill invocations across ${session.event_count} events`}
+                      >
+                        {formatRatio(session.skill_call_count, session.event_count)}
+                      </td>
+                      <td
+                        className="py-3 px-4 text-right font-mono text-sm"
+                        title={`${session.make_target_call_count} make targets across ${session.event_count} events`}
+                      >
+                        {formatRatio(session.make_target_call_count, session.event_count)}
+                      </td>
+                      <td className="py-3 px-4 text-sm text-muted-foreground">
+                        {session.top_skill ?? '—'}
                       </td>
                       <td className="py-3 px-4 text-right font-mono">
                         {formatCurrency(Number(session.total_cost_usd) || 0)}

@@ -21,7 +21,6 @@ import { test, expect, Page } from '@playwright/test'
 // ---------------------------------------------------------------------------
 
 const ENGINES = {
-  duckdb: { id: 0, name: 'duckdb' },
   sqlite: { id: 1, name: 'sqlite' },
 } as const
 
@@ -335,7 +334,7 @@ for (const entry of COVERAGE_MATRIX) {
   test.describe(`${entry.section.name} Filters`, () => {
     for (const time of entry.timeRanges) {
       for (const project of entry.projects) {
-        // Test name uses a partial slug (without engine) — Playwright adds [sqlite]/[duckdb] suffix
+        // Test name uses a partial slug (without engine) — Playwright adds [sqlite] suffix
         const testLabel = `S${pad(entry.section.id)}_${entry.section.slug}-T${pad(time.id)}_${time.slug}-P${pad(project.id)}: ${time.label}, ${project.label}`
 
         test(testLabel, async ({ page }) => {

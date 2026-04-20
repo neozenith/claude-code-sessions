@@ -4,13 +4,13 @@ title: Claude Code Sessions Analytics - System Architecture
 graph TB
     subgraph "Data Layer"
         JSONL["~/.claude/projects/<br/>JSONL Session Logs"]
-        PRICING["pricing.csv<br/>Token Pricing Data"]
+        CACHE["~/.claude/cache/<br/>introspect_sessions.db<br/>SQLite Cache"]
     end
 
     subgraph "Backend - src/claude_code_sessions/"
         API["FastAPI Server<br/>main.py<br/>Ports: 8100/8101"]
-        DUCKDB["DuckDB<br/>In-Memory Analytics"]
-        QUERIES["SQL Queries<br/>queries/*.sql"]
+        INGEST["CacheManager<br/>Incremental ingestion<br/>(mtime-based)"]
+        BACKEND["SQLiteDatabase<br/>Query layer + filters<br/>+ hardcoded pricing"]
     end
 
     subgraph "Frontend - React + Vite"
@@ -18,17 +18,17 @@ graph TB
         PAGES["Dashboard Pages<br/>shadcn + Plotly"]
     end
 
-    JSONL -->|Read| DUCKDB
-    PRICING -->|Load| DUCKDB
-    DUCKDB -->|Execute| QUERIES
-    QUERIES -->|Results| API
+    JSONL -->|Parse on startup| INGEST
+    INGEST -->|Write events +<br/>total_cost_usd| CACHE
+    CACHE -->|Read| BACKEND
+    BACKEND -->|Results| API
     API -->|REST API| APP
     APP -->|Render| PAGES
 
     style JSONL fill:#e1f5ff
-    style PRICING fill:#e1f5ff
+    style CACHE fill:#e1f5ff
     style API fill:#fff3e0
-    style DUCKDB fill:#f3e5f5
-    style QUERIES fill:#f3e5f5
+    style INGEST fill:#f3e5f5
+    style BACKEND fill:#f3e5f5
     style APP fill:#e8f5e9
     style PAGES fill:#e8f5e9

@@ -1,9 +1,18 @@
 # Universal Filters Implementation Spec
 
+> **Historical note (2026-04):** This spec was written when the project
+> supported a DuckDB backend. DuckDB has been removed; filter plumbing is
+> now implemented exclusively in the SQLite layer via the helpers in
+> `src/claude_code_sessions/database/sqlite/filters.py` (`days_clause`,
+> `project_clause`, `domain_clause`). Where this document references
+> "DuckDB query" or the `queries/*.sql` template files, read "SQLite
+> backend with parameterised WHERE clauses". The user-facing filter
+> semantics (days, project) are unchanged.
+
 ## Goal
 
 Implement robust, tested global filters (time range and project) that work consistently across:
-1. **All API endpoints** (DuckDB query level)
+1. **All API endpoints** (SQLite query layer)
 2. **All frontend visualizations**
 3. **URL parameter synchronization**
 4. **Cross-section navigation**

@@ -1,16 +1,12 @@
 /**
- * Playwright global setup — warm up both Vite dev server instances.
+ * Playwright global setup — warm up the Vite dev server.
  *
- * Each backend (sqlite on :5274, duckdb on :5275) has its own Vite frontend.
  * Vite compiles the JS bundle lazily on first request. This setup visits
- * both frontends once to trigger compilation before test workers start.
+ * the frontend once to trigger compilation before test workers start.
  */
 import { chromium } from '@playwright/test'
 
-const FRONTEND_URLS = [
-  'http://localhost:5274',
-  'http://localhost:5275',
-]
+const FRONTEND_URLS = ['http://localhost:5274']
 
 export default async function globalSetup(): Promise<void> {
   const browser = await chromium.launch()

@@ -1,5 +1,13 @@
 # Schema Timeline Visualization Spec
 
+> **Status (2026-04):** The original implementation relied on DuckDB's
+> `read_json_auto()` + JSON-path introspection to diff schemas per event.
+> DuckDB has been removed and the current SQLite backend returns an empty
+> list from `get_schema_timeline()`. The `/schema-timeline` route in the
+> frontend still exists but renders the empty state. To re-enable this
+> feature, walk each JSONL file during ingest, record distinct keypath
+> sets per event, and store them as a new fact table in the SQLite cache.
+
 ## Overview
 
 Create a new visualization section called **Schema Timeline** that shows the evolution of JSON schema attributes over time in Claude Code session data.

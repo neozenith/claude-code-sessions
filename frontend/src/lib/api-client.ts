@@ -398,6 +398,15 @@ export interface SessionListItem {
   total_output_tokens: number
   total_cost_usd: number
   filepath: string
+  /** Counts of rows in the event_calls fact table that belong to this
+   * session, per call_type. Used to render call-density ratios on the
+   * ProjectSessions page (calls / events). Zero if no calls recorded. */
+  tool_call_count: number
+  skill_call_count: number
+  make_target_call_count: number
+  /** Most frequently invoked skill in this session. Ties broken
+   * alphabetically. ``null`` if the session made no skill calls. */
+  top_skill: string | null
 }
 
 /** The 9 fine-grained message kinds derived from event_type + is_meta + content shape */

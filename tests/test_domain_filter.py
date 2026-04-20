@@ -13,25 +13,12 @@ import pytest
 from fastapi.testclient import TestClient
 
 from claude_code_sessions.config import (
-    HOME_PROJECTS_PATH,
-    PRICING_CSV_PATH,
-    PROJECTS_PATH,
-    QUERIES_PATH,
     extract_domain,
     is_project_blocked,
 )
-from claude_code_sessions.database import DuckDBDatabase
 from claude_code_sessions.main import app
 
 client = TestClient(app)
-
-# DuckDB instance for testing internal helpers directly
-_duckdb = DuckDBDatabase(
-    queries_path=QUERIES_PATH,
-    pricing_csv_path=PRICING_CSV_PATH,
-    local_projects_path=PROJECTS_PATH,
-    home_projects_path=HOME_PROJECTS_PATH,
-)
 
 
 class TestExtractDomain:
@@ -99,59 +86,6 @@ class TestIsProjectBlocked:
     def test_no_domain_not_blocked(self) -> None:
         """Projects without a domain (no home prefix) are not blocked."""
         assert is_project_blocked("some-random-id") is False
-
-
-class TestBuildDomainFilterSql:
-    """Test _build_domain_filter_sql() SQL generation (DuckDB-specific)."""
-
-    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", [])
-    def test_empty_returns_empty_string(self) -> None:
-        """No blocked domains produces empty SQL."""
-        assert _duckdb._build_domain_filter_sql() == ""
-
-    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work"])
-    def test_single_domain(self) -> None:
-        """Single blocked domain produces one NOT LIKE clause."""
-        sql = _duckdb._build_domain_filter_sql()
-        assert "NOT LIKE" in sql
-        assert "-work-%" in sql
-        assert sql.count("NOT LIKE") == 1
-
-    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work", "clients"])
-    def test_multiple_domains(self) -> None:
-        """Multiple blocked domains produce multiple NOT LIKE clauses."""
-        sql = _duckdb._build_domain_filter_sql()
-        assert "-work-%" in sql
-        assert "-clients-%" in sql
-        assert sql.count("NOT LIKE") == 2
-
-    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", ["work"])
-    def test_uses_home_prefix(self) -> None:
-        """SQL pattern includes HOME_PREFIX for correct matching."""
-        from claude_code_sessions.config import HOME_PREFIX
-
-        sql = _duckdb._build_domain_filter_sql()
-        assert HOME_PREFIX in sql
-
-
-class TestBuildFiltersIncludesDomain:
-    """Test that _build_filters() includes DOMAIN_FILTER key (DuckDB-specific)."""
-
-    def test_domain_filter_always_present(self) -> None:
-        """_build_filters() always includes DOMAIN_FILTER key."""
-        filters = _duckdb._build_filters()
-        assert "DOMAIN_FILTER" in filters
-
-    def test_domain_filter_with_args(self) -> None:
-        """DOMAIN_FILTER is present regardless of other filter args."""
-        filters = _duckdb._build_filters(days=7, project="test-project")
-        assert "DOMAIN_FILTER" in filters
-
-    @patch("claude_code_sessions.database.duckdb.BLOCKED_DOMAINS", [])
-    def test_domain_filter_empty_when_no_blocked(self) -> None:
-        """DOMAIN_FILTER is empty string when no domains are blocked."""
-        filters = _duckdb._build_filters()
-        assert filters["DOMAIN_FILTER"] == ""
 
 
 @pytest.mark.usefixtures("db_backend")

@@ -1,4 +1,0 @@
-model_family,base_input_price,cache_5m_write_price,cache_1h_write_price,cache_read_price,output_price
-opus,15.00,18.75,30.00,1.50,75.00
-sonnet,3.00,3.75,6.00,0.30,15.00
-haiku,1.00,1.25,2.00,0.10,5.00

@@ -50,17 +50,17 @@ E{id}{engine}-S{id}{route_name}-T{id}{time_bucket}-P{id}.png
 
 **Examples:**
 - `E1sqlite-S0dashboard-T430d-P0.png` — SQLite, Dashboard, 30 days, All Projects
-- `E0duckdb-S1daily-T27d-P1.png` — DuckDB, Daily, 7 days, This Project
-- `E1sqlite-S7sessions-T7all-P0.png` — SQLite, Sessions, All time, All Projects
+- `E1sqlite-S1daily-T27d-P1.png` — SQLite, Daily, 7 days, This Project
+- `E1sqlite-S6sessions-T7all-P0.png` — SQLite, Sessions, All time, All Projects
 
 | Axis | Values |
 |------|--------|
-| **E** (Engine) | `0duckdb`, `1sqlite` |
-| **S** (Section) | `0dashboard`, `1daily`, `2weekly`, `3monthly`, `4hourly`, `5hourofday`, `6projects`, `7sessions`, `8timeline`, `9schematimeline` |
+| **E** (Engine) | `1sqlite` (the only backend — DuckDB removed in 2026-04) |
+| **S** (Section) | `0dashboard`, `1daily`, `2weekly`, `3monthly`, `4hourly`, `5hourofday`, `6sessions`, `7timeline`, `8schematimeline` |
 | **T** (Time Range) | `024h`, `13d`, `27d`, `314d`, `430d`, `590d`, `6180d`, `7all` |
 | **P** (Project) | `0` (All Projects), `1` (Specific Project) |
 
-**Full matrix:** 2 engines x 10 sections x 8 time ranges x 2 project options = **320 permutations**
+**Full matrix:** 1 engine × 9 sections × 8 time ranges × 2 project options = **144 permutations** (behavioral tests add the rest).
 
 ### Permutation Matrix
 
@@ -96,35 +96,32 @@ graph LR
     end
 
     subgraph "Backend Engine"
-        DDB["DuckDB<br/>stateless"]
         SQL["SQLite<br/>cached"]
     end
 
     PW --> VITE
     VITE --> BE
-    BE --> DDB
     BE --> SQL
 
     style PW fill:#E11D48,color:#fff
     style VITE fill:#646CFF,color:#fff
     style BE fill:#009688,color:#fff
-    style DDB fill:#FFC107,color:#000
     style SQL fill:#2196F3,color:#fff
 ```
 
-### Backend Selection
+### Backend
 
-By default, **both backends run in a single test session** — Playwright starts
-two server pairs (sqlite on :8101/:5274, duckdb on :8102/:5275) and runs every
-test against both. Screenshots and logs are engine-prefixed for comparison.
+Playwright starts a single server pair — SQLite backend on :8101, Vite on
+:5274. (The DuckDB backend was removed in 2026-04; the `[sqlite]`
+Playwright project label is retained as a forward-compatibility placeholder
+should a second backend be reintroduced.)
 
 ```bash
-# Both engines (default — full coverage)
+# Full suite
 make test-frontend-e2e
 
-# Single engine (faster iteration)
-make test-frontend-e2e-sqlite
-make test-frontend-e2e-duckdb
+# Re-run only tests that failed last time
+make test-frontend-e2e-last-failed
 ```
 
 ## Test Files

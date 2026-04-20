@@ -1,17 +1,14 @@
 import { defineConfig, devices } from '@playwright/test'
 
 /**
- * Playwright configuration — runs tests against BOTH database backends
- * in a single test session.
+ * Playwright configuration.
  *
- * Two Playwright projects (duckdb, sqlite) each start their own
- * backend + frontend server pair on different ports. All screenshots
- * and logs land in e2e-screenshots/ with engine-prefixed slugs.
+ * Single backend (SQLite) on :8101 with a Vite dev server on :5274.
+ * All screenshots and logs land in e2e-screenshots/ with engine-prefixed
+ * slugs for historical continuity, even though only one engine runs now.
  *
  * Usage:
- *   npx playwright test                    # both engines
- *   npx playwright test --project=sqlite   # just sqlite
- *   npx playwright test --project=duckdb   # just duckdb
+ *   npx playwright test
  *
  * @see https://playwright.dev/docs/test-configuration
  */
@@ -42,31 +39,15 @@ export default defineConfig({
         baseURL: 'http://localhost:5274',
       },
     },
-    {
-      name: 'duckdb',
-      use: {
-        ...devices['Desktop Chrome'],
-        baseURL: 'http://localhost:5275',
-      },
-    },
   ],
 
   webServer: [
     {
       command:
         'concurrently --kill-others --names "be,fe" ' +
-        '"BACKEND_PORT=8101 uv run python -m claude_code_sessions.main --backend sqlite" ' +
+        '"BACKEND_PORT=8101 uv run python -m claude_code_sessions.main" ' +
         '"VITE_BACKEND_URL=http://localhost:8101 npx vite --port 5274"',
       url: 'http://localhost:8101/api/health',
-      reuseExistingServer: !process.env.CI,
-      timeout: 120000,
-    },
-    {
-      command:
-        'concurrently --kill-others --names "be,fe" ' +
-        '"BACKEND_PORT=8102 uv run python -m claude_code_sessions.main --backend duckdb" ' +
-        '"VITE_BACKEND_URL=http://localhost:8102 npx vite --port 5275"',
-      url: 'http://localhost:8102/api/health',
       reuseExistingServer: !process.env.CI,
       timeout: 120000,
     },

@@ -14,7 +14,7 @@ from typing import Any, Protocol, runtime_checkable
 class Database(Protocol):
     """Interface for all data access in the Claude Code Sessions dashboard.
 
-    Implementations may use DuckDB, SQLite, PostgreSQL, or any other backend.
+    Implementations may use SQLite, PostgreSQL, or any other backend.
     The API layer depends only on this protocol — never on a concrete class.
     """
 
