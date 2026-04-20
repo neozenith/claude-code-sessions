@@ -43,10 +43,9 @@ const SECTIONS = [
   { id: 3, slug: 'monthly', name: 'Monthly', path: '/monthly' },
   { id: 4, slug: 'hourly', name: 'Hourly', path: '/hourly' },
   { id: 5, slug: 'hourofday', name: 'HourOfDay', path: '/hour-of-day' },
-  { id: 6, slug: 'projects', name: 'Projects', path: '/projects' },
-  { id: 7, slug: 'sessions', name: 'Sessions', path: '/sessions' },
-  { id: 8, slug: 'timeline', name: 'Timeline', path: '/timeline' },
-  { id: 9, slug: 'schematimeline', name: 'SchemaTimeline', path: '/schema-timeline' },
+  { id: 6, slug: 'sessions', name: 'Sessions', path: '/sessions' },
+  { id: 7, slug: 'timeline', name: 'Timeline', path: '/timeline' },
+  { id: 8, slug: 'schematimeline', name: 'SchemaTimeline', path: '/schema-timeline' },
 ] as const
 
 const TIME_RANGES = [
@@ -268,14 +267,22 @@ const collectConsole = collectTestIO
 // ---------------------------------------------------------------------------
 
 async function waitForPageLoad(page: Page): Promise<void> {
+  // React mount — uncaught, so a dead dev server fails the test loudly
+  // instead of silently eating the 90s budget.
   await page.waitForFunction(
     () => (document.getElementById('root')?.children.length ?? 0) > 0,
-    { timeout: 45000 },
+    { timeout: 15000 },
   )
-  await page.waitForLoadState('networkidle', { timeout: 45000 }).catch(() => {})
+  // Best-effort settling waits. Their timeouts are deliberately small:
+  // several tests call `waitForPageLoad` 3+ times sequentially, so the
+  // worst-case budget here has to stay well under the 90s per-test
+  // timeout. 3s is long enough for a well-behaved page to settle and
+  // short enough that a non-settling page (e.g. one with streaming
+  // Plotly re-renders) doesn't blow the budget across multiple calls.
+  await page.waitForLoadState('networkidle', { timeout: 3000 }).catch(() => {})
   await page.waitForFunction(
     () => !document.body.innerText.includes('Loading...'),
-    { timeout: 45000 },
+    { timeout: 3000 },
   ).catch(() => {})
 }
 
@@ -489,16 +496,23 @@ test.describe('Timeline Project Requirement', () => {
       const val = await opts[1].getAttribute('value')
       if (val) {
         await sel.selectOption(val)
-        await waitForPageLoad(page)
-        await page.waitForFunction(
-          () => {
-            const t = document.body.innerText
-            return !t.includes('Loading') && (t.includes('Timeline') || t.includes('No events'))
-          },
-          { timeout: 45000 },
-        ).catch(() => {})
-        const text = await page.innerText('body')
-        expect(text).toMatch(/Timeline|No events/)
+        // After selecting a project, either the loading card appears
+        // (while `/api/timeline/events/…` is in-flight) or the rendered
+        // timeline appears. Wait for the loading card to DISAPPEAR and
+        // any outcome card to be present.
+        //
+        // Rendering 8k+ Plotly points can block the main thread for
+        // several seconds, which is why we target a DOM node (the h1)
+        // rather than scanning `body.innerText` — `innerText` has to
+        // run JS on the page and blocks behind Plotly's sync work.
+        const heading = page.locator('h1', { hasText: 'Session Timeline' })
+        await expect(heading).toBeVisible({ timeout: 30000 })
+        // Wait for loading card to disappear (fetch finished). If no
+        // loading card ever appeared, this is a no-op.
+        await page
+          .locator('text=Loading timeline data')
+          .waitFor({ state: 'hidden', timeout: 30000 })
+          .catch(() => {})
       }
     }
     console.writeLog('behavioral-timeline-with-project')

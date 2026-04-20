@@ -315,18 +315,44 @@ class SQLiteDatabase:
         if is_project_blocked(project_id):
             raise LookupError(f"Project not found: {project_id}")
         day_filter = days_clause(days)
+        # Column names match the DuckDB backend + the frontend
+        # `TimelineEvent` type in `api-client.ts`:
+        #   event_seq, timestamp_utc, timestamp_local, first_event_time,
+        #   input_tokens, output_tokens, cache_read_tokens,
+        #   cache_creation_tokens, cache_5m_tokens, total_tokens,
+        #   cumulative_output_tokens, message_content.
+        # Without the full set, Timeline.tsx crashes at
+        # `e.input_tokens.toLocaleString()` during hover-text build.
         return self._q(f"""
             SELECT
-                e.project_id, e.session_id, e.uuid, e.event_type,
-                e.timestamp, e.model_id, e.output_tokens, e.total_cost_usd,
-                SUM(e.output_tokens) OVER (
+                e.project_id,
+                e.session_id,
+                e.uuid,
+                e.event_type,
+                e.model_id,
+                e.message_content,
+                e.timestamp AS timestamp_utc,
+                e.timestamp_local,
+                MIN(e.timestamp) OVER (PARTITION BY e.session_id)
+                    AS first_event_time,
+                ROW_NUMBER() OVER (
+                    PARTITION BY e.session_id ORDER BY e.timestamp
+                ) AS event_seq,
+                COALESCE(e.input_tokens, 0) AS input_tokens,
+                COALESCE(e.output_tokens, 0) AS output_tokens,
+                COALESCE(e.cache_read_tokens, 0) AS cache_read_tokens,
+                COALESCE(e.cache_creation_tokens, 0) AS cache_creation_tokens,
+                COALESCE(e.cache_5m_tokens, 0) AS cache_5m_tokens,
+                COALESCE(e.input_tokens, 0) + COALESCE(e.output_tokens, 0)
+                    AS total_tokens,
+                SUM(COALESCE(e.output_tokens, 0)) OVER (
                     PARTITION BY e.session_id ORDER BY e.timestamp
                     ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
                 ) AS cumulative_output_tokens,
-                MIN(e.timestamp) OVER (PARTITION BY e.session_id) AS session_first_event
+                e.total_cost_usd
             FROM events e
             WHERE e.project_id = ? AND e.timestamp IS NOT NULL {day_filter}
-            ORDER BY session_first_event, e.timestamp
+            ORDER BY first_event_time, e.timestamp
         """, (project_id,))
 
     def get_schema_timeline(

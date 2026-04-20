@@ -6,7 +6,6 @@ import WeeklyUsage from './pages/WeeklyUsage'
 import MonthlyUsage from './pages/MonthlyUsage'
 import HourlyUsage from './pages/HourlyUsage'
 import HourOfDay from './pages/HourOfDay'
-import Projects from './pages/Projects'
 import SessionsList from './pages/SessionsList'
 import ProjectSessions from './pages/ProjectSessions'
 import SessionDetail from './pages/SessionDetail'
@@ -23,7 +22,6 @@ export default function App() {
         <Route path="/monthly" element={<MonthlyUsage />} />
         <Route path="/hourly" element={<HourlyUsage />} />
         <Route path="/hour-of-day" element={<HourOfDay />} />
-        <Route path="/projects" element={<Projects />} />
         <Route path="/sessions" element={<SessionsList />} />
         <Route path="/sessions/:projectId" element={<ProjectSessions />} />
         <Route path="/sessions/:projectId/:sessionId" element={<SessionDetail />} />

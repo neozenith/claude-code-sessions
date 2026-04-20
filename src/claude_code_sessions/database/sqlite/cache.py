@@ -428,7 +428,8 @@ class CacheManager:
 
     def _agg_tables_empty(self) -> bool:
         """True if the agg table is empty (first run after schema upgrade)."""
-        return self.conn.execute("SELECT COUNT(*) FROM agg").fetchone()[0] == 0
+        row = self.conn.execute("SELECT COUNT(*) FROM agg").fetchone()
+        return bool(row[0] == 0)
 
     def _timestamp_window_for_files(
         self, source_file_ids: list[int],
