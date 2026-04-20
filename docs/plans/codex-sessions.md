@@ -738,9 +738,12 @@ opus/sonnet/haiku substrings. SQL templates embed the same `LIKE` CASE.
   sentinel would be noise for the common case. GPT-family unknowns still
   get the imputed-best-effort treatment consistent with the project's
   "hypothetical API list-price" posture (ADR-G4.1).
-- **ADR-G4.3**: Cache-write columns are empty for Codex rows (OpenAI
-  doesn't bill cache writes separately). <!-- UNRESOLVED -->
-  **Recommendation**: allow empty/null; cost formula treats null as zero.
+- **ADR-G4.3** (**RESOLVED**): Cache-write columns for Codex rows.
+  **Decision**: null/empty cells in `pricing.csv`; cost formula
+  `COALESCE(col, 0)` treats absence as zero. **Rationale**: honest
+  encoding — `NULL` means "concept doesn't apply for this origin," not
+  "free cache writes" (which `0.00` would imply). Shared table,
+  per-origin semantics, no fragmentation.
 
 ---
 
@@ -863,15 +866,25 @@ each as:
   before G9 schema design starts.
 
 **ADRs**:
-- **ADR-G7.1**: Where to keep the semantic map — markdown table in repo vs
-  a machine-readable YAML/JSON driving automatic schema generation.
-  <!-- UNRESOLVED -->
-  **Recommendation**: markdown first (review-friendly); if G8 proves the
-  map stable, mechanize later.
-- **ADR-G7.2**: Handling "lost" concepts — drop them from the unified view
-  entirely, or surface under a JSON `extra` column? <!-- UNRESOLVED -->
-  **Recommendation**: JSON `extra` column per origin; keeps the unified
-  view slim but preserves drill-down access.
+- **ADR-G7.1** (**RESOLVED**): Semantic map format. **Decision**:
+  markdown table in the repo (`docs/plans/codex-sessions-semantic-map.md`)
+  as the authoritative source; a companion unit test
+  (`tests/test_semantic_map_integrity.py`) parses the markdown and
+  asserts every column in `events_claude_code` and `events_codex`
+  appears in exactly one labelled row. **Rationale**: markdown is
+  review-friendly (the map is a human-authored artifact, reviewed like
+  code); mechanization can come later if the map stabilizes enough to
+  auto-generate schema. The test closes the drift loop without forcing
+  YAML/JSON up front.
+- **ADR-G7.2** (**RESOLVED**): Handling origin-unique concepts in the
+  unified view. **Decision**: surface under a JSON `extra` column per
+  origin (`extra_claude_code`, `extra_codex`) in the unified view, in
+  addition to first-class nullable columns for the common/derived
+  concepts. **Rationale**: per the "err on the side of storing raw
+  signal" principle (ADR-G3.1), we never discard data at the view
+  layer. The JSON extra columns preserve origin-unique fields for
+  drill-down without bloating the unified schema with nullable columns
+  that only one origin ever populates.
 
 ---
 
@@ -895,16 +908,24 @@ per-origin in the view definition.
   reads from the unified view (or per-origin table for incremental updates).
 
 **ADRs**:
-- **ADR-G8.1**: SQLite view vs materialized table for `events`.
-  <!-- UNRESOLVED -->
-  **Recommendation**: start as view. If `/api/summary` p95 > 500ms with
-  both origins populated, promote to materialized table with triggers on
-  `events_claude_code` / `events_codex` inserts.
-- **ADR-G8.2**: `sessions` and `projects` rollup — rebuild from the
-  unified view or maintain per-origin tables then union? <!-- UNRESOLVED -->
-  **Recommendation**: per-origin `sessions_claude_code` and
-  `sessions_codex`, unified `sessions` view. Same for `projects`. Keeps
-  incremental ingestion simple.
+- **ADR-G8.1** (**RESOLVED**): Unified `events` as view (not
+  materialized table). **Decision**: start as a SQLite VIEW over
+  `events_claude_code UNION ALL events_codex`. If `/api/summary` p95
+  regresses past the current Claude-only baseline by more than 2x with
+  both origins populated, revisit and promote to a materialized table
+  with triggers. **Rationale**: simplicity first — a view has zero
+  maintenance surface and zero incremental-ingest coupling. The
+  materialized path is a known escape hatch, not a required bet.
+- **ADR-G8.2** (**RESOLVED**): Rollup table strategy for `sessions` and
+  `projects`. **Decision**: per-origin physical rollup tables
+  (`sessions_claude_code`, `sessions_codex`, same for `projects`) kept
+  in sync by each origin's own `refresh_aggregates_for_range()`; the
+  callable `sessions` and `projects` names exposed to queries become
+  unioned views over the per-origin tables. **Rationale**: mirrors the
+  per-origin events design (no premature unification), keeps
+  incremental ingest schema-specific, preserves the existing Claude
+  rollup behaviour verbatim. Views over them give downstream code a
+  single name to query without coupling the writers.
 
 ---
 
@@ -936,8 +957,11 @@ global filters. Session detail pages render native event types
   for `function_call`, `reasoning`, `exec_command_end`, `patch_apply_end`.
 
 **ADRs**:
-- **ADR-G9.1**: Default origin on first dashboard load. <!-- UNRESOLVED -->
-  **Recommendation**: `all` — least surprising.
+- **ADR-G9.1** (**RESOLVED**): Default origin on first dashboard load.
+  **Decision**: `all`. When the URL has no `?origin=` param, the filter
+  shows both origins and cost totals sum across them. **Rationale**:
+  least surprising; matches the existing "no filter = show everything"
+  convention used for `days` and `project`.
 - **ADR-G9.2** (**RESOLVED**): Subscription cost display. **Decision**:
   identical to Claude — show imputed API cost, no toggle, no special
   zeroing. Add a small Plus/Pro/Team badge next to sessions whose
