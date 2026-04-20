@@ -413,3 +413,92 @@ class SQLiteDatabase:
 
     def is_project_blocked(self, project_id: str) -> bool:
         return is_project_blocked(project_id)
+
+    # ------------------------------------------------------------------
+    # event_calls queries
+    # ------------------------------------------------------------------
+    # The event_calls table has timestamp/project_id/session_id
+    # denormalized off the parent event row so dashboards can filter
+    # without joining back to `events`.
+
+    # SQLite time-bucket expressions parallel those in CacheManager. Kept
+    # inline here because `agg` doesn't carry call_type/call_name — only
+    # additive token measures — so we can't read off it.
+    _CALLS_BUCKET_EXPRS: dict[str, str] = {
+        "hourly":  "strftime('%Y-%m-%dT%H:00:00', ec.timestamp)",
+        "daily":   "date(ec.timestamp)",
+        "weekly":  "date(ec.timestamp, 'weekday 0', '-6 days')",
+        "monthly": "strftime('%Y-%m-01', ec.timestamp)",
+    }
+
+    def _calls_filters(self, days: int | None, project: str | None) -> str:
+        """Filter clauses for reads off event_calls.
+
+        Re-uses the same days/project/domain clause builders but with
+        ``ec.timestamp`` / ``ec.project_id`` as the column names.
+        """
+        parts = [
+            days_clause(days, "ec.timestamp"),
+            project_clause(project, "ec.project_id"),
+            domain_clause(self.projects_path, "ec.project_id"),
+        ]
+        return " ".join(p for p in parts if p)
+
+    def get_calls_timeline(
+        self,
+        *,
+        granularity: str,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> list[dict[str, Any]]:
+        bucket_expr = self._CALLS_BUCKET_EXPRS.get(granularity)
+        if bucket_expr is None:
+            raise ValueError(f"unknown granularity: {granularity}")
+        f = self._calls_filters(days, project)
+        return self._q(f"""
+            SELECT
+                {bucket_expr} AS time_bucket,
+                ec.call_type,
+                COUNT(*) AS call_count
+            FROM event_calls ec
+            WHERE ec.timestamp IS NOT NULL {f}
+            GROUP BY time_bucket, ec.call_type
+            ORDER BY time_bucket, ec.call_type
+        """)
+
+    def get_top_calls(
+        self,
+        *,
+        call_type: str,
+        days: int | None = None,
+        project: str | None = None,
+        limit: int = 20,
+        exclude: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        # call_type comes from the API — constrain it to the known set
+        # so we can safely interpolate (no user-controlled SQL).
+        if call_type not in {"tool", "skill", "subagent", "cli", "rule", "make_target"}:
+            raise ValueError(f"unknown call_type: {call_type}")
+        safe_limit = max(1, min(int(limit), 500))
+        f = self._calls_filters(days, project)
+
+        # Bind exclude list as parameters so arbitrary call names can be
+        # passed without SQL-injection risk. Empty list → no clause.
+        exclude_clause = ""
+        params: tuple[Any, ...] = ()
+        if exclude:
+            placeholders = ",".join("?" for _ in exclude)
+            exclude_clause = f"AND ec.call_name NOT IN ({placeholders})"
+            params = tuple(exclude)
+
+        return self._q(f"""
+            SELECT
+                ec.call_name,
+                COUNT(*) AS call_count,
+                COUNT(DISTINCT ec.session_id) AS session_count
+            FROM event_calls ec
+            WHERE ec.call_type = '{call_type}' {f} {exclude_clause}
+            GROUP BY ec.call_name
+            ORDER BY call_count DESC, ec.call_name ASC
+            LIMIT {safe_limit}
+        """, params)

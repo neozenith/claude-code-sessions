@@ -4,6 +4,8 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { TopCallsRow, CallsTimeline } from '@/components/CallsCharts'
+import { CostTokenCombo } from '@/components/CostTokenCombo'
 import { formatNumber } from '@/lib/formatters'
 import { CHART_COLORS } from '@/lib/chart-colors'
 import type { UsageData } from '@/lib/api-client'
@@ -83,6 +85,19 @@ export default function DailyUsage() {
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Daily Usage</h1>
 
+      {/* Hero: per-day diverging token bars by model + cost overlay on
+          a zero-aligned secondary axis. Same component renders on Weekly,
+          Monthly, and Dashboard — only the granularity prop differs. */}
+      <CostTokenCombo
+        granularity="daily"
+        xAxisLabel="Date"
+        title="Daily Costs & Token Usage by Model"
+      />
+
+      {/* Quick-glance top-N dimensions — rendered before the cost charts
+          so this is the first thing a reader sees on the page. */}
+      <TopCallsRow />
+
       {/* Cost Chart */}
       <Card>
         <CardHeader>
@@ -113,11 +128,10 @@ export default function DailyUsage() {
             ]}
             layout={mergeLayout({
               autosize: true,
-              margin: { l: 50, r: 30, t: 30, b: 50 },
+              margin: { l: 50, r: 140, t: 30, b: 50 },
               xaxis: { title: { text: 'Date' } },
               yaxis: { title: { text: 'Cost (USD)' }, tickformat: 'd' },
               showlegend: true,
-              legend: { x: 0, y: 1.1, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '400px' }}
@@ -160,7 +174,7 @@ export default function DailyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'overlay',
-              margin: { l: 60, r: 30, t: 30, b: 50 },
+              margin: { l: 60, r: 140, t: 30, b: 50 },
               xaxis: { title: { text: 'Date' } },
               yaxis: {
                 title: { text: 'Tokens' },
@@ -168,7 +182,6 @@ export default function DailyUsage() {
                 tickprefix: '',
               },
               showlegend: true,
-              legend: { x: 0, y: 1.1, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '400px' }}
@@ -203,11 +216,10 @@ export default function DailyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'stack',
-              margin: { l: 50, r: 30, t: 30, b: 100 },
+              margin: { l: 50, r: 140, t: 30, b: 100 },
               xaxis: { title: { text: 'Date' }, tickangle: -45 },
               yaxis: { title: { text: 'Cost (USD)' }, tickformat: '$.2f' },
               showlegend: true,
-              legend: { x: 0, y: 1.15, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
@@ -273,20 +285,21 @@ export default function DailyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'relative',
-              margin: { l: 60, r: 30, t: 30, b: 100 },
+              margin: { l: 60, r: 140, t: 30, b: 100 },
               xaxis: { title: { text: 'Date' }, tickangle: -45 },
               yaxis: {
                 title: { text: 'Tokens' },
                 tickformat: ',d',
               },
               showlegend: true,
-              legend: { x: 0, y: 1.15, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />
         </CardContent>
       </Card>
+
+      <CallsTimeline granularity="daily" xAxisLabel="Date" />
     </div>
   )
 }

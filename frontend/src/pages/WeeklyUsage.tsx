@@ -4,6 +4,8 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { TopCallsRow, CallsTimeline } from '@/components/CallsCharts'
+import { CostTokenCombo } from '@/components/CostTokenCombo'
 import { formatNumber } from '@/lib/formatters'
 import { CHART_COLORS } from '@/lib/chart-colors'
 import type { UsageData } from '@/lib/api-client'
@@ -83,6 +85,17 @@ export default function WeeklyUsage() {
     <div className="space-y-6">
       <h1 className="text-3xl font-bold">Weekly Usage</h1>
 
+      {/* Hero: per-week diverging token bars by model + cost overlay on
+          a zero-aligned secondary axis. */}
+      <CostTokenCombo
+        granularity="weekly"
+        xAxisLabel="Week starting"
+        title="Weekly Costs & Token Usage by Model"
+      />
+
+      {/* Quick-glance top-N dimensions — rendered above the cost charts. */}
+      <TopCallsRow />
+
       {/* Cost Chart */}
       <Card>
         <CardHeader>
@@ -113,11 +126,10 @@ export default function WeeklyUsage() {
             ]}
             layout={mergeLayout({
               autosize: true,
-              margin: { l: 50, r: 30, t: 30, b: 50 },
+              margin: { l: 50, r: 140, t: 30, b: 50 },
               xaxis: { title: { text: 'Week Starting' } },
               yaxis: { title: { text: 'Cost (USD)' }, tickformat: 'd' },
               showlegend: true,
-              legend: { x: 0, y: 1.1, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '400px' }}
@@ -160,7 +172,7 @@ export default function WeeklyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'overlay',
-              margin: { l: 60, r: 30, t: 30, b: 50 },
+              margin: { l: 60, r: 140, t: 30, b: 50 },
               xaxis: { title: { text: 'Week Starting' } },
               yaxis: {
                 title: { text: 'Tokens' },
@@ -168,7 +180,6 @@ export default function WeeklyUsage() {
                 tickprefix: '',
               },
               showlegend: true,
-              legend: { x: 0, y: 1.1, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '400px' }}
@@ -203,11 +214,10 @@ export default function WeeklyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'stack',
-              margin: { l: 50, r: 30, t: 30, b: 100 },
+              margin: { l: 50, r: 140, t: 30, b: 100 },
               xaxis: { title: { text: 'Week Starting' }, tickangle: -45 },
               yaxis: { title: { text: 'Cost (USD)' }, tickformat: '$.2f' },
               showlegend: true,
-              legend: { x: 0, y: 1.15, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
@@ -272,20 +282,21 @@ export default function WeeklyUsage() {
             layout={mergeLayout({
               autosize: true,
               barmode: 'relative',
-              margin: { l: 60, r: 30, t: 30, b: 100 },
+              margin: { l: 60, r: 140, t: 30, b: 100 },
               xaxis: { title: { text: 'Week Starting' }, tickangle: -45 },
               yaxis: {
                 title: { text: 'Tokens' },
                 tickformat: ',d',
               },
               showlegend: true,
-              legend: { x: 0, y: 1.15, orientation: 'h' },
             })}
             useResizeHandler
             style={{ width: '100%', height: '450px' }}
           />
         </CardContent>
       </Card>
+
+      <CallsTimeline granularity="weekly" xAxisLabel="Week starting" />
     </div>
   )
 }

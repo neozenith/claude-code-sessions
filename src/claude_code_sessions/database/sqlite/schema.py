@@ -12,7 +12,7 @@ from pathlib import Path
 CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
 
 # Must match the introspect script's version so both tools coexist.
-SCHEMA_VERSION = "6"
+SCHEMA_VERSION = "10"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -149,6 +149,50 @@ CREATE INDEX IF NOT EXISTS idx_event_edges_forward
 CREATE INDEX IF NOT EXISTS idx_event_edges_reverse
     ON event_edges(project_id, session_id, parent_event_uuid);
 CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_file_id);
+
+-- =====================================================================
+-- event_calls — raw fact table for tool/skill/subagent/cli/rule calls
+-- =====================================================================
+-- One row per observed "call" inside an event. Each event can emit many
+-- rows: an assistant message may carry N parallel tool_use blocks, a
+-- Bash command may invoke several CLI heads, and a user message may
+-- inject many <system-reminder> rule blocks at once.
+--
+-- call_type discriminator:
+--   'tool'        - generic tool_use (Read, Edit, Grep, Write, ...). Bash
+--                   also emits one 'tool' row plus N 'cli' rows.
+--   'skill'       - tool_use with name=="Skill"; call_name = input.skill
+--   'subagent'    - tool_use with name=="Agent"; call_name = input.subagent_type
+--   'cli'         - command head parsed from Bash input.command
+--   'rule'        - .claude/rules/... path parsed from <system-reminder> text
+--   'make_target' - target arg(s) parsed from `make <target> ...` segments
+--                   within Bash commands (additive to the 'cli' row for make)
+--
+-- timestamp/project_id/session_id are denormalized off `events` so the
+-- common "calls in a time window" / "calls per project" queries don't
+-- need a join back to the main table.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS event_calls (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    ord INTEGER NOT NULL DEFAULT 0,
+    call_type TEXT NOT NULL CHECK (
+        call_type IN ('tool', 'skill', 'subagent', 'cli', 'rule', 'make_target')
+    ),
+    call_name TEXT NOT NULL,
+    timestamp TEXT,
+    project_id TEXT NOT NULL,
+    session_id TEXT
+);
+CREATE INDEX IF NOT EXISTS idx_event_calls_event
+    ON event_calls(event_id);
+CREATE INDEX IF NOT EXISTS idx_event_calls_type_name
+    ON event_calls(call_type, call_name);
+CREATE INDEX IF NOT EXISTS idx_event_calls_timestamp
+    ON event_calls(timestamp);
+CREATE INDEX IF NOT EXISTS idx_event_calls_project_session
+    ON event_calls(project_id, session_id);
 
 -- =====================================================================
 -- Dimensional aggregation tables (star schema)

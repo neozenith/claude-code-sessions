@@ -16,6 +16,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from claude_code_sessions.database.sqlite.calls import extract_calls
 from claude_code_sessions.database.sqlite.pricing import compute_event_costs, message_kind
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQL, SCHEMA_VERSION
 
@@ -158,6 +159,8 @@ class CacheManager:
         ).fetchone()
         if existing:
             cursor.execute("DELETE FROM event_edges WHERE source_file_id = ?", (existing[0],))
+            # event_calls is wiped via ON DELETE CASCADE when its parent
+            # event row is removed below, so no explicit delete is needed.
             cursor.execute("DELETE FROM events WHERE source_file_id = ?", (existing[0],))
             cursor.execute("DELETE FROM source_files WHERE id = ?", (existing[0],))
 
@@ -223,6 +226,9 @@ class CacheManager:
                  event["token_rate"], event["billable_tokens"], event["total_cost_usd"],
                  source_file_id, event["line_number"], event["raw_json"]),
             )
+            # Capture the rowid so the calls-fact-table insert below can
+            # reference the event's primary key without a second lookup.
+            event["_db_id"] = cursor.lastrowid
 
         for event in events_data:
             if event["uuid"] and event["parent_uuid"]:
@@ -232,6 +238,23 @@ class CacheManager:
                        VALUES (?, ?, ?, ?, ?)""",
                     (project_id, detected_session_id,
                      event["uuid"], event["parent_uuid"], source_file_id),
+                )
+
+        # Fact-table rows for tool/skill/subagent/cli/rule calls. This is a
+        # pure fan-out from the already-parsed content blocks — no extra
+        # file I/O, no re-parsing JSON.
+        for event in events_data:
+            event_db_id = event.get("_db_id")
+            if not event_db_id:
+                continue
+            for ord_, call_type, call_name in event.get("_calls", ()):
+                cursor.execute(
+                    """INSERT INTO event_calls
+                       (event_id, ord, call_type, call_name,
+                        timestamp, project_id, session_id)
+                       VALUES (?, ?, ?, ?, ?, ?, ?)""",
+                    (event_db_id, ord_, call_type, call_name,
+                     event["timestamp"], project_id, detected_session_id),
                 )
 
         return len(events_data)
@@ -311,6 +334,10 @@ class CacheManager:
             # and leaking thinking-block signatures into the cache. Use
             # `SQLiteDatabase.get_event_raw_json(event_id)` to fetch on demand.
             "line_number": line_number, "raw_json": "",
+            # Fact-table rows for tool/skill/subagent/cli/rule calls. Parsed
+            # once here and consumed by ingest_file() after the event row is
+            # inserted (so we have the event_id to reference).
+            "_calls": extract_calls(raw),
         }
 
     @staticmethod

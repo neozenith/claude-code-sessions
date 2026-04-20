@@ -240,6 +240,35 @@ export class ApiClient {
         `/events/${encodeURIComponent(eventUuid)}/raw`,
     )
   }
+
+  /** Call counts bucketed by time and call_type for stacked time-series charts. */
+  async getCallsTimeline(params: {
+    granularity: 'daily' | 'weekly' | 'monthly' | 'hourly'
+    days?: number
+    project?: string
+  }): Promise<ApiResult<CallsTimelineRow[]>> {
+    return this.get('/calls/timeline', params)
+  }
+
+  /** Top-N distinct call_name rows for a given call_type.
+   *
+   * `exclude` accepts an array and is joined with commas for the query
+   * string — useful for filtering noisy unix utilities out of the CLI chart.
+   */
+  async getTopCalls(params: {
+    call_type: CallType
+    days?: number
+    project?: string
+    limit?: number
+    exclude?: string[]
+  }): Promise<ApiResult<TopCallRow[]>> {
+    const { exclude, ...rest } = params
+    const query: Record<string, string | number | undefined> = { ...rest }
+    if (exclude && exclude.length > 0) {
+      query.exclude = exclude.join(',')
+    }
+    return this.get('/calls/top', query)
+  }
 }
 
 /** Response shape from GET /api/sessions/{p}/{s}/events/{uuid}/raw */
@@ -247,6 +276,23 @@ export interface EventRawJson {
   event_uuid: string
   raw_json: string | null
   found: boolean
+}
+
+/** Discriminator on the event_calls fact table. */
+export type CallType = 'tool' | 'skill' | 'subagent' | 'cli' | 'rule' | 'make_target'
+
+/** Row returned by GET /api/calls/timeline — one per (time_bucket, call_type). */
+export interface CallsTimelineRow {
+  time_bucket: string
+  call_type: CallType
+  call_count: number
+}
+
+/** Row returned by GET /api/calls/top — one per distinct call_name. */
+export interface TopCallRow {
+  call_name: string
+  call_count: number
+  session_count: number
 }
 
 // =========================================================================

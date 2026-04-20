@@ -209,7 +209,7 @@ export default function Timeline() {
                 layout={mergeLayout({
                   autosize: true,
                   height: Math.max(400, plotData.sessionOrder.length * 30 + 100),
-                  margin: { l: 180, r: 50, t: 30, b: 80 },
+                  margin: { l: 180, r: 160, t: 30, b: 80 },
                   xaxis: {
                     title: { text: 'Time' },
                     type: 'date',
@@ -221,13 +221,6 @@ export default function Timeline() {
                     automargin: true,
                   },
                   showlegend: true,
-                  legend: {
-                    orientation: 'h',
-                    yanchor: 'bottom',
-                    y: 1.02,
-                    xanchor: 'right',
-                    x: 1,
-                  },
                   hovermode: 'closest',
                 })}
                 useResizeHandler

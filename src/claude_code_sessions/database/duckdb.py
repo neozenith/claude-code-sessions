@@ -242,6 +242,33 @@ class DuckDBDatabase:
     def is_project_blocked(self, project_id: str) -> bool:
         return is_project_blocked(project_id)
 
+    def get_calls_timeline(
+        self,
+        *,
+        granularity: str,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> list[dict[str, Any]]:
+        # DuckDB backend is the stateless full-scan reader and doesn't
+        # materialize event_calls (that fact table lives in the SQLite
+        # cache). Dashboards that want call metrics should point at the
+        # SQLite backend. Returning an empty list here satisfies the
+        # Protocol without pretending to have data we haven't parsed.
+        _ = (granularity, days, project)
+        return []
+
+    def get_top_calls(
+        self,
+        *,
+        call_type: str,
+        days: int | None = None,
+        project: str | None = None,
+        limit: int = 20,
+        exclude: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        _ = (call_type, days, project, limit, exclude)
+        return []
+
     # -- Private helpers -----------------------------------------------------
 
     def _build_domain_filter_sql(self) -> str:

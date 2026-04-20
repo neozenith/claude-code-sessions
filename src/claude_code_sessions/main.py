@@ -201,6 +201,46 @@ async def get_domains() -> dict[str, list[str]]:
     return get_db().get_domains()
 
 
+# ---------------------------------------------------------------------------
+# event_calls fact-table endpoints
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/calls/timeline")
+async def get_calls_timeline(
+    granularity: str = "daily",
+    days: int | None = None,
+    project: str | None = None,
+) -> list[dict[str, Any]]:
+    """Call counts bucketed by (time, call_type) for stacked time-series charts."""
+    return get_db().get_calls_timeline(granularity=granularity, days=days, project=project)
+
+
+@app.get("/api/calls/top")
+async def get_top_calls(
+    call_type: str,
+    days: int | None = None,
+    project: str | None = None,
+    limit: int = 20,
+    exclude: str | None = None,
+) -> list[dict[str, Any]]:
+    """Top-N distinct call names for a given call_type.
+
+    ``call_type`` is one of tool/skill/subagent/cli/rule/make_target.
+    ``exclude`` is a comma-separated list of call names to filter out
+    before ranking (useful for hiding noisy unix utilities from the
+    CLI chart, e.g. ``?exclude=wc,head,tail,grep,echo``).
+    """
+    exclude_list = [s.strip() for s in exclude.split(",") if s.strip()] if exclude else None
+    return get_db().get_top_calls(
+        call_type=call_type,
+        days=days,
+        project=project,
+        limit=limit,
+        exclude=exclude_list,
+    )
+
+
 # Serve frontend static files in production
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():

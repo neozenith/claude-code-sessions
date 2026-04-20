@@ -115,3 +115,39 @@ class Database(Protocol):
     def is_project_blocked(self, project_id: str) -> bool:
         """Check if a project belongs to a blocked domain."""
         ...
+
+    def get_calls_timeline(
+        self,
+        *,
+        granularity: str,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Tool/skill/subagent/cli/rule call counts bucketed by time.
+
+        Returns one row per ``(time_bucket, call_type)`` pair, with the
+        total call count. Dashboards stack these into a time-series view.
+        """
+        ...
+
+    def get_top_calls(
+        self,
+        *,
+        call_type: str,
+        days: int | None = None,
+        project: str | None = None,
+        limit: int = 20,
+        exclude: list[str] | None = None,
+    ) -> list[dict[str, Any]]:
+        """Top-N distinct ``call_name`` rows for a given call_type.
+
+        Returns ``(call_name, call_count, session_count)`` sorted by
+        call_count descending. Used for "top skills / CLIs / subagents"
+        horizontal-bar charts.
+
+        ``exclude`` is an optional list of ``call_name`` values to filter
+        out before ranking — useful for CLI charts to hide noisy unix
+        utilities like ``wc``/``head``/``grep`` that dominate counts
+        without being useful signal.
+        """
+        ...

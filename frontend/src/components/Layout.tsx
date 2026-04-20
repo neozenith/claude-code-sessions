@@ -1,5 +1,5 @@
 import { NavLink } from 'react-router-dom'
-import { ReactNode, useMemo } from 'react'
+import { ReactNode, useEffect, useMemo, useState } from 'react'
 import {
   LayoutDashboard,
   Calendar,
@@ -14,6 +14,8 @@ import {
   Moon,
   Monitor,
   History,
+  PanelLeftClose,
+  PanelLeftOpen,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -52,9 +54,21 @@ function formatProjectName(projectId: string): string {
     .replace(/^\//, '') // Remove leading slash if any
 }
 
+const SIDEBAR_COLLAPSED_KEY = 'sidebar:collapsed'
+
 export default function Layout({ children }: LayoutProps) {
   const { filters, setFilters, filterSearchString } = useFilters()
   const { theme, setTheme } = useTheme()
+
+  // Sidebar collapse state is persisted to localStorage so a refresh
+  // keeps the user's choice. Default to expanded on first visit.
+  const [collapsed, setCollapsed] = useState<boolean>(() => {
+    if (typeof window === 'undefined') return false
+    return window.localStorage.getItem(SIDEBAR_COLLAPSED_KEY) === '1'
+  })
+  useEffect(() => {
+    window.localStorage.setItem(SIDEBAR_COLLAPSED_KEY, collapsed ? '1' : '0')
+  }, [collapsed])
 
   // Build project list URL with time range filter
   // This makes the project dropdown update when time range changes
@@ -81,45 +95,87 @@ export default function Layout({ children }: LayoutProps) {
 
   return (
     <div className="flex h-screen bg-background">
-      {/* Sidebar */}
-      <aside className="w-64 bg-card border-r flex flex-col">
-        <div className="p-4 border-b">
-          <h1 className="text-xl font-bold">Claude Code</h1>
-          <p className="text-sm text-muted-foreground">Session Analytics</p>
+      {/* Sidebar — width animates between expanded (w-64) and collapsed
+          (w-16, icon-only). The collapsed state persists to localStorage. */}
+      <aside
+        className={cn(
+          'bg-card border-r flex flex-col transition-[width] duration-200',
+          collapsed ? 'w-16' : 'w-64'
+        )}
+      >
+        {/* Header row: title + collapse toggle. When collapsed the title
+            is hidden and only the toggle button remains, centered. */}
+        <div
+          className={cn(
+            'border-b flex items-center',
+            collapsed ? 'justify-center p-2' : 'justify-between p-4'
+          )}
+        >
+          {!collapsed && (
+            <div>
+              <h1 className="text-xl font-bold">Claude Code</h1>
+              <p className="text-sm text-muted-foreground">Session Analytics</p>
+            </div>
+          )}
+          <button
+            onClick={() => setCollapsed((c) => !c)}
+            className="text-muted-foreground hover:text-foreground p-1 rounded-md hover:bg-accent"
+            title={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+            aria-label={collapsed ? 'Expand sidebar' : 'Collapse sidebar'}
+          >
+            {collapsed ? (
+              <PanelLeftOpen className="h-4 w-4" />
+            ) : (
+              <PanelLeftClose className="h-4 w-4" />
+            )}
+          </button>
         </div>
 
         {/* Navigation */}
-        <nav className="flex-1 p-4 overflow-y-auto">
+        <nav className={cn('flex-1 overflow-y-auto', collapsed ? 'p-2' : 'p-4')}>
           <ul className="space-y-2">
             {navItems.map((item) => (
               <li key={item.path}>
                 <NavLink
                   to={buildNavTo(item.path)}
+                  // `title` gives a native tooltip with the full label when
+                  // the sidebar is collapsed to icons only.
+                  title={collapsed ? item.label : undefined}
                   className={({ isActive }) =>
                     cn(
-                      'flex items-center px-4 py-2 rounded-lg transition-colors',
+                      'flex items-center rounded-lg transition-colors',
+                      collapsed ? 'justify-center p-2' : 'px-4 py-2',
                       isActive
                         ? 'bg-primary text-primary-foreground'
                         : 'text-muted-foreground hover:bg-accent hover:text-accent-foreground'
                     )
                   }
                 >
-                  <item.icon className="mr-3 h-4 w-4" />
-                  {item.label}
+                  <item.icon className={cn('h-4 w-4', !collapsed && 'mr-3')} />
+                  {!collapsed && item.label}
                 </NavLink>
               </li>
             ))}
           </ul>
         </nav>
 
-        {/* Theme Toggle */}
-        <div className="p-4 border-t">
-          <p className="text-xs text-muted-foreground mb-2">Theme</p>
-          <div className="flex items-center gap-1 bg-muted rounded-lg p-1">
+        {/* Theme Toggle — horizontal when expanded, vertical when collapsed
+            so the three buttons still fit in a 64px column. */}
+        <div className={cn('border-t', collapsed ? 'p-2' : 'p-4')}>
+          {!collapsed && (
+            <p className="text-xs text-muted-foreground mb-2">Theme</p>
+          )}
+          <div
+            className={cn(
+              'bg-muted rounded-lg p-1',
+              collapsed ? 'flex flex-col gap-1' : 'flex items-center gap-1'
+            )}
+          >
             <button
               onClick={() => setTheme('light')}
               className={cn(
-                'flex-1 flex items-center justify-center p-2 rounded-md transition-colors',
+                'flex items-center justify-center p-2 rounded-md transition-colors',
+                collapsed ? 'w-full' : 'flex-1',
                 theme === 'light'
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
@@ -131,7 +187,8 @@ export default function Layout({ children }: LayoutProps) {
             <button
               onClick={() => setTheme('dark')}
               className={cn(
-                'flex-1 flex items-center justify-center p-2 rounded-md transition-colors',
+                'flex items-center justify-center p-2 rounded-md transition-colors',
+                collapsed ? 'w-full' : 'flex-1',
                 theme === 'dark'
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'
@@ -143,7 +200,8 @@ export default function Layout({ children }: LayoutProps) {
             <button
               onClick={() => setTheme('system')}
               className={cn(
-                'flex-1 flex items-center justify-center p-2 rounded-md transition-colors',
+                'flex items-center justify-center p-2 rounded-md transition-colors',
+                collapsed ? 'w-full' : 'flex-1',
                 theme === 'system'
                   ? 'bg-background text-foreground shadow-sm'
                   : 'text-muted-foreground hover:text-foreground'

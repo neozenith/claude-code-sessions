@@ -86,6 +86,17 @@ export function usePlotlyTheme() {
       },
       legend: {
         font: { color: colors.text },
+        // Project convention: legends always on the RIGHT of the plot
+        // area, stacked vertically. Anchored to the left edge of the
+        // legend box so its text starts just outside the plot; `x: 1.02`
+        // sits clear of the axis ticks without overlapping them.
+        // Individual charts can still override, but should only do so
+        // when a right-side legend genuinely doesn't fit.
+        x: 1.02,
+        y: 1,
+        xanchor: 'left',
+        yanchor: 'top',
+        orientation: 'v',
       },
       coloraxis: {
         colorbar: {

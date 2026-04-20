@@ -4,15 +4,16 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { usePlotlyTheme } from '@/hooks/usePlotlyTheme'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { TopCallsRow } from '@/components/CallsCharts'
+import { CostTokenCombo } from '@/components/CostTokenCombo'
 import { formatNumber, formatProjectName } from '@/lib/formatters'
-import { CHART_COLORS, COST_COLOR } from '@/lib/chart-colors'
-import type { SummaryData, UsageData, TopProjectWeekly } from '@/lib/api-client'
+import { CHART_COLORS } from '@/lib/chart-colors'
+import type { SummaryData, TopProjectWeekly } from '@/lib/api-client'
 
 export default function Dashboard() {
-  const { filters, buildApiQuery } = useFilters()
-  const { colors, mergeLayout } = usePlotlyTheme()
+  const { buildApiQuery } = useFilters()
+  const { mergeLayout } = usePlotlyTheme()
   const { data: summary, loading: summaryLoading } = useApi<SummaryData[]>(`/summary${buildApiQuery()}`)
-  const { data: monthly, loading: monthlyLoading } = useApi<UsageData[]>(`/usage/monthly${buildApiQuery()}`)
   const { data: topProjectsData, loading: topProjectsLoading } = useApi<TopProjectWeekly[]>(
     `/usage/top-projects-weekly${buildApiQuery()}`
   )
@@ -74,41 +75,9 @@ export default function Dashboard() {
     return { projects, weeks, projectColors, projectData }
   }, [topProjectsData])
 
-  // Filter monthly data by project if selected
-  const filteredMonthly = useMemo(() => {
-    if (!monthly) return []
-    if (!filters.project) return monthly
-    return monthly.filter((row) => row.project_id === filters.project)
-  }, [monthly, filters.project])
-
-  // Aggregate monthly costs and token usage by model
-  const { monthlyCosts, tokensByModel, models, sortedMonths } = useMemo(() => {
-    const costs: Record<string, number> = {}
-    const byModel: Record<string, Record<string, number>> = {}
-    const uniqueModels = new Set<string>()
-
-    filteredMonthly.forEach((row) => {
-      const month = row.time_bucket
-      const model = row.model_id || 'unknown'
-
-      costs[month] = (costs[month] || 0) + Number(row.total_cost_usd)
-
-      uniqueModels.add(model)
-      if (!byModel[model]) byModel[model] = {}
-      byModel[model][month] = (byModel[model][month] || 0) +
-        Number(row.total_input_tokens) + Number(row.total_output_tokens)
-    })
-
-    return {
-      monthlyCosts: costs,
-      tokensByModel: byModel,
-      models: Array.from(uniqueModels).sort(),
-      sortedMonths: Object.keys(costs).sort(),
-    }
-  }, [filteredMonthly])
 
   // Early return after all hooks
-  if (summaryLoading || monthlyLoading || topProjectsLoading) {
+  if (summaryLoading || topProjectsLoading) {
     return <div className="text-center py-8">Loading...</div>
   }
 
@@ -158,65 +127,19 @@ export default function Dashboard() {
         </Card>
       </div>
 
-      {/* Monthly Costs + Token Usage Combo Chart */}
-      <Card>
-        <CardHeader>
-          <CardTitle>Monthly Costs &amp; Token Usage by Model</CardTitle>
-        </CardHeader>
-        <CardContent>
-          <Plot
-            data={[
-              // Stacked bar traces for token usage per model (primary y-axis)
-              ...models.map((model, idx) => ({
-                x: sortedMonths,
-                y: sortedMonths.map((m) => tokensByModel[model]?.[m] || 0),
-                type: 'bar' as const,
-                name: (model ?? 'unknown').replace('claude-', ''),
-                marker: { color: CHART_COLORS[idx % CHART_COLORS.length] },
-                text: sortedMonths.map((m) => formatNumber(tokensByModel[model]?.[m] || 0)),
-                textposition: 'inside' as const,
-                textfont: { size: 10 },
-                hovertemplate: '%{x}<br>%{fullData.name}<br>%{y:,} tokens<extra></extra>',
-              })),
-              // Area chart for monthly cost (secondary y-axis, layered on top)
-              {
-                x: sortedMonths,
-                y: sortedMonths.map((m) => monthlyCosts[m]),
-                type: 'scatter' as const,
-                mode: 'text+lines' as const,
-                name: 'Cost (USD)',
-                fill: 'tozeroy' as const,
-                fillcolor: 'rgba(16, 185, 129, 0.15)',
-                line: { color: COST_COLOR, width: 2.5 },
-                text: sortedMonths.map((m) => `$${monthlyCosts[m].toFixed(0)}`),
-                textposition: 'top center' as const,
-                textfont: { color: COST_COLOR, size: 11, weight: 600 },
-                yaxis: 'y2' as const,
-                hovertemplate: '%{x}<br>$%{y:.2f}<extra></extra>',
-              },
-            ]}
-            layout={mergeLayout({
-              autosize: true,
-              margin: { l: 70, r: 140, t: 30, b: 50 },
-              xaxis: { title: { text: 'Month' } },
-              yaxis: { title: { text: 'Total Tokens' }, tickformat: ',.0s' },
-              yaxis2: {
-                title: { text: 'Cost (USD)' },
-                overlaying: 'y',
-                side: 'right',
-                tickprefix: '$',
-                color: colors.text,
-                gridcolor: 'transparent',
-              },
-              showlegend: true,
-              legend: { x: 1.12, y: 1, orientation: 'v' as const, xanchor: 'left' as const },
-              barmode: 'stack',
-            })}
-            useResizeHandler
-            style={{ width: '100%', height: '400px' }}
-          />
-        </CardContent>
-      </Card>
+      {/* Top call dimensions — quick-glance ranking of skills, sub-agents,
+          and CLI commands. Lives right under the summary KPI cards so the
+          Dashboard opens with a one-screen "what's going on" view. */}
+      <TopCallsRow />
+
+      {/* Hero: monthly costs + per-model diverging token bars, zero-aligned.
+          Implementation lives in CostTokenCombo — the same component is
+          reused on the Daily / Weekly / Monthly pages. */}
+      <CostTokenCombo
+        granularity="monthly"
+        xAxisLabel="Month"
+        title="Monthly Costs & Token Usage by Model"
+      />
 
       {/* Top 3 Projects - Last 8 Weeks */}
       {topProjectsAnalysis.projects.length > 0 && (
@@ -290,19 +213,13 @@ export default function Dashboard() {
                 layout={mergeLayout({
                   autosize: true,
                   barmode: 'group',
-                  margin: { l: 50, r: 30, t: 30, b: 80 },
+                  margin: { l: 50, r: 200, t: 30, b: 80 },
                   xaxis: {
                     title: { text: 'Week Starting' },
                     tickangle: -45,
                   },
                   yaxis: { title: { text: 'Cost (USD)' } },
                   showlegend: true,
-                  legend: {
-                    orientation: 'h',
-                    y: -0.2,
-                    x: 0.5,
-                    xanchor: 'center',
-                  },
                 })}
                 useResizeHandler
                 style={{ width: '100%', height: '450px' }}
