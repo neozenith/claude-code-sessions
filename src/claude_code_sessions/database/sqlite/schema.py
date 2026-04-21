@@ -12,7 +12,7 @@ from pathlib import Path
 CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
 
 # Must match the introspect script's version so both tools coexist.
-SCHEMA_VERSION = "10"
+SCHEMA_VERSION = "11"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -167,6 +167,10 @@ CREATE INDEX IF NOT EXISTS idx_event_edges_source_file ON event_edges(source_fil
 --   'rule'        - .claude/rules/... path parsed from <system-reminder> text
 --   'make_target' - target arg(s) parsed from `make <target> ...` segments
 --                   within Bash commands (additive to the 'cli' row for make)
+--   'uv_script'   - script arg parsed from `uv run <script> ...` segments
+--                   (additive to the 'cli' row for uv)
+--   'bun_script'  - script arg parsed from `bun run <script> ...` segments
+--                   (additive to the 'cli' row for bun)
 --
 -- timestamp/project_id/session_id are denormalized off `events` so the
 -- common "calls in a time window" / "calls per project" queries don't
@@ -178,7 +182,10 @@ CREATE TABLE IF NOT EXISTS event_calls (
     event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
     ord INTEGER NOT NULL DEFAULT 0,
     call_type TEXT NOT NULL CHECK (
-        call_type IN ('tool', 'skill', 'subagent', 'cli', 'rule', 'make_target')
+        call_type IN (
+            'tool', 'skill', 'subagent', 'cli', 'rule',
+            'make_target', 'uv_script', 'bun_script'
+        )
     ),
     call_name TEXT NOT NULL,
     timestamp TEXT,

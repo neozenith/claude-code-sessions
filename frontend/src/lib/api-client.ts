@@ -279,7 +279,15 @@ export interface EventRawJson {
 }
 
 /** Discriminator on the event_calls fact table. */
-export type CallType = 'tool' | 'skill' | 'subagent' | 'cli' | 'rule' | 'make_target'
+export type CallType =
+  | 'tool'
+  | 'skill'
+  | 'subagent'
+  | 'cli'
+  | 'rule'
+  | 'make_target'
+  | 'uv_script'
+  | 'bun_script'
 
 /** Row returned by GET /api/calls/timeline — one per (time_bucket, call_type). */
 export interface CallsTimelineRow {

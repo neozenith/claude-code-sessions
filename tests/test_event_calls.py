@@ -10,9 +10,12 @@ import pytest
 
 from claude_code_sessions.database.sqlite.cache import CacheManager
 from claude_code_sessions.database.sqlite.calls import (
+    _BUN_RUN_FLAGS_WITH_ARG,
+    _UV_RUN_FLAGS_WITH_ARG,
     _is_env_assignment,
     _parse_cli_heads,
     _parse_make_targets,
+    _parse_runner_script,
     extract_calls,
 )
 
@@ -163,6 +166,72 @@ class TestParseMakeTargets:
         assert _parse_make_targets(["test", ">log"]) == ["test"]
 
 
+class TestParseRunnerScript:
+    """Parser for `uv run X` / `bun run X` — first positional after `run`."""
+
+    def test_uv_run_simple(self) -> None:
+        assert _parse_runner_script(["run", "pytest"], _UV_RUN_FLAGS_WITH_ARG) == "pytest"
+
+    def test_bun_run_simple(self) -> None:
+        assert _parse_runner_script(["run", "dev"], _BUN_RUN_FLAGS_WITH_ARG) == "dev"
+
+    def test_returns_none_when_not_run(self) -> None:
+        # `uv sync` and `bun install` are not `run` — no script extracted.
+        assert _parse_runner_script(["sync"], _UV_RUN_FLAGS_WITH_ARG) is None
+        assert _parse_runner_script(["install"], _BUN_RUN_FLAGS_WITH_ARG) is None
+
+    def test_returns_none_on_empty(self) -> None:
+        assert _parse_runner_script([], _UV_RUN_FLAGS_WITH_ARG) is None
+
+    def test_skips_uv_flag_with_arg(self) -> None:
+        # `uv run --directory subproject pytest` → pytest, not subproject.
+        result = _parse_runner_script(
+            ["run", "--directory", "subproject", "pytest"],
+            _UV_RUN_FLAGS_WITH_ARG,
+        )
+        assert result == "pytest"
+
+    def test_skips_uv_boolean_flags(self) -> None:
+        # `uv run --no-sync --frozen pytest` → pytest.
+        result = _parse_runner_script(
+            ["run", "--no-sync", "--frozen", "pytest"],
+            _UV_RUN_FLAGS_WITH_ARG,
+        )
+        assert result == "pytest"
+
+    def test_handles_inline_flag_value(self) -> None:
+        # --python=3.12 is self-contained; skip one token.
+        result = _parse_runner_script(
+            ["run", "--python=3.12", "pytest"],
+            _UV_RUN_FLAGS_WITH_ARG,
+        )
+        assert result == "pytest"
+
+    def test_returns_basename_of_path(self) -> None:
+        # `uv run scripts/analyze.py` → analyze.py.
+        result = _parse_runner_script(
+            ["run", "scripts/analyze.py"],
+            _UV_RUN_FLAGS_WITH_ARG,
+        )
+        assert result == "analyze.py"
+
+    def test_bun_cwd_flag_consumes_arg(self) -> None:
+        # `bun run --cwd subproj build` → build (not subproj).
+        result = _parse_runner_script(
+            ["run", "--cwd", "subproj", "build"],
+            _BUN_RUN_FLAGS_WITH_ARG,
+        )
+        assert result == "build"
+
+    def test_returns_none_when_only_flags_after_run(self) -> None:
+        # Malformed: nothing to invoke.
+        result = _parse_runner_script(
+            ["run", "--no-sync", "--frozen"],
+            _UV_RUN_FLAGS_WITH_ARG,
+        )
+        assert result is None
+
+
 # ---------------------------------------------------------------------------
 # extract_calls() — the top-level signal extractor
 # ---------------------------------------------------------------------------
@@ -287,6 +356,49 @@ class TestExtractCalls:
             (0, "make_target", "lint"),
         ]
 
+    def test_uv_run_emits_uv_script_row(self) -> None:
+        ev = _assistant_event([
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "uv run pytest tests/"}},
+        ])
+        assert extract_calls(ev) == [
+            (0, "tool", "Bash"),
+            (0, "cli", "uv"),
+            (0, "uv_script", "pytest"),
+        ]
+
+    def test_bun_run_emits_bun_script_row(self) -> None:
+        ev = _assistant_event([
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "bun run dev"}},
+        ])
+        assert extract_calls(ev) == [
+            (0, "tool", "Bash"),
+            (0, "cli", "bun"),
+            (0, "bun_script", "dev"),
+        ]
+
+    def test_uv_sync_does_not_emit_uv_script(self) -> None:
+        # `uv sync`/`uv add`/etc. aren't `uv run`, so no uv_script row.
+        ev = _assistant_event([
+            {"type": "tool_use", "name": "Bash", "input": {"command": "uv sync"}},
+        ])
+        assert extract_calls(ev) == [
+            (0, "tool", "Bash"),
+            (0, "cli", "uv"),
+        ]
+
+    def test_uv_run_with_flags_emits_correct_script(self) -> None:
+        ev = _assistant_event([
+            {"type": "tool_use", "name": "Bash",
+             "input": {"command": "uv run --directory subproj --no-sync mypy src/"}},
+        ])
+        assert extract_calls(ev) == [
+            (0, "tool", "Bash"),
+            (0, "cli", "uv"),
+            (0, "uv_script", "mypy"),
+        ]
+
     def test_make_bare_emits_no_targets(self) -> None:
         # `make` with no positional target → cli='make' row only, no
         # make_target rows (default target isn't something we can
@@ -308,6 +420,7 @@ class TestExtractCalls:
         assert extract_calls(ev) == [
             (1, "tool", "Bash"),
             (1, "cli", "uv"),
+            (1, "uv_script", "test"),
             (2, "skill", "mdtoc"),
         ]
 

@@ -76,6 +76,37 @@ _MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset({
     "-C", "-f", "-I", "-j", "-l", "-o", "-W",
 })
 
+# ``uv run`` flags that take a following positional argument. Needed so
+# we don't mistake the argument for the script being invoked — e.g. in
+# ``uv run --directory subproject pytest`` the script is ``pytest``.
+_UV_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset({
+    "--directory",
+    "--with",
+    "--with-editable",
+    "--with-requirements",
+    "--python",
+    "-p",
+    "--group",
+    "--extra",
+    "--index-url",
+    "--extra-index-url",
+    "--find-links",
+    "--package",
+    "--prerelease",
+    "--index-strategy",
+    "--resolution",
+    "--exclude-newer",
+    "--keyring-provider",
+    "--refresh-package",
+})
+
+# ``bun run`` flags that take a following positional argument.
+_BUN_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset({
+    "--cwd",
+    "--config",
+    "-c",
+})
+
 
 # ---------------------------------------------------------------------------
 # CLI head parsing
@@ -170,6 +201,58 @@ def _parse_make_targets(tokens_after_make: list[str]) -> list[str]:
         targets.append(tok)
         i += 1
     return targets
+
+
+def _parse_runner_script(
+    tokens_after_runner: list[str],
+    flags_with_arg: frozenset[str],
+) -> str | None:
+    """Extract the first positional after a ``<runner> run …`` sequence.
+
+    ``tokens_after_runner`` is the slice of tokens *after* the runner's
+    head — e.g. for ``uv run --directory subproj pytest tests/`` it's
+    ``['run', '--directory', 'subproj', 'pytest', 'tests/']``. Returns
+    the script/target name (basename'd), or ``None`` if:
+
+    - The first token isn't ``run`` (runner is being used for something
+      other than invoking a script, e.g. ``uv sync``, ``bun install``).
+    - There's no positional after the flags (malformed or truncated).
+
+    Shared between ``uv run`` and ``bun run``; the only per-runner knob
+    is the set of flags that consume a following argument.
+    """
+    if not tokens_after_runner or tokens_after_runner[0] != "run":
+        return None
+
+    i = 1  # skip the literal "run"
+    while i < len(tokens_after_runner):
+        tok = tokens_after_runner[i]
+        # `--flag=value` is self-contained — skip one token.
+        if tok.startswith("--") and "=" in tok:
+            i += 1
+            continue
+        # Flag that consumes the next positional.
+        if tok in flags_with_arg:
+            i += 2
+            continue
+        # Other flags (boolean switches) skip one token.
+        if tok.startswith("-"):
+            i += 1
+            continue
+        # Env assignments (common before uv/bun, but usually stripped
+        # upstream; belt-and-braces).
+        if _is_env_assignment(tok):
+            i += 1
+            continue
+        # Shell redirection artifacts that slipped the splitter.
+        if _is_shell_redirection(tok):
+            i += 1
+            continue
+        # First real positional — this is what's being invoked.
+        # Strip to basename so absolute paths don't fragment the top-N.
+        return tok.rsplit("/", 1)[-1] or None
+
+    return None
 
 
 def _is_shell_redirection(tok: str) -> bool:
@@ -351,15 +434,27 @@ def _extract_tool_use(idx: int, block: dict[str, Any]) -> list[tuple[int, str, s
         command_val = inp.get("command")
         command = command_val if isinstance(command_val, str) else ""
         # Walk each pipeline/chain segment once. For every segment we
-        # emit one 'cli' row (the head) plus, when the head is `make`,
-        # one 'make_target' row per target. A command like
-        # `make test && make lint format` yields:
-        #   cli=make, make_target=test, cli=make,
-        #   make_target=lint, make_target=format
+        # emit one 'cli' row (the head) plus, when the head is a known
+        # runner, additional rows that identify what the runner is
+        # actually executing:
+        #   - ``make <target>``     → one 'make_target' row per target
+        #   - ``uv run <script>``   → one 'uv_script' row
+        #   - ``bun run <script>``  → one 'bun_script' row
+        # These additional rows augment the 'cli' signal — `uv` still
+        # appears in the top-CLIs, but the uv_script dimension lets you
+        # slice "what's actually being run under uv".
         for head, rest in _parse_cli_segments(command):
             rows.append((idx, "cli", head))
             if head == "make":
                 for target in _parse_make_targets(rest):
                     rows.append((idx, "make_target", target))
+            elif head == "uv":
+                script = _parse_runner_script(rest, _UV_RUN_FLAGS_WITH_ARG)
+                if script:
+                    rows.append((idx, "uv_script", script))
+            elif head == "bun":
+                script = _parse_runner_script(rest, _BUN_RUN_FLAGS_WITH_ARG)
+                if script:
+                    rows.append((idx, "bun_script", script))
 
     return rows

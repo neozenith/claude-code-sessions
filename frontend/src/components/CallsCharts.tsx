@@ -33,6 +33,8 @@ const CALL_TYPE_COLORS: Record<CallType, string> = {
   skill: '#10B981',        // green   — skill invocations
   rule: '#8B5CF6',         // violet  — CLAUDE.md / rules triggers
   make_target: '#06B6D4',  // cyan    — Make targets extracted from `make <target>`
+  uv_script: '#EF4444',    // red     — Scripts run via `uv run <script>`
+  bun_script: '#F97316',   // orange  — Scripts run via `bun run <script>`
 }
 
 const CALL_TYPE_LABELS: Record<CallType, string> = {
@@ -42,6 +44,8 @@ const CALL_TYPE_LABELS: Record<CallType, string> = {
   skill: 'Skills',
   rule: 'Rules',
   make_target: 'Make targets',
+  uv_script: 'uv scripts',
+  bun_script: 'bun scripts',
 }
 
 // Render order for the time-series stacked bar (bottom-to-top).
@@ -74,6 +78,28 @@ const CLI_NOISE_EXCLUDE = [
   'sleep', 'ps', 'cd',
 ]
 
+// Well-known Python tools that get invoked via `uv run X` but aren't
+// what the "Top uv scripts" card is trying to surface. The card's goal
+// is custom repo-local scripts and skill entry points that agentic
+// memory or skills directed the model to run — NOT the standard
+// test / lint / format toolchain that runs on every project.
+const UV_SCRIPT_NOISE_EXCLUDE = [
+  // Interpreters
+  'python', 'python3',
+  // Test runners & coverage
+  'pytest', 'coverage',
+  // Formatters / linters
+  'ruff', 'black', 'isort', 'flake8', 'pylint', 'autopep8', 'sqlfluff',
+  // Type checkers
+  'mypy', 'pyright',
+  // Package managers
+  'pip', 'pipx',
+  // Web servers
+  'uvicorn', 'gunicorn',
+  // Common data / platform tools
+  'dbt', 'alembic',
+]
+
 
 // ---------------------------------------------------------------------------
 // TopCallsRow — 3 horizontal-bar cards
@@ -92,7 +118,7 @@ export const TopCallsRow = () => {
 
   // One Top-N fetch per dimension. Each card shows the top 8 entries —
   // enough to expose the long tail without overflowing the card.
-  // Running the four calls in parallel is simpler than a single combined
+  // Running the calls in parallel is simpler than a single combined
   // endpoint.
   const topSkillQuery = buildApiQuery({ call_type: 'skill', limit: 8 })
   const topSubagentQuery = buildApiQuery({ call_type: 'subagent', limit: 8 })
@@ -104,16 +130,28 @@ export const TopCallsRow = () => {
     exclude: CLI_NOISE_EXCLUDE.join(','),
   })
   const topMakeTargetQuery = buildApiQuery({ call_type: 'make_target', limit: 8 })
+  // uv scripts: filter well-known Python tools so the card surfaces
+  // custom scripts (skill entry points, repo-local `.py` files) rather
+  // than the standard toolchain that runs on every project.
+  const topUvScriptQuery = buildApiQuery({
+    call_type: 'uv_script',
+    limit: 8,
+    exclude: UV_SCRIPT_NOISE_EXCLUDE.join(','),
+  })
+  const topBunScriptQuery = buildApiQuery({ call_type: 'bun_script', limit: 8 })
 
   const { data: topSkills } = useApi<TopCallRow[]>(`/calls/top${topSkillQuery}`)
   const { data: topSubagents } = useApi<TopCallRow[]>(`/calls/top${topSubagentQuery}`)
   const { data: topClis } = useApi<TopCallRow[]>(`/calls/top${topCliQuery}`)
   const { data: topMakeTargets } = useApi<TopCallRow[]>(`/calls/top${topMakeTargetQuery}`)
+  const { data: topUvScripts } = useApi<TopCallRow[]>(`/calls/top${topUvScriptQuery}`)
+  const { data: topBunScripts } = useApi<TopCallRow[]>(`/calls/top${topBunScriptQuery}`)
 
-  // Single row of 4 vertical-bar cards. On mobile they stack to one
-  // column; on md+ they split 2×2; on lg+ all 4 sit side-by-side.
+  // Six vertical-bar cards. On mobile they stack to one column; on
+  // md+ they split 2 across; on lg+ 3 across (so six cards land on a
+  // tidy 2×3 grid).
   return (
-    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
+    <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-6">
       <TopCallsCard
         title="Top skills"
         rows={topSkills}
@@ -139,6 +177,20 @@ export const TopCallsRow = () => {
         title="Top make targets"
         rows={topMakeTargets}
         color={CALL_TYPE_COLORS.make_target}
+        colors={colors}
+        mergeLayout={mergeLayout}
+      />
+      <TopCallsCard
+        title="Top uv scripts"
+        rows={topUvScripts}
+        color={CALL_TYPE_COLORS.uv_script}
+        colors={colors}
+        mergeLayout={mergeLayout}
+      />
+      <TopCallsCard
+        title="Top bun scripts"
+        rows={topBunScripts}
+        color={CALL_TYPE_COLORS.bun_script}
         colors={colors}
         mergeLayout={mergeLayout}
       />

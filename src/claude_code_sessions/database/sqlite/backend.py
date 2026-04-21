@@ -551,7 +551,10 @@ class SQLiteDatabase:
     ) -> list[dict[str, Any]]:
         # call_type comes from the API — constrain it to the known set
         # so we can safely interpolate (no user-controlled SQL).
-        if call_type not in {"tool", "skill", "subagent", "cli", "rule", "make_target"}:
+        if call_type not in {
+            "tool", "skill", "subagent", "cli", "rule",
+            "make_target", "uv_script", "bun_script",
+        }:
             raise ValueError(f"unknown call_type: {call_type}")
         safe_limit = max(1, min(int(limit), 500))
         f = self._calls_filters(days, project)
