@@ -11,6 +11,7 @@ import ProjectSessions from './pages/ProjectSessions'
 import SessionDetail from './pages/SessionDetail'
 import Timeline from './pages/Timeline'
 import SchemaTimeline from './pages/SchemaTimeline'
+import SearchPage from './pages/SearchPage'
 
 export default function App() {
   return (
@@ -27,6 +28,7 @@ export default function App() {
         <Route path="/sessions/:projectId/:sessionId" element={<SessionDetail />} />
         <Route path="/timeline" element={<Timeline />} />
         <Route path="/schema-timeline" element={<SchemaTimeline />} />
+        <Route path="/search" element={<SearchPage />} />
       </Routes>
     </Layout>
   )

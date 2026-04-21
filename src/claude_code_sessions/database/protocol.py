@@ -151,3 +151,30 @@ class Database(Protocol):
         without being useful signal.
         """
         ...
+
+    def search_events(
+        self,
+        query: str,
+        *,
+        days: int | None = None,
+        project: str | None = None,
+        msg_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Full-text search over event message content.
+
+        Queries the ``events_fts`` FTS5 index and joins back to
+        ``events`` to return project / session / timestamp context plus a
+        relevance-ranked snippet. Returns an empty list for empty or
+        whitespace-only queries.
+
+        Results respect the global ``days`` and ``project`` filters — a
+        project-scoped search looks at only that project's events, and a
+        time-range limit caps how far back the match can come from.
+
+        ``msg_kind`` optionally restricts results to a single derived
+        message kind (``human``, ``assistant_text``, ``tool_use`` etc.).
+        Applied server-side *before* ranking so the returned top-N is
+        the actual top-N of that kind, not a post-filtered subset.
+        """
+        ...

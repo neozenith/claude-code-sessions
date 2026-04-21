@@ -269,6 +269,24 @@ export class ApiClient {
     }
     return this.get('/calls/top', query)
   }
+
+  /** Full-text search over the events_fts FTS5 index.
+   *
+   * Empty / whitespace-only queries return [] (backend short-circuits) —
+   * safe to call from an uncontrolled input during debounce.
+   *
+   * ``msg_kind`` is applied server-side before LIMIT, so it yields the
+   * top-N of that kind (not a post-filter of the top-N overall).
+   */
+  async searchEvents(params: {
+    q: string
+    days?: number
+    project?: string
+    msg_kind?: MessageKind
+    limit?: number
+  }): Promise<ApiResult<SearchResultRow[]>> {
+    return this.get('/search', params)
+  }
 }
 
 /** Response shape from GET /api/sessions/{p}/{s}/events/{uuid}/raw */
@@ -301,6 +319,29 @@ export interface TopCallRow {
   call_name: string
   call_count: number
   session_count: number
+}
+
+/** Row returned by GET /api/search — one per matching event.
+ *
+ * ``snippet`` contains ``<mark>…</mark>`` tags around each matched token;
+ * consumers render it via ``dangerouslySetInnerHTML`` on sanitized content
+ * (the backend never embeds raw user message text — snippet is already
+ * escaped by FTS5's snippet() function).
+ *
+ * ``rank`` is the BM25 score; lower means more relevant. Results are
+ * pre-sorted by rank ascending.
+ */
+export interface SearchResultRow {
+  project_id: string
+  session_id: string
+  uuid: string | null
+  event_type: string
+  message_kind: MessageKind | null
+  timestamp: string | null
+  timestamp_local: string | null
+  model_id: string | null
+  snippet: string
+  rank: number
 }
 
 // =========================================================================

@@ -15,6 +15,7 @@ import {
   History,
   PanelLeftClose,
   PanelLeftOpen,
+  Search as SearchIcon,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -34,6 +35,7 @@ interface Project {
 
 const navItems = [
   { path: '/', label: 'Dashboard', icon: LayoutDashboard },
+  { path: '/search', label: 'Search', icon: SearchIcon },
   { path: '/hourly', label: 'Hourly', icon: Clock },
   { path: '/hour-of-day', label: 'Hour of Day', icon: Timer },
   { path: '/daily', label: 'Daily', icon: Calendar },

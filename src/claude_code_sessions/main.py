@@ -224,6 +224,32 @@ async def get_top_calls(
     )
 
 
+# ---------------------------------------------------------------------------
+# Full-text search endpoint
+# ---------------------------------------------------------------------------
+
+
+@app.get("/api/search")
+async def search_events(
+    q: str = "",
+    days: int | None = None,
+    project: str | None = None,
+    msg_kind: str | None = None,
+    limit: int = 50,
+) -> list[dict[str, Any]]:
+    """Full-text search across event message content via the ``events_fts``
+    FTS5 index. Respects the global ``days`` + ``project`` filters plus
+    an optional ``msg_kind`` filter, and returns BM25-ranked hits with a
+    highlighted snippet per row.
+
+    Empty / whitespace-only queries short-circuit to ``[]`` in the backend,
+    so this endpoint is safe to call on every keystroke during debounce.
+    """
+    return get_db().search_events(
+        q, days=days, project=project, msg_kind=msg_kind, limit=limit
+    )
+
+
 # Serve frontend static files in production
 frontend_dist = Path(__file__).parent.parent.parent / "frontend" / "dist"
 if frontend_dist.exists():

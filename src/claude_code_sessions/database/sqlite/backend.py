@@ -448,6 +448,78 @@ class SQLiteDatabase:
             ORDER BY e.timestamp IS NULL, e.timestamp
         """, params)
 
+    def search_events(
+        self,
+        query: str,
+        *,
+        days: int | None = None,
+        project: str | None = None,
+        msg_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        # Empty / whitespace-only queries short-circuit — FTS5 MATCH with
+        # an empty string raises, and a no-query search has no
+        # meaningful ranking anyway.
+        cleaned = query.strip()
+        if not cleaned:
+            return []
+
+        safe_limit = max(1, min(int(limit), 500))
+        # FTS5 requires a syntactically valid MATCH expression. Users
+        # type free-form phrases like ``make target error`` which is
+        # not valid FTS5 (it's three unquoted tokens at sentence
+        # boundary). The safe pattern: split on whitespace, wrap each
+        # non-empty token in double quotes, AND them together. Internal
+        # double-quote characters are FTS5-escaped by doubling.
+        tokens = [t.replace('"', '""') for t in cleaned.split() if t]
+        fts_query = " AND ".join(f'"{t}"' for t in tokens)
+
+        # Time and project filters use the same helpers as other reads,
+        # but apply to the joined events table (events_fts itself has
+        # no timestamp / project columns — they live on the content
+        # table it's bound to).
+        f = self._filters(days, project, col_ts="e.timestamp", col_proj="e.project_id")
+
+        # Optional kind filter. Applied server-side *before* the LIMIT so
+        # a request for "top 50 human prompts" actually returns the top
+        # 50 human prompts — not a post-filtered subset of the global
+        # top 50. Whitelisted to the 9 derived kinds plus an empty
+        # sentinel (treated as no filter).
+        kind_clause = ""
+        params: tuple[Any, ...] = (fts_query,)
+        if msg_kind:
+            allowed = {
+                "human", "task_notification", "tool_result", "user_text",
+                "meta", "assistant_text", "thinking", "tool_use", "other",
+            }
+            if msg_kind in allowed:
+                kind_clause = "AND e.msg_kind = ?"
+                params = (fts_query, msg_kind)
+
+        # ``snippet()`` highlights the matched terms in a 200-char window.
+        # ``bm25()`` ranks by TF-IDF-like relevance; lower = more relevant.
+        return self._q(f"""
+            SELECT
+                e.project_id,
+                e.session_id,
+                e.uuid,
+                e.event_type,
+                e.msg_kind AS message_kind,
+                e.timestamp,
+                e.timestamp_local,
+                e.model_id,
+                snippet(events_fts, 0, '<mark>', '</mark>', '…', 32) AS snippet,
+                bm25(events_fts) AS rank
+            FROM events_fts
+            JOIN events e ON events_fts.rowid = e.id
+            WHERE events_fts MATCH ?
+              AND e.timestamp IS NOT NULL
+              {kind_clause}
+              {f}
+            ORDER BY rank
+            LIMIT {safe_limit}
+        """, params)
+
     def get_event_raw_json(
         self, project_id: str, session_id: str, event_uuid: str
     ) -> str | None:

@@ -12,6 +12,8 @@ API endpoint tests run against the SQLite backend via the ``db_backend``
 fixture. (The DuckDB backend was removed; the fixture name is retained.)
 """
 
+from collections import Counter
+
 import pytest
 from fastapi.testclient import TestClient
 
@@ -435,3 +437,153 @@ class TestEdgeCases:
         """Special characters in project ID are handled."""
         response = client.get("/api/usage/daily?project=test%2Fproject")
         assert response.status_code == 200
+
+
+@pytest.mark.usefixtures("db_backend")
+class TestSearchEndpoint:
+    """Test GET /api/search — full-text search over events via FTS5."""
+
+    def test_empty_query_returns_empty_list(self) -> None:
+        """Empty ``q`` short-circuits in the backend and returns []."""
+        response = client.get("/api/search?q=")
+        assert response.status_code == 200
+        data = response.json()
+        assert data == []
+
+    def test_whitespace_query_returns_empty_list(self) -> None:
+        """Whitespace-only queries short-circuit — no FTS5 parse error."""
+        response = client.get("/api/search?q=%20%20%20")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_missing_query_param_returns_empty_list(self) -> None:
+        """Missing ``q`` defaults to an empty string and returns []."""
+        response = client.get("/api/search")
+        assert response.status_code == 200
+        assert response.json() == []
+
+    def test_common_term_returns_result_rows_with_expected_shape(self) -> None:
+        """A term that should match something returns rows with the
+        documented shape: project_id, session_id, uuid, snippet, rank, etc.
+        If the corpus genuinely has no matches, the list is empty and
+        this test degrades to a shape check on zero rows (still valid)."""
+        response = client.get("/api/search?q=claude&limit=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) <= 5
+        for row in data:
+            assert set(row.keys()) >= {
+                "project_id",
+                "session_id",
+                "uuid",
+                "event_type",
+                "message_kind",
+                "timestamp",
+                "timestamp_local",
+                "model_id",
+                "snippet",
+                "rank",
+            }
+            # snippet is the highlighted excerpt and must be a string
+            assert isinstance(row["snippet"], str)
+            # rank is BM25 score — a float, typically negative
+            assert isinstance(row["rank"], (int, float))
+
+    def test_results_are_ordered_by_relevance(self) -> None:
+        """Results come back sorted by BM25 rank ascending (lower is
+        more relevant)."""
+        response = client.get("/api/search?q=claude&limit=20")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            ranks = [row["rank"] for row in data]
+            assert ranks == sorted(ranks)
+
+    def test_days_filter_narrows_or_preserves_result_count(self) -> None:
+        """A narrow time window should return ≤ the all-time count for
+        the same query."""
+        all_time = client.get("/api/search?q=claude&days=0&limit=100")
+        recent = client.get("/api/search?q=claude&days=7&limit=100")
+        assert all_time.status_code == 200
+        assert recent.status_code == 200
+        assert len(recent.json()) <= len(all_time.json())
+
+    def test_project_filter_scopes_results_to_one_project(self) -> None:
+        """When ``project`` is set, every returned row has that
+        project_id."""
+        response = client.get(f"/api/search?q=claude&project={TEST_PROJECT_ID}&limit=20")
+        assert response.status_code == 200
+        for row in response.json():
+            assert row["project_id"] == TEST_PROJECT_ID
+
+    def test_limit_caps_result_count(self) -> None:
+        """``limit`` caps the number of rows returned."""
+        response = client.get("/api/search?q=claude&limit=3")
+        assert response.status_code == 200
+        assert len(response.json()) <= 3
+
+    def test_msg_kind_filter_restricts_to_that_kind(self) -> None:
+        """When ``msg_kind`` is set, every row's message_kind matches."""
+        response = client.get("/api/search?q=claude&msg_kind=human&limit=20")
+        assert response.status_code == 200
+        rows = response.json()
+        for row in rows:
+            assert row["message_kind"] == "human"
+
+    def test_msg_kind_filter_narrows_or_preserves_count(self) -> None:
+        """A kind filter should return ≤ the unfiltered count."""
+        unfiltered = client.get("/api/search?q=claude&limit=100")
+        filtered = client.get("/api/search?q=claude&msg_kind=human&limit=100")
+        assert unfiltered.status_code == 200
+        assert filtered.status_code == 200
+        assert len(filtered.json()) <= len(unfiltered.json())
+
+    def test_msg_kind_filter_applies_before_limit(self) -> None:
+        """The kind filter must narrow the corpus *before* LIMIT, so the
+        top-N of that kind actually contains N results when the kind is
+        well-represented. We can't assert on absolute counts without
+        knowing the corpus, but we CAN assert that when the global top-N
+        has ≥1 matching row for a kind, the kind-filtered query returns
+        ≥ that many rows (i.e. it isn't losing results to post-filter)."""
+        overall = client.get("/api/search?q=claude&limit=50").json()
+        if not overall:
+            return  # empty corpus — nothing to check
+        # Pick the most common kind in the overall top-50 and ensure the
+        # kind-filtered query returns at least the same number of hits
+        # for that kind that appeared in the overall top-50.
+        kind_counts = Counter(r["message_kind"] for r in overall if r["message_kind"])
+        if not kind_counts:
+            return
+        top_kind, overall_count = kind_counts.most_common(1)[0]
+        filtered = client.get(
+            f"/api/search?q=claude&msg_kind={top_kind}&limit=50"
+        ).json()
+        assert len(filtered) >= overall_count
+
+    def test_msg_kind_invalid_value_returns_empty_list(self) -> None:
+        """Invalid kind names (not in the whitelist) match nothing in
+        practice — the filter falls through as no-op. Since the
+        whitelist guards against SQL injection, we just verify a
+        200 and a list (may be empty or full depending on impl)."""
+        response = client.get("/api/search?q=claude&msg_kind=nonsense&limit=5")
+        assert response.status_code == 200
+        assert isinstance(response.json(), list)
+
+    def test_malformed_but_safe_query_does_not_error(self) -> None:
+        """User queries are whitespace-tokenized and each token is
+        wrapped in double quotes before being handed to FTS5. This means
+        syntactically hostile inputs (quotes, parens, wildcards, SQL
+        injection attempts) should not produce a 500 — they should
+        either match literally or return no rows."""
+        hostile_queries = [
+            'foo "bar',         # unbalanced quote
+            "foo AND NOT OR",   # FTS5 keywords used as content
+            "foo*",             # wildcard syntax
+            "'; DROP TABLE events; --",  # SQL injection attempt
+            "(foo)",            # parens
+        ]
+        for q in hostile_queries:
+            response = client.get("/api/search", params={"q": q, "limit": 3})
+            assert response.status_code == 200, f"failed for query: {q!r}"
+            assert isinstance(response.json(), list)

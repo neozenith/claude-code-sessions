@@ -45,6 +45,7 @@ const SECTIONS = [
   { id: 6, slug: 'sessions', name: 'Sessions', path: '/sessions' },
   { id: 7, slug: 'timeline', name: 'Timeline', path: '/timeline' },
   { id: 8, slug: 'schematimeline', name: 'SchemaTimeline', path: '/schema-timeline' },
+  { id: 9, slug: 'search', name: 'Search', path: '/search' },
 ] as const
 
 const TIME_RANGES = [

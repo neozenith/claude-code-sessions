@@ -5,6 +5,7 @@ import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName } from '@/lib/formatters'
 import type { SessionEvent, MessageContentItem, MessageKind } from '@/lib/api-client'
+import { MSG_KIND_OPTIONS } from '@/lib/message-kinds'
 import {
   ChevronLeft,
   ChevronDown,
@@ -27,19 +28,6 @@ import {
 } from 'lucide-react'
 
 // Message kind filter options — "All messages" + the 9 fine-grained kinds
-const MSG_KIND_OPTIONS: { value: MessageKind | ''; label: string; description: string }[] = [
-  { value: '', label: 'All messages', description: 'Show everything' },
-  { value: 'human', label: 'Human prompt', description: 'Actual typed user input' },
-  { value: 'task_notification', label: 'Task notification', description: 'Async task completion callbacks' },
-  { value: 'assistant_text', label: 'Assistant text', description: 'Model text responses' },
-  { value: 'thinking', label: 'Thinking', description: 'Extended thinking blocks' },
-  { value: 'tool_use', label: 'Tool call', description: 'Tool invocations by the model' },
-  { value: 'tool_result', label: 'Tool result', description: 'Output returned from tools' },
-  { value: 'user_text', label: 'User text', description: 'User messages with text blocks' },
-  { value: 'meta', label: 'Meta / injected', description: 'System-injected context (isMeta=true)' },
-  { value: 'other', label: 'System / progress', description: 'Progress, system, queue-operation events' },
-]
-
 // Message kind styling — one unique color + icon per derived kind
 const MESSAGE_KIND_CONFIG: Record<MessageKind, { icon: typeof User; label: string; color: string; bgColor: string; badgeBg: string }> = {
   human: {
