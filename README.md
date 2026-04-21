@@ -4,17 +4,192 @@ FastAPI + React dashboard for visualizing Claude Code session usage and costs fr
 
 ## Architecture Diagrams
 
-### Quick Overview
-![Architecture Overview](docs/diagrams/architecture-overview.png)
-*High-level system components and data flow* | [Source](docs/diagrams/architecture-overview.mmd)
+Each lens below has a simplified overview (always visible) and a detailed
+reference (collapsed). Diagrams render natively on GitHub / GitLab — no
+pre-rendered PNG step. Color encoding is consistent across all three:
+🟦 source · 🟪 process · 🟧 storage · 🟩 output.
 
-### Detailed Views
+### System architecture
 
-| Diagram | Description |
-|---------|-------------|
-| [Architecture](docs/diagrams/architecture-overview.png) | FastAPI + React + SQLite components and relationships ([source](docs/diagrams/architecture-overview.mmd)) |
-| [Data Flow](docs/diagrams/data-flow-overview.png) | Processing pipeline from JSONL files to visualizations ([source](docs/diagrams/data-flow-overview.mmd)) |
-| [API Sequence](docs/diagrams/sequence-api.png) | Request/response flows for all API endpoints ([source](docs/diagrams/sequence-api.mmd)) |
+```mermaid
+flowchart LR
+    JSONL[("~/.claude/projects/<br/>JSONL logs")]:::source
+    API["FastAPI<br/>:8100 / :8101"]:::process
+    CACHE[("~/.claude/cache/<br/>SQLite index")]:::storage
+    UI["React + Vite<br/>:5273 / :5274"]:::output
+
+    JSONL -->|ingest| API
+    API -->|read/write| CACHE
+    API -->|JSON| UI
+
+    classDef source  fill:#1e40af,color:#ffffff
+    classDef storage fill:#92400e,color:#ffffff
+    classDef process fill:#5b21b6,color:#ffffff
+    classDef output  fill:#047857,color:#ffffff
+```
+
+*4 nodes — the end-to-end data path in one line.*
+
+<details>
+<summary>📋 Detailed architecture (subgraphs by responsibility)</summary>
+
+```mermaid
+flowchart TB
+    JSONL[("~/.claude/projects/<br/>JSONL logs")]:::source
+    RSYNC["rsync → ./projects/<br/>(optional local copy)"]:::source
+
+    subgraph Backend["Backend (src/claude_code_sessions/)"]
+        INGEST["CacheManager<br/>mtime-based scan"]:::process
+        PARSE["_parse_event +<br/>compute_event_costs"]:::process
+        DB["SQLiteDatabase<br/>query layer"]:::process
+        API["FastAPI + uvicorn<br/>main.py"]:::process
+    end
+
+    CACHE[("~/.claude/cache/<br/>introspect_sessions.db")]:::storage
+
+    subgraph Frontend["Frontend (React + Vite)"]
+        ROUTES["Routes<br/>Dashboard / Daily / Weekly /<br/>Monthly / Sessions / Timeline"]:::output
+        CHARTS["Plotly.js + shadcn/ui"]:::output
+    end
+
+    JSONL --> RSYNC
+    JSONL --> INGEST
+    RSYNC --> INGEST
+    INGEST --> PARSE
+    PARSE --> CACHE
+    DB --> CACHE
+    API --> DB
+    API --> ROUTES
+    ROUTES --> CHARTS
+
+    classDef source  fill:#1e40af,color:#ffffff
+    classDef storage fill:#92400e,color:#ffffff
+    classDef process fill:#5b21b6,color:#ffffff
+    classDef output  fill:#047857,color:#ffffff
+```
+
+</details>
+
+### Data flow — JSONL to charts
+
+```mermaid
+flowchart LR
+    S["Claude JSONL<br/>events"]:::source
+    I["Ingest<br/>(mtime diff)"]:::process
+    D[("events +<br/>event_calls")]:::storage
+    AGG[("agg<br/>(pre-rollups)")]:::storage
+    API["API layer"]:::process
+    UI["Charts"]:::output
+
+    S --> I --> D
+    D --> AGG
+    AGG --> API
+    D --> API
+    API --> UI
+
+    classDef source  fill:#1e40af,color:#ffffff
+    classDef storage fill:#92400e,color:#ffffff
+    classDef process fill:#5b21b6,color:#ffffff
+    classDef output  fill:#047857,color:#ffffff
+```
+
+*6 nodes — ingest writes to fact tables, a nightly rollup populates `agg` for fast time-series reads.*
+
+<details>
+<summary>📋 Detailed data flow (per-function pipeline)</summary>
+
+```mermaid
+flowchart LR
+    S1[("JSONL files")]:::source
+    DISC["discover_files"]:::process
+    NEED["get_files_needing_update<br/>(mtime / size diff)"]:::process
+    PARSE["_parse_event"]:::process
+    COST["compute_event_costs<br/>(hardcoded pricing)"]:::process
+    EXTRACT["extract_calls<br/>(tool/skill/subagent/cli/<br/>rule/make_target/<br/>uv_script/bun_script)"]:::process
+
+    subgraph DB["SQLite cache"]
+        EV[("events")]:::storage
+        EC[("event_calls")]:::storage
+        AGG[("agg (hourly/daily/<br/>weekly/monthly)")]:::storage
+        SESS[("sessions + projects")]:::storage
+    end
+
+    API["FastAPI endpoints"]:::process
+    UI["React + Plotly"]:::output
+
+    S1 --> DISC --> NEED --> PARSE
+    PARSE --> COST --> EV
+    PARSE --> EXTRACT --> EC
+    EV --> AGG
+    EV --> SESS
+    AGG --> API
+    SESS --> API
+    EC --> API
+    API --> UI
+
+    classDef source  fill:#1e40af,color:#ffffff
+    classDef storage fill:#92400e,color:#ffffff
+    classDef process fill:#5b21b6,color:#ffffff
+    classDef output  fill:#047857,color:#ffffff
+```
+
+</details>
+
+### API request/response flow
+
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant API as FastAPI
+    participant DB as SQLite cache
+
+    F->>+API: GET /api/summary?days=30
+    API->>+DB: SELECT from agg
+    DB-->>-API: aggregates
+    API-->>-F: JSON
+```
+
+*The canonical read path — dashboard endpoints all follow this shape.*
+
+<details>
+<summary>📋 Detailed API flow (every endpoint family)</summary>
+
+```mermaid
+sequenceDiagram
+    participant F as Frontend
+    participant API as FastAPI
+    participant DB as SQLite cache
+
+    Note over F,DB: Startup
+    F->>API: GET /api/health
+    API-->>F: {status, projects_path}
+
+    Note over F,DB: Summary & time-series (agg reads)
+    F->>+API: /api/summary, /api/usage/{daily,weekly,monthly,hourly}
+    API->>+DB: SELECT from agg WHERE granularity = ?
+    DB-->>-API: bucketed rows
+    API-->>-F: JSON
+
+    Note over F,DB: Sessions & per-session metrics
+    F->>+API: GET /api/sessions?project=...
+    API->>+DB: sessions LEFT JOIN event_calls CTEs<br/>(tool/skill/make counts + top_skill)
+    DB-->>-API: session rows with call metrics
+    API-->>-F: JSON
+
+    Note over F,DB: Timeline
+    F->>+API: GET /api/timeline/events/:project
+    API->>+DB: Window-function SELECT on events
+    DB-->>-API: events with cumulative tokens
+    API-->>-F: JSON
+
+    Note over F,DB: Call analytics (event_calls fact table)
+    F->>+API: GET /api/calls/timeline, /api/calls/top
+    API->>+DB: GROUP BY on event_calls
+    DB-->>-API: counts / top-N names
+    API-->>-F: JSON
+```
+
+</details>
 
 ## Quick Start
 
