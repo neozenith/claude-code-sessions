@@ -7,16 +7,27 @@ Provides parametrized fixtures for:
   existing test classes using ``@pytest.mark.usefixtures("db_backend")``
   keep working.
 - ``project_blocked`` — runs tests with domain blocking on and off.
+
+Tests must never trigger the embedding sync: it downloads a ~150 MB
+GGUF model and runs for minutes against a real corpus. We set the
+disable flag before importing anything that could construct a
+CacheManager.
 """
 
-import pytest
+import os
 
-from claude_code_sessions.config import (
+# Must be set BEFORE importing claude_code_sessions — CacheManager.update()
+# reads this env var when it decides whether to run embeddings.
+os.environ.setdefault("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS", "1")
+
+import pytest  # noqa: E402
+
+from claude_code_sessions.config import (  # noqa: E402
     HOME_PROJECTS_PATH,
     PROJECTS_PATH,
 )
-from claude_code_sessions.database import Database, SQLiteDatabase
-from claude_code_sessions.main import app
+from claude_code_sessions.database import Database, SQLiteDatabase  # noqa: E402
+from claude_code_sessions.main import app  # noqa: E402
 
 
 # ---------------------------------------------------------------------------

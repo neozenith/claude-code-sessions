@@ -12,7 +12,7 @@ from pathlib import Path
 CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
 
 # Must match the introspect script's version so both tools coexist.
-SCHEMA_VERSION = "11"
+SCHEMA_VERSION = "12"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -240,4 +240,46 @@ CREATE INDEX IF NOT EXISTS idx_agg_granularity_time
     ON agg(granularity, time_bucket);
 CREATE INDEX IF NOT EXISTS idx_agg_granularity_project_time
     ON agg(granularity, project_id, time_bucket);
+
+-- =====================================================================
+-- event_message_chunks — paragraph-sized splits of event content for
+-- vector embedding. Populated by
+-- `claude_code_sessions.database.sqlite.embeddings.sync_chunks()`.
+--
+-- The companion HNSW virtual table `chunks_vec` is NOT declared here:
+-- it requires the `sqlite-muninn` extension to be loaded first, so the
+-- CacheManager creates it at connection-open time via
+-- `setup_embedding_runtime()`.
+--
+-- FK CASCADE on event_id means re-ingesting an event (which deletes the
+-- old row and inserts a new one) automatically wipes stale chunks. The
+-- next sync_chunks() pass regenerates them for the new content.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS event_message_chunks (
+    chunk_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    event_id INTEGER NOT NULL REFERENCES events(id) ON DELETE CASCADE,
+    text TEXT NOT NULL,
+    chunk_offset INTEGER NOT NULL DEFAULT 0
+);
+CREATE INDEX IF NOT EXISTS idx_chunks_event_id
+    ON event_message_chunks(event_id);
+
+CREATE VIRTUAL TABLE IF NOT EXISTS event_message_chunks_fts
+    USING fts5(text, content=event_message_chunks, content_rowid=chunk_id);
+
+CREATE TRIGGER IF NOT EXISTS chunks_ai AFTER INSERT ON event_message_chunks BEGIN
+    INSERT INTO event_message_chunks_fts(rowid, text)
+        VALUES (new.chunk_id, new.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_ad AFTER DELETE ON event_message_chunks BEGIN
+    INSERT INTO event_message_chunks_fts(event_message_chunks_fts, rowid, text)
+        VALUES('delete', old.chunk_id, old.text);
+END;
+CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON event_message_chunks BEGIN
+    INSERT INTO event_message_chunks_fts(event_message_chunks_fts, rowid, text)
+        VALUES('delete', old.chunk_id, old.text);
+    INSERT INTO event_message_chunks_fts(rowid, text)
+        VALUES (new.chunk_id, new.text);
+END;
 """

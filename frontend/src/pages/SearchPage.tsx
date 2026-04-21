@@ -1,12 +1,13 @@
 import { useEffect, useMemo, useState } from 'react'
 import { Link, useSearchParams } from 'react-router-dom'
-import { Search as SearchIcon, Filter } from 'lucide-react'
+import { Search as SearchIcon, Filter, Sparkles, Type } from 'lucide-react'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { cn } from '@/lib/utils'
 import { formatProjectName } from '@/lib/formatters'
 import { MSG_KIND_OPTIONS } from '@/lib/message-kinds'
-import type { MessageKind, SearchResultRow } from '@/lib/api-client'
+import type { MessageKind, SearchMode, SearchResultRow } from '@/lib/api-client'
 
 const QUERY_DEBOUNCE_MS = 300
 
@@ -30,6 +31,12 @@ export default function SearchPage() {
   // SessionDetail, so a deep link from one view carries the filter into
   // the other. Empty string means "no filter".
   const msgKindFilter = (searchParams.get('msg') ?? '') as MessageKind | ''
+
+  // Search mode — keyword (FTS5) or semantic (HNSW vector KNN). URL
+  // state so deep links stick. Default keyword; only write the param
+  // when the user picks semantic, for clean URLs.
+  const searchMode: SearchMode =
+    searchParams.get('mode') === 'semantic' ? 'semantic' : 'keyword'
 
   // Debounce local input → URL. We intentionally do NOT strip whitespace
   // here so that pasting a query with a leading space still feels
@@ -73,19 +80,34 @@ export default function SearchPage() {
     })
   }
 
+  // Write the search-mode toggle to `?mode=` (or clear it for keyword).
+  const setSearchMode = (mode: SearchMode) => {
+    setSearchParams((prev) => {
+      const next = new URLSearchParams(prev)
+      if (mode === 'semantic') {
+        next.set('mode', mode)
+      } else {
+        next.delete('mode')
+      }
+      return next
+    })
+  }
+
   // Skip fetching on empty queries — `useApi(null)` is the idiomatic
   // way to conditionally fetch. Saves a round-trip on initial mount.
   const apiEndpoint = useMemo(() => {
     const trimmed = urlQuery.trim()
     if (!trimmed) return null
-    // Put `q` and (optionally) `msg_kind` into the existing filter query
-    // string so days/project stack on top of them. The backend applies
-    // `msg_kind` before the LIMIT so selecting "human prompts" yields
-    // the top-N human prompts, not a post-filter of the overall top-N.
+    // Put `q`, `mode` and (optionally) `msg_kind` into the existing
+    // filter query string so days/project stack on top of them. The
+    // backend applies `msg_kind` before the LIMIT so selecting "human
+    // prompts" yields the top-N human prompts, not a post-filter of the
+    // overall top-N.
     const extra: Record<string, string | number | null> = { q: trimmed, limit: 50 }
     if (msgKindFilter) extra.msg_kind = msgKindFilter
+    if (searchMode === 'semantic') extra.mode = 'semantic'
     return `/search${buildApiQuery(extra)}`
-  }, [urlQuery, msgKindFilter, buildApiQuery])
+  }, [urlQuery, msgKindFilter, searchMode, buildApiQuery])
 
   const { data: results, loading, error } = useApi<SearchResultRow[]>(apiEndpoint)
 
@@ -109,6 +131,47 @@ export default function SearchPage() {
               autoFocus
               data-testid="search-input"
             />
+          </div>
+
+          {/* Mode toggle — segmented control between keyword (FTS5
+              BM25) and semantic (HNSW cosine KNN). Ranking semantics
+              differ per mode but the row shape is identical so the
+              layout below doesn't need to care. */}
+          <div
+            className="flex items-center gap-1 mt-3 p-1 bg-muted rounded-lg w-fit"
+            role="tablist"
+            data-testid="search-mode-toggle"
+          >
+            <button
+              onClick={() => setSearchMode('keyword')}
+              role="tab"
+              aria-selected={searchMode === 'keyword'}
+              data-testid="search-mode-keyword"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1 text-sm rounded-md transition-colors',
+                searchMode === 'keyword'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Type className="h-3.5 w-3.5" />
+              Keyword
+            </button>
+            <button
+              onClick={() => setSearchMode('semantic')}
+              role="tab"
+              aria-selected={searchMode === 'semantic'}
+              data-testid="search-mode-semantic"
+              className={cn(
+                'flex items-center gap-1.5 px-3 py-1 text-sm rounded-md transition-colors',
+                searchMode === 'semantic'
+                  ? 'bg-background text-foreground shadow-sm'
+                  : 'text-muted-foreground hover:text-foreground',
+              )}
+            >
+              <Sparkles className="h-3.5 w-3.5" />
+              Semantic
+            </button>
           </div>
 
           {/* Kind filter row — mirrors the dropdown on SessionDetail and
@@ -136,8 +199,9 @@ export default function SearchPage() {
           </div>
 
           <p className="text-xs text-muted-foreground mt-2">
-            Full-text search over event content via SQLite FTS5. Scoped by the
-            global time range, project, and message-kind filters.
+            {searchMode === 'semantic'
+              ? 'Vector similarity search over the HNSW chunk index. The query is embedded server-side with NomicEmbed, then ranked by cosine distance. Only human prompts are indexed.'
+              : 'Full-text search over event content via SQLite FTS5. Scoped by the global time range, project, and message-kind filters.'}
           </p>
         </CardContent>
       </Card>
@@ -178,6 +242,10 @@ export default function SearchPage() {
             // sessions listing when the row lacks a session_id. We also
             // forward the msg-kind filter so the destination page
             // preserves it.
+            // We deliberately DON'T forward ``?mode=`` into the link —
+            // it's a search-page-local state that means nothing on the
+            // session detail view. msg-kind IS forwarded because
+            // SessionDetail consumes it as an event-kind filter.
             let href: string
             if (row.session_id) {
               const params = new URLSearchParams(filterSearchString.replace(/^\?/, ''))
@@ -236,7 +304,17 @@ export default function SearchPage() {
                     <div className="flex items-center gap-3 text-xs text-muted-foreground mt-2 font-mono">
                       {row.message_kind && <span>{row.message_kind}</span>}
                       {row.model_id && <span>· {row.model_id}</span>}
-                      <span>· rank {row.rank.toFixed(2)}</span>
+                      <span
+                        title={
+                          searchMode === 'semantic'
+                            ? 'Cosine distance between query and chunk embeddings (lower = more similar)'
+                            : 'BM25 relevance score (lower = more relevant)'
+                        }
+                      >
+                        {' · '}
+                        {searchMode === 'semantic' ? 'distance' : 'rank'}{' '}
+                        {row.rank.toFixed(3)}
+                      </span>
                     </div>
                   </CardContent>
                 </Card>

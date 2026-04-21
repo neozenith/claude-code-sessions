@@ -15,7 +15,20 @@ from claude_code_sessions.config import (
     HOME_PROJECTS_PATH,
     PROJECTS_PATH,
 )
-from claude_code_sessions.database import Database, SQLiteDatabase
+
+# Configure logging BEFORE importing the database layer — the import
+# itself triggers cache construction (module-level SQLiteDatabase(...)
+# instance below), which emits phase banners we want the user to see.
+# Uvicorn later installs its own handlers for "uvicorn"/"uvicorn.access",
+# but leaves everyone else alone, so this basicConfig governs our own
+# log.info() calls for the rest of the process lifetime.
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
+    datefmt="%H:%M:%S",
+)
+
+from claude_code_sessions.database import Database, SQLiteDatabase  # noqa: E402
 
 log = logging.getLogger(__name__)
 
@@ -236,16 +249,38 @@ async def search_events(
     project: str | None = None,
     msg_kind: str | None = None,
     limit: int = 50,
+    mode: str = "keyword",
 ) -> list[dict[str, Any]]:
-    """Full-text search across event message content via the ``events_fts``
-    FTS5 index. Respects the global ``days`` + ``project`` filters plus
-    an optional ``msg_kind`` filter, and returns BM25-ranked hits with a
-    highlighted snippet per row.
+    """Search across event message content.
 
-    Empty / whitespace-only queries short-circuit to ``[]`` in the backend,
-    so this endpoint is safe to call on every keystroke during debounce.
+    Two ranking modes are dispatched from this single endpoint so
+    frontend code has a uniform response shape:
+
+    * ``mode=keyword`` (default): FTS5 BM25 search over
+      ``events_fts``. ``rank`` is a BM25 score (lower = more relevant).
+      ``snippet`` includes ``<mark>…</mark>`` highlight tags.
+    * ``mode=semantic``: HNSW vector KNN against the ``chunks_vec``
+      index, using the same NomicEmbed GGUF that built the index to
+      embed the query server-side. ``rank`` is cosine distance
+      (lower = more similar). ``snippet`` is the matched chunk's text
+      verbatim (no highlights — semantic matches don't localise to a
+      token).
+
+    Both modes respect the global ``days`` / ``project`` filters and
+    the optional ``msg_kind`` filter. Empty / whitespace-only queries
+    short-circuit to ``[]`` in the backend, so it's safe to call on
+    every keystroke during debounce.
+
+    Unknown mode values fall back to keyword search — a no-op today,
+    but documented so future-us doesn't remove it and break clients
+    that sent a typo.
     """
-    return get_db().search_events(
+    db = get_db()
+    if mode == "semantic":
+        return db.semantic_search_events(
+            q, days=days, project=project, msg_kind=msg_kind, limit=limit
+        )
+    return db.search_events(
         q, days=days, project=project, msg_kind=msg_kind, limit=limit
     )
 

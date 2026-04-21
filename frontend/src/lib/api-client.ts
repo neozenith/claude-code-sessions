@@ -270,13 +270,20 @@ export class ApiClient {
     return this.get('/calls/top', query)
   }
 
-  /** Full-text search over the events_fts FTS5 index.
+  /** Search event content.
    *
-   * Empty / whitespace-only queries return [] (backend short-circuits) —
-   * safe to call from an uncontrolled input during debounce.
+   * Two ranking modes, dispatched on ``mode``:
+   * - ``'keyword'`` (default): FTS5 BM25 over events_fts. Snippet
+   *   includes `<mark>…</mark>` highlights; rank is BM25 score.
+   * - ``'semantic'``: HNSW vector KNN against chunks_vec. Server embeds
+   *   the query via the GGUF model, so the client never sees vectors.
+   *   Snippet is the verbatim chunk text; rank is cosine distance.
    *
-   * ``msg_kind`` is applied server-side before LIMIT, so it yields the
-   * top-N of that kind (not a post-filter of the top-N overall).
+   * Both modes share the same response shape. Empty / whitespace-only
+   * queries return [] (backend short-circuits).
+   *
+   * ``msg_kind`` is applied server-side before LIMIT (keyword) or
+   * before the KNN fetch's candidate cap (semantic).
    */
   async searchEvents(params: {
     q: string
@@ -284,6 +291,7 @@ export class ApiClient {
     project?: string
     msg_kind?: MessageKind
     limit?: number
+    mode?: SearchMode
   }): Promise<ApiResult<SearchResultRow[]>> {
     return this.get('/search', params)
   }
@@ -320,6 +328,9 @@ export interface TopCallRow {
   call_count: number
   session_count: number
 }
+
+/** Ranking mode for `/api/search`. Default is keyword (FTS5 BM25). */
+export type SearchMode = 'keyword' | 'semantic'
 
 /** Row returned by GET /api/search — one per matching event.
  *

@@ -17,6 +17,13 @@ from claude_code_sessions.config import (
 )
 from claude_code_sessions.database.raw_json import read_jsonl_line
 from claude_code_sessions.database.sqlite.cache import CacheManager
+from claude_code_sessions.database.sqlite.embeddings import (
+    EMBED_MAX_CHARS,
+    EMBEDDED_MSG_KINDS,
+    GGUF_MODEL_NAME,
+    ensure_model_downloaded,
+    setup_embedding_runtime,
+)
 from claude_code_sessions.database.sqlite.filters import (
     days_clause,
     domain_clause,
@@ -519,6 +526,118 @@ class SQLiteDatabase:
             ORDER BY rank
             LIMIT {safe_limit}
         """, params)
+
+    # -----------------------------------------------------------------
+    # Semantic search — vector KNN against the HNSW chunk index
+    # -----------------------------------------------------------------
+
+    def _ensure_muninn_runtime(self) -> bool:
+        """Ensure sqlite-muninn is loaded + the GGUF model is registered
+        on this connection.
+
+        Returns True if the runtime is ready for ``muninn_embed()`` calls,
+        False if the embedding feature is unavailable (model missing
+        AND not downloadable, or the chunks_vec table doesn't exist).
+
+        Idempotent: ``setup_embedding_runtime`` short-circuits when the
+        model is already in ``temp.muninn_models`` and the HNSW virtual
+        table is already declared.
+        """
+        # If chunks_vec_nodes doesn't exist, embeddings were never built
+        # and there's nothing to search. We return False here rather than
+        # raising so the HTTP layer can serve an empty list gracefully —
+        # this is "feature not available" signalling, not an error.
+        row = self._cache.conn.execute(
+            "SELECT name FROM sqlite_master WHERE name = 'chunks_vec_nodes'"
+        ).fetchone()
+        if row is None:
+            return False
+
+        # ensure_model_downloaded() will block for ~10 s on a slow link
+        # but we've already paid that cost once; subsequent calls are a
+        # file-exists check. If the file is gone (user cleaned the cache
+        # dir) we re-download — loud failure there is correct, so we
+        # don't swallow the exception.
+        model_path = ensure_model_downloaded()
+        setup_embedding_runtime(self._cache.conn, model_path)
+        return True
+
+    def semantic_search_events(
+        self,
+        query: str,
+        *,
+        days: int | None = None,
+        project: str | None = None,
+        msg_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        cleaned = query.strip()
+        if not cleaned:
+            return []
+        # Only human prompts are embedded today (see EMBEDDED_MSG_KINDS).
+        # Requesting any other kind can't produce hits — short-circuit.
+        if msg_kind and msg_kind not in EMBEDDED_MSG_KINDS:
+            return []
+
+        if not self._ensure_muninn_runtime():
+            return []
+
+        safe_limit = max(1, min(int(limit), 500))
+        # Over-fetch 4× so post-filters (days/project) still leave enough
+        # results. The HNSW index itself can't pre-filter: muninn's KNN
+        # returns exactly ``k`` rows regardless of our WHERE clause.
+        # Without over-fetching, a project-scoped query could see the
+        # top-50 global matches collapse to <10 after filtering.
+        knn_k = min(safe_limit * 4, 500)
+        # Truncate query text the same way we truncate chunks when
+        # embedding them — the query and stored vectors must come from
+        # the same tokenizer-window regime to be comparable.
+        embed_text = cleaned[:EMBED_MAX_CHARS]
+
+        f = self._filters(days, project, col_ts="e.timestamp", col_proj="e.project_id")
+        kind_clause = ""
+        extra_params: tuple[Any, ...] = ()
+        if msg_kind:
+            kind_clause = "AND e.msg_kind = ?"
+            extra_params = (msg_kind,)
+
+        # Query shape:
+        #   1. ann CTE: HNSW KNN — returns (chunk_id, distance) for the
+        #      top-k nearest chunks. Embedding happens server-side via
+        #      muninn_embed() directly in the MATCH clause — no round
+        #      trip to the client for the vector blob.
+        #   2. JOIN through event_message_chunks → events to recover
+        #      project/session/timestamp/model context + apply filters.
+        #   3. ORDER BY distance, cap at safe_limit.
+        #
+        # ``rank`` is aliased to ``distance`` so the response shape
+        # matches the FTS search's ``rank`` field (both lower-is-better).
+        return self._q(f"""
+            WITH ann AS (
+                SELECT rowid AS chunk_id, distance
+                FROM chunks_vec
+                WHERE vector MATCH muninn_embed(?, ?) AND k = ?
+            )
+            SELECT
+                e.project_id,
+                e.session_id,
+                e.uuid,
+                e.event_type,
+                e.msg_kind AS message_kind,
+                e.timestamp,
+                e.timestamp_local,
+                e.model_id,
+                emc.text AS snippet,
+                ann.distance AS rank
+            FROM ann
+            JOIN event_message_chunks emc ON emc.chunk_id = ann.chunk_id
+            JOIN events e ON e.id = emc.event_id
+            WHERE e.timestamp IS NOT NULL
+              {kind_clause}
+              {f}
+            ORDER BY ann.distance
+            LIMIT {safe_limit}
+        """, (GGUF_MODEL_NAME, embed_text, knn_k) + extra_params)
 
     def get_event_raw_json(
         self, project_id: str, session_id: str, event_uuid: str

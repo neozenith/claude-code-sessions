@@ -309,4 +309,74 @@ test.describe('Search page', () => {
     expect(href).toBeTruthy()
     expect(href).toContain('msg=human')
   })
+
+  // ---- search mode (keyword vs semantic) ----------------------------
+
+  test('mode toggle is visible and defaults to keyword', async ({ page }) => {
+    await page.goto('/search')
+    await waitForSearchReady(page)
+
+    const toggle = page.locator('[data-testid="search-mode-toggle"]')
+    await expect(toggle).toBeVisible()
+    const keywordBtn = page.locator('[data-testid="search-mode-keyword"]')
+    const semanticBtn = page.locator('[data-testid="search-mode-semantic"]')
+    await expect(keywordBtn).toHaveAttribute('aria-selected', 'true')
+    await expect(semanticBtn).toHaveAttribute('aria-selected', 'false')
+  })
+
+  test('clicking Semantic writes ?mode=semantic and forwards to API', async ({ page }) => {
+    const apiUrls: string[] = []
+    page.on('request', (req) => {
+      const u = req.url()
+      if (u.includes('/api/search') && u.includes('q=')) {
+        apiUrls.push(u)
+      }
+    })
+
+    await page.goto(`/search?q=${encodeURIComponent(COMMON_TERM)}`)
+    await waitForSearchReady(page)
+    await page.waitForTimeout(DEBOUNCE_WAIT_MS + 500)
+
+    await page.locator('[data-testid="search-mode-semantic"]').click()
+    await page.waitForTimeout(DEBOUNCE_WAIT_MS + 500)
+
+    // URL reflects the semantic mode.
+    const url = new URL(page.url())
+    expect(url.searchParams.get('mode')).toBe('semantic')
+
+    // The most recent API request carries mode=semantic.
+    const lastApi = apiUrls[apiUrls.length - 1]
+    expect(lastApi).toContain('mode=semantic')
+    expect(lastApi).toContain('q=')
+  })
+
+  test('clicking Keyword from semantic mode drops ?mode= from URL', async ({ page }) => {
+    await page.goto(
+      `/search?q=${encodeURIComponent(COMMON_TERM)}&mode=semantic`,
+    )
+    await waitForSearchReady(page)
+    await page.waitForTimeout(DEBOUNCE_WAIT_MS + 500)
+
+    await page.locator('[data-testid="search-mode-keyword"]').click()
+    await page.waitForTimeout(DEBOUNCE_WAIT_MS)
+
+    // Keyword is default — omit from URL for clean links.
+    const url = new URL(page.url())
+    expect(url.searchParams.has('mode')).toBe(false)
+    expect(url.searchParams.get('q')).toBe(COMMON_TERM)
+  })
+
+  test('deep-link ?mode=semantic selects the Semantic tab on load', async ({ page }) => {
+    await page.goto('/search?mode=semantic')
+    await waitForSearchReady(page)
+
+    await expect(page.locator('[data-testid="search-mode-semantic"]')).toHaveAttribute(
+      'aria-selected',
+      'true',
+    )
+    await expect(page.locator('[data-testid="search-mode-keyword"]')).toHaveAttribute(
+      'aria-selected',
+      'false',
+    )
+  })
 })

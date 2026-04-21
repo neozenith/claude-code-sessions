@@ -178,3 +178,29 @@ class Database(Protocol):
         the actual top-N of that kind, not a post-filtered subset.
         """
         ...
+
+    def semantic_search_events(
+        self,
+        query: str,
+        *,
+        days: int | None = None,
+        project: str | None = None,
+        msg_kind: str | None = None,
+        limit: int = 50,
+    ) -> list[dict[str, Any]]:
+        """Vector-similarity search over the HNSW chunk index.
+
+        Embeds ``query`` server-side using the same GGUF model that built
+        the index, then returns the nearest chunks ranked by cosine
+        distance. Response shape matches ``search_events`` — same keys,
+        with ``rank`` holding the distance (lower is closer, matching
+        FTS5's BM25 convention where lower is more relevant).
+
+        Results respect the ``days``/``project``/``msg_kind`` filters.
+        Because the underlying index only embeds ``msg_kind='human'``
+        events today, requesting any other ``msg_kind`` yields no hits.
+
+        Returns an empty list for empty queries or when the embedding
+        runtime isn't available (e.g. model not yet downloaded).
+        """
+        ...

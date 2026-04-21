@@ -17,10 +17,46 @@ from pathlib import Path
 from typing import Any
 
 from claude_code_sessions.database.sqlite.calls import extract_calls
+from claude_code_sessions.database.sqlite.embeddings import (
+    ensure_model_downloaded,
+    setup_embedding_runtime,
+    sync_chunks,
+    sync_embeddings,
+)
 from claude_code_sessions.database.sqlite.pricing import compute_event_costs, message_kind
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQL, SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# Phase banner helpers
+# ---------------------------------------------------------------------------
+#
+# Startup emits a lot of INFO log lines from different stages. Without
+# visual structure they read as an undifferentiated wall and make it
+# hard to tell at a glance which part of the pipeline just ran.
+#
+# Each lifecycle stage opens with ``_phase()`` and closes with
+# ``_phase_done()`` so an operator scanning the log sees:
+#
+#     ── phase 3/6: ingest events ──
+#     ... progress ...
+#     ── phase 3/6: ingest events — 7 files, 1234 events in 2.3 s ──
+#
+# The dashes are plain ASCII so the output stays readable in any
+# terminal, grep, or log-aggregator.
+
+
+def _phase(step: int, total: int, label: str) -> None:
+    log.info("──────── phase %d/%d: %s ────────", step, total, label)
+
+
+def _phase_done(step: int, total: int, label: str, summary: str) -> None:
+    log.info("──── phase %d/%d: %s — %s ────", step, total, label, summary)
+
+
+_CACHE_PHASE_COUNT = 6
 
 
 class CacheManager:
@@ -45,7 +81,10 @@ class CacheManager:
             self._conn = None
 
     def init_schema(self) -> None:
-        log.info("Initializing cache schema at %s", self.db_path)
+        # Silent: the caller (ensure_ready) owns the "created version X"
+        # banner so we don't double-log. This is called unconditionally
+        # on every startup to pick up additive DDL, so a chatty log line
+        # here would fire on every request.
         self.conn.executescript(SCHEMA_SQL)
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
@@ -56,7 +95,6 @@ class CacheManager:
             ("created_at", datetime.now(UTC).isoformat()),
         )
         self.conn.commit()
-        log.info("Cache schema initialized (version %s)", SCHEMA_VERSION)
 
     def needs_rebuild(self) -> bool:
         try:
@@ -70,7 +108,7 @@ class CacheManager:
             return True
 
     def reset(self) -> None:
-        log.warning("Resetting cache database — schema version mismatch")
+        # Caller (ensure_ready phase 1) owns the "wiping" banner.
         self.close()
         if self.db_path.exists():
             self.db_path.unlink()
@@ -479,7 +517,7 @@ class CacheManager:
         elapsed_ms = (time.monotonic() - t0) * 1000
         range_desc = "full" if start_bucket is None else f"{start_bucket}..{end_bucket}"
         log.info(
-            "Refreshed agg tables (%s): %s (%.0f ms)",
+            "  agg (%s): %s (%.0f ms)",
             range_desc,
             ", ".join(f"{g}={c}" for g, c in counts.items()),
             elapsed_ms,
@@ -528,69 +566,114 @@ class CacheManager:
         project_count = cursor.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
         session_count = cursor.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         log.info(
-            "Rebuilt aggregates: %d projects, %d sessions (%.0f ms)",
+            "  projects+sessions rollup: %d projects, %d sessions (%.0f ms)",
             project_count, session_count, elapsed_ms,
         )
 
     # -- Update orchestration ------------------------------------------------
 
     def update(self, projects_path: Path) -> dict[str, Any]:
-        """Perform incremental update of the cache. Returns counts."""
-        t0 = time.monotonic()
+        """Run the incremental data-sync phases (2–6 of the lifecycle).
 
+        Phase 1 (schema) is owned by ``ensure_ready``. Everything below
+        is driven off a single file-discovery pass so we only scan the
+        source tree once per startup.
+        """
+        total = _CACHE_PHASE_COUNT
+
+        # ── Phase 2: discover JSONL files ─────────────────────────────
+        _phase(2, total, "discover JSONL files")
+        log.info("scanning %s", projects_path)
         all_files = self.discover_files(projects_path)
-        log.info("Discovered %d JSONL files in %s", len(all_files), projects_path)
-
         files_to_update = self.get_files_needing_update(all_files)
-        if not files_to_update:
-            log.info("Cache is up to date — no files changed")
-            # Even when no files changed, the agg_* tables may be empty
-            # (first start after the schema upgrade that added them). In
-            # that case we still need to do a full population from the
-            # already-present events.
-            if self._agg_tables_empty():
-                log.info("Dimensional aggregates empty — backfilling from events")
-                self.refresh_aggregates_for_range()
-            return {"files_updated": 0, "events_added": 0}
-
         new_count = sum(1 for f in files_to_update if f.get("reason") == "new")
         modified_count = sum(1 for f in files_to_update if f.get("reason") == "modified")
-        log.info(
-            "Cache update needed: %d files (%d new, %d modified)",
-            len(files_to_update), new_count, modified_count,
+        unchanged = len(all_files) - len(files_to_update)
+        _phase_done(
+            2, total, "discover JSONL files",
+            f"{len(all_files)} files "
+            f"({new_count} new, {modified_count} modified, {unchanged} unchanged)",
         )
 
+        # ── Phase 3: ingest events ────────────────────────────────────
+        _phase(3, total, "ingest events")
         total_events = 0
         affected_source_file_ids: list[int] = []
-        for i, file_info in enumerate(files_to_update, 1):
-            events_added = self.ingest_file(file_info)
-            total_events += events_added
-            # Track the source_file_ids that were (re-)ingested so we can
-            # scope the agg refresh to just their timestamp window.
-            sfid = file_info.get("source_file_id")
-            if isinstance(sfid, int):
-                affected_source_file_ids.append(sfid)
-            if i % 50 == 0 or i == len(files_to_update):
-                log.info(
-                    "  Ingested %d/%d files (%d events so far)",
-                    i, len(files_to_update), total_events,
-                )
-        self.conn.commit()
+        if not files_to_update:
+            _phase_done(3, total, "ingest events", "nothing to ingest")
+        else:
+            t_ingest = time.monotonic()
+            for i, file_info in enumerate(files_to_update, 1):
+                events_added = self.ingest_file(file_info)
+                total_events += events_added
+                sfid = file_info.get("source_file_id")
+                if isinstance(sfid, int):
+                    affected_source_file_ids.append(sfid)
+                if i % 50 == 0 or i == len(files_to_update):
+                    log.info(
+                        "  ingested %d/%d files (%d events so far)",
+                        i, len(files_to_update), total_events,
+                    )
+            self.conn.commit()
+            _phase_done(
+                3, total, "ingest events",
+                f"{len(files_to_update)} files, {total_events} events "
+                f"in {time.monotonic() - t_ingest:.1f} s",
+            )
 
-        # Session/project roll-ups (kept as full rebuild — cheap, tiny tables)
-        self.rebuild_aggregates()
+        # ── Phase 4: aggregate tables ─────────────────────────────────
+        _phase(4, total, "aggregate tables")
+        t_agg = time.monotonic()
+        if files_to_update:
+            # Session / project roll-ups are full rebuilds (tiny tables,
+            # cheap) whenever new events landed.
+            self.rebuild_aggregates()
 
-        # Dimensional agg_* tables — incremental by affected time range.
-        # If the agg tables are empty (first run after the schema addition),
-        # this takes the full-rebuild path. Otherwise we scope to the window
-        # of timestamps that were just ingested.
+        # Dimensional agg_* is either a full cold rebuild (first start
+        # after schema bump) or a scoped range refresh.
         if self._agg_tables_empty():
-            log.info("Dimensional aggregates empty — doing full cold rebuild")
+            log.info("dimensional aggregates empty — full cold rebuild")
             self.refresh_aggregates_for_range()
         elif affected_source_file_ids:
             window = self._timestamp_window_for_files(affected_source_file_ids)
             if window is not None:
+                log.info("dimensional aggregates — range refresh %s..%s", *window)
                 self.refresh_aggregates_for_range(window[0], window[1])
+            else:
+                log.info("dimensional aggregates — up to date")
+        else:
+            log.info("dimensional aggregates — up to date")
+        _phase_done(
+            4, total, "aggregate tables", f"refreshed in {time.monotonic() - t_agg:.1f} s",
+        )
+
+        # ── Phase 5: chunk human-prompt events ────────────────────────
+        _phase(5, total, "chunk human-prompt events")
+        t_chunk = time.monotonic()
+        chunks_added = sync_chunks(self.conn)
+        if chunks_added:
+            _phase_done(
+                5, total, "chunk human-prompt events",
+                f"{chunks_added} chunks added in {time.monotonic() - t_chunk:.1f} s",
+            )
+        else:
+            _phase_done(5, total, "chunk human-prompt events", "up to date")
+
+        # ── Phase 6: embed chunks ─────────────────────────────────────
+        _phase(6, total, "embed chunks")
+        t_embed = time.monotonic()
+        flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS", "").strip().lower()
+        embeddings_disabled = flag in {"1", "true", "yes", "on"}
+        embeddings_added = self.sync_embeddings()
+        if embeddings_disabled:
+            _phase_done(6, total, "embed chunks", "skipped (env flag)")
+        elif embeddings_added:
+            _phase_done(
+                6, total, "embed chunks",
+                f"{embeddings_added} vectors added in {time.monotonic() - t_embed:.1f} s",
+            )
+        else:
+            _phase_done(6, total, "embed chunks", "up to date")
 
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
@@ -598,34 +681,83 @@ class CacheManager:
         )
         self.conn.commit()
 
-        elapsed = time.monotonic() - t0
-        log.info(
-            "Cache update complete: %d files, %d events in %.1f s",
-            len(files_to_update), total_events, elapsed,
-        )
-        return {"files_updated": len(files_to_update), "events_added": total_events}
+        return {
+            "files_updated": len(files_to_update),
+            "events_added": total_events,
+            "chunks_added": chunks_added,
+            "embeddings_added": embeddings_added,
+        }
+
+    def sync_embeddings(self) -> int:
+        """Run the incremental embedding sync.
+
+        Always active in production so the HNSW index stays in step with
+        the chunks table. Tests and CI opt out via
+        ``CLAUDE_SESSIONS_DISABLE_EMBEDDINGS=1`` — this is purely a
+        test-isolation escape hatch, NOT a user-facing toggle. Do not
+        document it as one; the expectation is that the cache always
+        has up-to-date embeddings.
+
+        Raises if the GGUF model can't be downloaded — silent failure
+        here would produce a partially-embedded cache that looks
+        complete, which is worse than a loud error.
+        """
+        flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS", "").strip().lower()
+        if flag in {"1", "true", "yes", "on"}:
+            log.info("  skipped (CLAUDE_SESSIONS_DISABLE_EMBEDDINGS set)")
+            return 0
+        model_path = ensure_model_downloaded()
+        log.info("  loading GGUF into temp.muninn_models")
+        setup_embedding_runtime(self.conn, model_path)
+        return sync_embeddings(self.conn)
 
     def ensure_ready(self, projects_path: Path) -> None:
         """Ensure cache exists, schema is current, and data is fresh.
 
-        The schema SQL uses ``CREATE X IF NOT EXISTS`` throughout, so running
-        ``init_schema()`` on every startup is safe and idempotent — and it
-        picks up new additive schema changes (new indexes, new columns via
-        ALTER TABLE, etc.) without forcing a full rebuild.
+        This is the orchestrator called at backend startup. It emits
+        phase banners for each stage of the lifecycle so an operator
+        watching logs can see exactly where time is being spent:
+
+            phase 1/6: schema check
+            phase 2/6: discover JSONL files
+            phase 3/6: ingest new/modified events
+            phase 4/6: rebuild aggregate tables
+            phase 5/6: chunk human-prompt messages
+            phase 6/6: embed chunks into HNSW index
+
+        Each phase is a no-op when nothing is stale, but still announces
+        itself with a "(up to date)" / "(skipped)" summary so silence
+        never means "stuck" — it always means "finished with nothing
+        to do".
         """
+        t0 = time.monotonic()
+        total = _CACHE_PHASE_COUNT
+        log.info("════════════════════════════════════════════════════════")
+        log.info(" Cache lifecycle — %s", self.db_path)
+        log.info("════════════════════════════════════════════════════════")
+
+        # ── Phase 1: schema ────────────────────────────────────────────
+        _phase(1, total, "schema check")
         if not self.db_path.exists():
-            log.info("Cache not found — initializing from scratch")
+            log.info("cache file missing — creating fresh at %s", self.db_path)
             self.init_schema()
-            self.update(projects_path)
-            return
-
-        if self.needs_rebuild():
-            log.info("Schema version mismatch — rebuilding cache")
+            _phase_done(1, total, "schema check", f"initialized (version {SCHEMA_VERSION})")
+        elif self.needs_rebuild():
+            log.info("schema version mismatch — wiping cache for rebuild")
             self.reset()
-            self.update(projects_path)
-            return
+            _phase_done(1, total, "schema check", f"reset (version → {SCHEMA_VERSION})")
+        else:
+            # Running init_schema() on an already-current cache is safe
+            # and picks up additive DDL changes (new indexes, new
+            # tables) without forcing a full rebuild.
+            self.init_schema()
+            _phase_done(1, total, "schema check", f"up to date (version {SCHEMA_VERSION})")
 
-        # Existing cache with matching version — still run init_schema() to
-        # apply any additive changes (new indexes), then incrementally update.
-        self.init_schema()
+        # Phases 2-6 live inside update() so they share the same
+        # discovery + needs_update scan. update() uses _phase()/
+        # _phase_done() too so the caller sees the full 1..6 progression.
         self.update(projects_path)
+
+        log.info("════════════════════════════════════════════════════════")
+        log.info(" Cache ready in %.1f s", time.monotonic() - t0)
+        log.info("════════════════════════════════════════════════════════")

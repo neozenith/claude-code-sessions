@@ -587,3 +587,116 @@ class TestSearchEndpoint:
             response = client.get("/api/search", params={"q": q, "limit": 3})
             assert response.status_code == 200, f"failed for query: {q!r}"
             assert isinstance(response.json(), list)
+
+    # ---- mode dispatch ------------------------------------------------
+
+    def test_keyword_mode_is_default(self) -> None:
+        """Omitting mode is equivalent to mode=keyword — both hit FTS5."""
+        r_default = client.get("/api/search?q=claude&limit=5")
+        r_keyword = client.get("/api/search?q=claude&limit=5&mode=keyword")
+        assert r_default.status_code == 200
+        assert r_keyword.status_code == 200
+        # Same query, same corpus — both results sets should match.
+        assert r_default.json() == r_keyword.json()
+
+    def test_unknown_mode_falls_back_to_keyword(self) -> None:
+        """An unknown mode value is tolerated — it silently dispatches to
+        keyword search rather than 500-ing. Documented behaviour."""
+        response = client.get("/api/search?q=claude&limit=5&mode=typo")
+        assert response.status_code == 200
+        # Should match the keyword response for the same query.
+        assert response.json() == client.get("/api/search?q=claude&limit=5").json()
+
+    def test_semantic_mode_empty_query_returns_empty(self) -> None:
+        """Semantic mode honours the same empty-query short-circuit as
+        keyword — no attempt to embed '' and no KNN against the HNSW
+        index."""
+        response = client.get("/api/search?q=&mode=semantic")
+        assert response.status_code == 200
+        assert response.json() == []
+
+
+@pytest.mark.usefixtures("db_backend")
+class TestSemanticSearchEndpoint:
+    """Test GET /api/search?mode=semantic — vector KNN over chunks_vec.
+
+    These tests run against the real shared SQLite cache. If the cache
+    has no vectors (embeddings disabled or model never downloaded), the
+    endpoint still returns 200 with an empty list rather than erroring —
+    that's the documented "feature not available" contract. When vectors
+    do exist, we additionally assert on the response shape and rank
+    monotonicity.
+    """
+
+    def _has_vectors(self) -> bool:
+        """Probe the real cache for vectors. Used to skip assertions
+        that only make sense when embeddings have been built."""
+        from claude_code_sessions.main import app
+
+        try:
+            row = app.state.db._cache.conn.execute(  # type: ignore[attr-defined]
+                "SELECT COUNT(*) FROM chunks_vec_nodes"
+            ).fetchone()
+            return row is not None and row[0] > 0
+        except Exception:
+            return False
+
+    def test_semantic_query_returns_list(self) -> None:
+        """Semantic endpoint returns a list regardless of index state."""
+        response = client.get("/api/search?q=claude%20code%20review&mode=semantic&limit=5")
+        assert response.status_code == 200
+        data = response.json()
+        assert isinstance(data, list)
+        assert len(data) <= 5
+
+    def test_semantic_results_have_same_shape_as_keyword(self) -> None:
+        """Response shape is uniform across modes so clients don't branch."""
+        if not self._has_vectors():
+            return
+        response = client.get("/api/search?q=cache%20rebuild&mode=semantic&limit=5")
+        assert response.status_code == 200
+        for row in response.json():
+            assert set(row.keys()) >= {
+                "project_id",
+                "session_id",
+                "uuid",
+                "event_type",
+                "message_kind",
+                "timestamp",
+                "timestamp_local",
+                "model_id",
+                "snippet",
+                "rank",
+            }
+            assert isinstance(row["snippet"], str)
+            assert isinstance(row["rank"], (int, float))
+
+    def test_semantic_results_ordered_by_distance_ascending(self) -> None:
+        """HNSW returns results with distance ascending — nearest first."""
+        if not self._has_vectors():
+            return
+        response = client.get("/api/search?q=embedding%20model&mode=semantic&limit=20")
+        assert response.status_code == 200
+        data = response.json()
+        if len(data) >= 2:
+            ranks = [r["rank"] for r in data]
+            assert ranks == sorted(ranks)
+
+    def test_semantic_project_filter_scopes_results(self) -> None:
+        """Project filter post-filters the KNN candidate set."""
+        if not self._has_vectors():
+            return
+        response = client.get(
+            f"/api/search?q=testing&mode=semantic&limit=20&project={TEST_PROJECT_ID}"
+        )
+        assert response.status_code == 200
+        for row in response.json():
+            assert row["project_id"] == TEST_PROJECT_ID
+
+    def test_semantic_non_human_msg_kind_returns_empty(self) -> None:
+        """Only 'human' is indexed today — other kinds short-circuit."""
+        response = client.get(
+            "/api/search?q=anything&mode=semantic&msg_kind=tool_use&limit=5"
+        )
+        assert response.status_code == 200
+        assert response.json() == []

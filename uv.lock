@@ -51,6 +51,7 @@ dependencies = [
     { name = "fastapi" },
     { name = "pydantic" },
     { name = "pytz" },
+    { name = "sqlite-muninn" },
     { name = "uvicorn", extra = ["standard"] },
 ]
 
@@ -67,6 +68,7 @@ requires-dist = [
     { name = "fastapi", specifier = ">=0.104.0" },
     { name = "pydantic", specifier = ">=2.0.0" },
     { name = "pytz", specifier = ">=2025.2" },
+    { name = "sqlite-muninn", specifier = ">=0.3.3" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.24.0" },
 ]
 
@@ -474,6 +476,17 @@ source = { registry = "https://pypi.org/simple" }
 sdist = { url = "https://files.pythonhosted.org/packages/a2/87/a6771e1546d97e7e041b6ae58d80074f81b7d5121207425c964ddf5cfdbd/sniffio-1.3.1.tar.gz", hash = "sha256:f4324edc670a0f49750a81b895f35c3adb843cca46f0530f79fc1babb23789dc", size = 20372, upload-time = "2024-02-25T23:20:04.057Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/e9/44/75a9c9421471a6c4805dbf2356f7c181a29c1879239abab1ea2cc8f38b40/sniffio-1.3.1-py3-none-any.whl", hash = "sha256:2f6da418d1f1e0fddd844478f41680e794e6051915791a034ff65e5f100525a2", size = 10235, upload-time = "2024-02-25T23:20:01.196Z" },
+]
+
+[[package]]
+name = "sqlite-muninn"
+version = "0.3.3"
+source = { registry = "https://pypi.org/simple" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/82/69/4d6434620786db787b928cf6586bf785cd62d7f6ec34c4558b8d39a7f5bc/sqlite_muninn-0.3.3-py3-none-macosx_11_0_universal2.whl", hash = "sha256:6e8e58d66a379da8288d60561690a290aa9f458c3635395abb5882bcb3080346", size = 2977028, upload-time = "2026-04-21T07:42:01.24Z" },
+    { url = "https://files.pythonhosted.org/packages/62/95/b608f40e3f326b04c17f43b3c8ac8683e69366d8f1c233608438db168152/sqlite_muninn-0.3.3-py3-none-manylinux_2_17_aarch64.whl", hash = "sha256:f1129889871180860a323164af5d38066f3d978c18dd447249a6ff466598814c", size = 1424006, upload-time = "2026-04-21T07:42:04.125Z" },
+    { url = "https://files.pythonhosted.org/packages/10/2e/a9c8cc5a6c9439bfcb529c0f9966f885449f4517531c5c6a3628e4d5b643/sqlite_muninn-0.3.3-py3-none-manylinux_2_17_x86_64.whl", hash = "sha256:bf2baa7f3714414344d643aedc0757316cc13e80d45ca60c38d01d0749a505e7", size = 1492214, upload-time = "2026-04-21T07:42:05.674Z" },
+    { url = "https://files.pythonhosted.org/packages/a8/de/ca8d1c1eaa3c8d541bf6234e1027d2c8b6fc152b35b467d76910a00fe065/sqlite_muninn-0.3.3-py3-none-win_amd64.whl", hash = "sha256:55f9c3e0d894d8d2cd8cd5e693a99b67d9ed745ab0aea2dcfaa4974b964c307c", size = 1336971, upload-time = "2026-04-21T07:42:02.765Z" },
 ]
 
 [[package]]

@@ -12,6 +12,7 @@ dependencies = [
     "uvicorn[standard]>=0.24.0",
     "pydantic>=2.0.0",
     "pytz>=2025.2",
+    "sqlite-muninn>=0.3.3",
 ]
 
 [project.scripts]
@@ -57,4 +58,11 @@ warn_return_any = true
 warn_unused_configs = true
 disallow_untyped_defs = true
 disallow_incomplete_defs = true
+
+# sqlite-muninn ships a compiled extension + tiny Python loader but no
+# py.typed marker; the loader surface we use (load, loadable_path,
+# __version__) is simple enough that silencing the import is safe.
+[[tool.mypy.overrides]]
+module = "sqlite_muninn"
+ignore_missing_imports = true
 

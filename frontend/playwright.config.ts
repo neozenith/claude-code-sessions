@@ -43,9 +43,15 @@ export default defineConfig({
 
   webServer: [
     {
+      // CLAUDE_SESSIONS_DISABLE_EMBEDDINGS=1 — the first-time embedding
+      // sync downloads a ~150 MB GGUF model and embeds the full human-
+      // prompt backlog, taking many minutes. E2E tests don't exercise
+      // semantic search, so skipping the sync keeps the webServer
+      // startup fast enough to satisfy Playwright's 120 s readiness
+      // timeout.
       command:
         'concurrently --kill-others --names "be,fe" ' +
-        '"BACKEND_PORT=8101 uv run python -m claude_code_sessions.main" ' +
+        '"CLAUDE_SESSIONS_DISABLE_EMBEDDINGS=1 BACKEND_PORT=8101 uv run python -m claude_code_sessions.main" ' +
         '"VITE_BACKEND_URL=http://localhost:8101 npx vite --port 5274"',
       url: 'http://localhost:8101/api/health',
       reuseExistingServer: !process.env.CI,
