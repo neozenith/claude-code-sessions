@@ -1,10 +1,10 @@
 import argparse
 import logging
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from fastapi.staticfiles import StaticFiles
@@ -14,6 +14,12 @@ from claude_code_sessions.config import (
     BACKEND_PORT,
     HOME_PROJECTS_PATH,
     PROJECTS_PATH,
+)
+from claude_code_sessions.database.sqlite.kg.payload import (
+    VALID_SEED_METRICS,
+    KGDataMissing,
+    KGPayload,
+    SeedMetric,
 )
 
 # Configure logging BEFORE importing the database layer — the import
@@ -283,6 +289,51 @@ async def search_events(
     return db.search_events(
         q, days=days, project=project, msg_kind=msg_kind, limit=limit
     )
+
+
+# ---------------------------------------------------------------------------
+# Knowledge graph endpoint (resolved-entity graph only)
+# ---------------------------------------------------------------------------
+# This project intentionally does NOT serve the base graph — only the
+# entity-resolved variant — so there is no /api/kg/{table_id} dispatch
+# and no /api/kg/tables discovery endpoint. One route, one response shape.
+# Errors:
+#   422 — KGDataMissing (pipeline hasn't populated nodes/edges yet)
+#   400 — invalid seed_metric / out-of-range numeric param
+
+
+@app.get("/api/kg/er")
+async def kg_er(
+    resolution: float | None = None,
+    top_n: int = 50,
+    seed_metric: str = "edge_betweenness",
+    max_depth: int = 0,
+    min_degree: int = 1,
+    days: int | None = None,
+    project: str | None = None,
+) -> KGPayload:
+    if seed_metric not in VALID_SEED_METRICS:
+        raise HTTPException(
+            status_code=400,
+            detail=(
+                f"invalid seed_metric {seed_metric!r}; "
+                f"expected one of {list(VALID_SEED_METRICS)}"
+            ),
+        )
+    try:
+        return get_db().get_kg_er(
+            resolution=resolution,
+            top_n=top_n,
+            seed_metric=cast(SeedMetric, seed_metric),
+            max_depth=max_depth,
+            min_degree=min_degree,
+            days=days,
+            project=project,
+        )
+    except KGDataMissing as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 # Serve frontend static files in production

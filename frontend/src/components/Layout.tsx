@@ -16,6 +16,7 @@ import {
   PanelLeftClose,
   PanelLeftOpen,
   Search as SearchIcon,
+  Network,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -44,6 +45,7 @@ const navItems = [
   { path: '/sessions', label: 'Sessions', icon: History },
   { path: '/timeline', label: 'Timeline', icon: Activity },
   { path: '/schema-timeline', label: 'Schema Timeline', icon: GitBranch },
+  { path: '/kg', label: 'Knowledge Graph', icon: Network },
 ]
 
 // Format project name for display

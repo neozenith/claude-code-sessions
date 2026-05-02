@@ -11,10 +11,13 @@ import json
 import logging
 import os
 import sqlite3
+import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
+
+import sqlite_muninn
 
 from claude_code_sessions.database.sqlite.calls import extract_calls
 from claude_code_sessions.database.sqlite.embeddings import (
@@ -23,6 +26,7 @@ from claude_code_sessions.database.sqlite.embeddings import (
     sync_chunks,
     sync_embeddings,
 )
+from claude_code_sessions.database.sqlite.kg import sync_kg
 from claude_code_sessions.database.sqlite.pricing import compute_event_costs, message_kind
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQL, SCHEMA_VERSION
 
@@ -56,7 +60,7 @@ def _phase_done(step: int, total: int, label: str, summary: str) -> None:
     log.info("──── phase %d/%d: %s — %s ────", step, total, label, summary)
 
 
-_CACHE_PHASE_COUNT = 6
+_CACHE_PHASE_COUNT = 7
 
 
 class CacheManager:
@@ -675,6 +679,28 @@ class CacheManager:
         else:
             _phase_done(6, total, "embed chunks", "up to date")
 
+        # ── Phase 7: knowledge graph ──────────────────────────────────
+        # The KG pipeline runs in a *background daemon thread* so the
+        # web server boot is not gated on a multi-hour NER+RE pass over
+        # the full chunk corpus. All other dashboards stay responsive
+        # immediately; the /kg page sees data appear as the pipeline
+        # progresses and the per-phase commits land.
+        #
+        # CLAUDE_SESSIONS_DISABLE_KG is a TEST-ISOLATION escape hatch
+        # only — never advertised as a user feature.
+        _phase(7, total, "knowledge graph")
+        kg_flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_KG", "").strip().lower()
+        kg_disabled = kg_flag in {"1", "true", "yes", "on"}
+        kg_result: dict[str, Any] = {}
+        if kg_disabled:
+            _phase_done(7, total, "knowledge graph", "skipped (env flag)")
+        else:
+            self._spawn_kg_thread()
+            _phase_done(
+                7, total, "knowledge graph",
+                "running in background — dashboards available immediately",
+            )
+
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
             ("last_update_at", datetime.now(UTC).isoformat()),
@@ -686,7 +712,79 @@ class CacheManager:
             "events_added": total_events,
             "chunks_added": chunks_added,
             "embeddings_added": embeddings_added,
+            "kg": kg_result,
         }
+
+    def _spawn_kg_thread(self) -> None:
+        """Run sync_kg() in a background daemon thread.
+
+        Uses its own SQLite connection so the foreground server thread is
+        never blocked on the long-running NER+RE pass. The thread:
+
+        * Loads the sqlite-muninn extension on its connection.
+        * Loads the NomicEmbed GGUF into its connection's
+          ``temp.muninn_models`` (the chunk-embeddings phase already did
+          this on the main connection, but the KG thread needs its own
+          registration because GGUF state is per-connection).
+        * Runs the full KG pipeline (NER+RE → embed → ER → Leiden →
+          naming) and commits incrementally so the web app sees data
+          appear as it's produced.
+
+        Crashes are caught and logged loudly — they never silently kill
+        the rest of the application.
+        """
+        if getattr(self, "_kg_thread_started", False):
+            return
+        self._kg_thread_started = True
+
+        db_path = self.db_path
+
+        def _runner() -> None:
+            conn: sqlite3.Connection | None = None
+            try:
+                conn = sqlite3.connect(str(db_path), check_same_thread=False)
+                conn.row_factory = sqlite3.Row
+                conn.execute("PRAGMA foreign_keys = ON")
+                # Load sqlite-muninn (HNSW + graph_* primitives).
+                conn.enable_load_extension(True)
+                sqlite_muninn.load(conn)
+                conn.enable_load_extension(False)
+
+                # Register the embedding model on this connection too —
+                # entity_embeddings calls muninn_embed() and that lives in
+                # ``temp.muninn_models`` per-connection.
+                model_path = ensure_model_downloaded()
+                setup_embedding_runtime(conn, model_path)
+
+                t0 = time.monotonic()
+                result = sync_kg(conn)
+                log.info(
+                    "──── kg pipeline (background) finished in %.1f s: "
+                    "ents +%d, rels +%d, ent-vecs +%d, nodes %d, edges %d, "
+                    "leiden %d, cluster-labels %d, community-labels %d ────",
+                    time.monotonic() - t0,
+                    result["entities_added"],
+                    result["relations_added"],
+                    result["entity_embeddings_added"],
+                    result["nodes"],
+                    result["edges"],
+                    result["leiden_assignments"],
+                    result["cluster_labels"],
+                    result["community_labels"],
+                )
+            except BaseException:
+                log.exception("background KG pipeline crashed")
+            finally:
+                if conn is not None:
+                    try:
+                        conn.close()
+                    except Exception:
+                        pass
+
+        thread = threading.Thread(
+            target=_runner, name="kg-pipeline", daemon=True,
+        )
+        thread.start()
 
     def sync_embeddings(self) -> int:
         """Run the incremental embedding sync.

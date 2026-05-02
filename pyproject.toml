@@ -13,6 +13,10 @@ dependencies = [
     "pydantic>=2.0.0",
     "pytz>=2025.2",
     "sqlite-muninn>=0.3.3",
+    "gliner2>=1.2,<2",
+    "huggingface-hub>=0.25",
+    "urllib3>=2",
+    "requests>=2.31",
 ]
 
 [project.scripts]
@@ -64,5 +68,19 @@ disallow_incomplete_defs = true
 # __version__) is simple enough that silencing the import is safe.
 [[tool.mypy.overrides]]
 module = "sqlite_muninn"
+ignore_missing_imports = true
+
+# gliner2 ships a GLiNER2 class via star-style imports without an
+# __all__/explicit re-export, which trips mypy strict's
+# implicit-reexport check. The class is the documented public entry
+# point; relaxing the rule for this package keeps the strict gate green
+# without weakening type-checking elsewhere.
+[[tool.mypy.overrides]]
+module = "gliner2"
+ignore_missing_imports = true
+implicit_reexport = true
+
+[[tool.mypy.overrides]]
+module = "huggingface_hub"
 ignore_missing_imports = true
 

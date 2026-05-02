@@ -9,6 +9,8 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
+from claude_code_sessions.database.sqlite.kg.payload import KGPayload, SeedMetric
+
 
 @runtime_checkable
 class Database(Protocol):
@@ -149,6 +151,29 @@ class Database(Protocol):
         out before ranking — useful for CLI charts to hide noisy unix
         utilities like ``wc``/``head``/``grep`` that dominate counts
         without being useful signal.
+        """
+        ...
+
+    def get_kg_er(
+        self,
+        *,
+        resolution: float | None = None,
+        top_n: int = 50,
+        seed_metric: SeedMetric = "edge_betweenness",
+        max_depth: int = 0,
+        min_degree: int = 1,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> KGPayload:
+        """Resolved-entity knowledge-graph payload for the cytoscape page.
+
+        Returns the seed-and-expand subgraph of the canonical entity graph,
+        optionally restricted to chunks within the last ``days`` days and/or
+        belonging to ``project``. Filtering happens BEFORE seed-and-expand so
+        the seeds and expansion run on the same subgraph the user sees.
+
+        Raises ``KGDataMissing`` if the KG pipeline has not yet populated
+        ``nodes`` / ``edges`` / ``leiden_communities``.
         """
         ...
 

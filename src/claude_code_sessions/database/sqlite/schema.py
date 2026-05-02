@@ -12,7 +12,9 @@ from pathlib import Path
 CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
 
 # Must match the introspect script's version so both tools coexist.
-SCHEMA_VERSION = "12"
+# v13: knowledge-graph layer (entities, relations, entity_clusters, nodes, edges,
+#      leiden_communities, entity_cluster_labels, community_labels).
+SCHEMA_VERSION = "13"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -282,4 +284,110 @@ CREATE TRIGGER IF NOT EXISTS chunks_au AFTER UPDATE ON event_message_chunks BEGI
     INSERT INTO event_message_chunks_fts(rowid, text)
         VALUES (new.chunk_id, new.text);
 END;
+
+-- =====================================================================
+-- Knowledge-graph layer (schema v13)
+-- =====================================================================
+-- Populated by ``claude_code_sessions.database.sqlite.kg.pipeline.sync_kg``
+-- on every server start, after ``sync_embeddings``. Each phase is
+-- incremental: it only processes chunks/entities not yet in the
+-- per-phase log table, so warm starts are O(1).
+--
+-- The HNSW virtual table ``entities_vec`` is NOT declared here — it
+-- requires the sqlite-muninn extension to be loaded first. The
+-- entity-embeddings phase creates it lazily at runtime.
+--
+-- All KG primitives come from the published ``sqlite-muninn`` package
+-- (PyPI). No code is shared with ``benchmarks/sessions_demo`` or any
+-- other in-tree codebase — only the on-disk schema contract.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS entities (
+    entity_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT NOT NULL,
+    entity_type TEXT,
+    source TEXT NOT NULL,
+    chunk_id INTEGER REFERENCES event_message_chunks(chunk_id) ON DELETE CASCADE,
+    confidence REAL DEFAULT 1.0
+);
+CREATE INDEX IF NOT EXISTS idx_entities_name ON entities(name);
+CREATE INDEX IF NOT EXISTS idx_entities_chunk ON entities(chunk_id);
+
+CREATE TABLE IF NOT EXISTS ner_chunks_log (
+    chunk_id INTEGER PRIMARY KEY,
+    processed_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS relations (
+    relation_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    rel_type TEXT,
+    weight REAL DEFAULT 1.0,
+    chunk_id INTEGER,
+    source TEXT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_relations_src ON relations(src);
+CREATE INDEX IF NOT EXISTS idx_relations_dst ON relations(dst);
+
+CREATE TABLE IF NOT EXISTS re_chunks_log (
+    chunk_id INTEGER PRIMARY KEY,
+    processed_at TEXT NOT NULL
+);
+
+-- Maps a HNSW rowid to the unique entity name. The companion HNSW
+-- virtual table ``entities_vec`` is created at runtime by the
+-- entity-embeddings phase.
+CREATE TABLE IF NOT EXISTS entity_vec_map (
+    rowid INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE
+);
+
+CREATE TABLE IF NOT EXISTS entity_clusters (
+    name TEXT PRIMARY KEY,
+    canonical TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS nodes (
+    node_id INTEGER PRIMARY KEY AUTOINCREMENT,
+    name TEXT UNIQUE NOT NULL,
+    entity_type TEXT,
+    mention_count INTEGER DEFAULT 0
+);
+
+CREATE TABLE IF NOT EXISTS edges (
+    src TEXT NOT NULL,
+    dst TEXT NOT NULL,
+    rel_type TEXT,
+    weight REAL DEFAULT 1.0,
+    PRIMARY KEY (src, dst, rel_type)
+);
+
+CREATE TABLE IF NOT EXISTS leiden_communities (
+    node TEXT NOT NULL,
+    resolution REAL NOT NULL,
+    community_id INTEGER NOT NULL,
+    modularity REAL,
+    PRIMARY KEY (node, resolution)
+);
+CREATE INDEX IF NOT EXISTS idx_leiden_communities_resolution
+    ON leiden_communities(resolution, community_id);
+
+CREATE TABLE IF NOT EXISTS entity_cluster_labels (
+    canonical TEXT PRIMARY KEY,
+    label TEXT NOT NULL,
+    member_count INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    generated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS community_labels (
+    resolution REAL NOT NULL,
+    community_id INTEGER NOT NULL,
+    label TEXT NOT NULL,
+    member_count INTEGER NOT NULL,
+    model TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    PRIMARY KEY (resolution, community_id)
+);
 """

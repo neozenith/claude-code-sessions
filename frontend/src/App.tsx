@@ -12,6 +12,7 @@ import SessionDetail from './pages/SessionDetail'
 import Timeline from './pages/Timeline'
 import SchemaTimeline from './pages/SchemaTimeline'
 import SearchPage from './pages/SearchPage'
+import KnowledgeGraph from './pages/KnowledgeGraph'
 
 export default function App() {
   return (
@@ -29,6 +30,8 @@ export default function App() {
         <Route path="/timeline" element={<Timeline />} />
         <Route path="/schema-timeline" element={<SchemaTimeline />} />
         <Route path="/search" element={<SearchPage />} />
+        <Route path="/kg" element={<KnowledgeGraph />} />
+        <Route path="/kg/" element={<KnowledgeGraph />} />
       </Routes>
     </Layout>
   )

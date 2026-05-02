@@ -19,6 +19,10 @@ import os
 # Must be set BEFORE importing claude_code_sessions — CacheManager.update()
 # reads this env var when it decides whether to run embeddings.
 os.environ.setdefault("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS", "1")
+# Same test-isolation rationale for the knowledge-graph phase: it
+# downloads a multi-GiB chat GGUF on first run and would dominate the
+# runtime of any unit test that touches CacheManager.update().
+os.environ.setdefault("CLAUDE_SESSIONS_DISABLE_KG", "1")
 
 import pytest  # noqa: E402
 

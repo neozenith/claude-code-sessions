@@ -29,6 +29,11 @@ from claude_code_sessions.database.sqlite.filters import (
     domain_clause,
     project_clause,
 )
+from claude_code_sessions.database.sqlite.kg.payload import (
+    KGPayload,
+    SeedMetric,
+    load_kg_er,
+)
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH
 
 
@@ -770,3 +775,27 @@ class SQLiteDatabase:
             ORDER BY call_count DESC, ec.call_name ASC
             LIMIT {safe_limit}
         """, params)
+
+    # -- Knowledge graph ----------------------------------------------------
+
+    def get_kg_er(
+        self,
+        *,
+        resolution: float | None = None,
+        top_n: int = 50,
+        seed_metric: SeedMetric = "edge_betweenness",
+        max_depth: int = 0,
+        min_degree: int = 1,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> KGPayload:
+        return load_kg_er(
+            self._cache.conn,
+            resolution=resolution,
+            top_n=top_n,
+            seed_metric=seed_metric,
+            max_depth=max_depth,
+            min_degree=min_degree,
+            days=days,
+            project=project,
+        )
