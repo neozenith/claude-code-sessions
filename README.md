@@ -467,3 +467,12 @@ Source: [Anthropic Pricing](https://www.anthropic.com/pricing)
 - Frontend uses shadcn/ui components with Tailwind CSS
 - Backend uses uv for dependency management (not pip/requirements.txt)
 - Stay at repo root for all operations (use `npm --prefix frontend`)
+
+
+## Crontab
+
+```sh
+0 */2 * * * rsync -av ~/.claude/projects/ ~/play/claude-code-sessions/all-sessions/claude/projects/ >> ~/play/claude-code-sessions/logs/sync-$(date +\%Y\%m\%d).log 2>&1
+0 */2 * * * rsync -av ~/.codex/sessions/ ~/play/claude-code-sessions/all-sessions/codex/projects/ >> ~/play/claude-code-sessions/logs/sync-$(date +\%Y\%m\%d).log 2>&1
+0 */2 * * * rsync -av ~/.copilot/session-state/ ~/play/claude-code-sessions/all-sessions/copilot/projects/ >> ~/play/claude-code-sessions/logs/sync-$(date +\%Y\%m\%d).log 2>&1
+```

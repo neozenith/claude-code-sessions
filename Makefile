@@ -174,7 +174,9 @@ compare-projects: ## Compare ~/.claude/projects/ with ./projects/ to show differ
 	uv run scripts/compare_projects.py
 
 sync-projects: ## APPEND ONLY Sync projects data from ~/.claude/projects/
-	rsync -av ~/.claude/projects/ ./projects/
+	rsync -av ~/.claude/projects/ ./all-sessions/claude/projects/
+	rsync -av ~/.codex/sessions/ ./all-sessions/codex/projects/ 
+	rsync -av ~/.copilot/session-state/ ./all-sessions/copilot/projects/ 
 
 sync-watch: ## Watch and sync projects every 15 seconds (Ctrl+C to stop)
 	@echo "👀 Watching ~/.claude/projects/ - syncing every 15s (Ctrl+C to stop)"
