@@ -41,7 +41,8 @@ import {
 } from '@/lib/kg-client'
 import { useTheme } from '@/contexts/ThemeContext'
 import { useFilters } from '@/hooks/useFilters'
-import KnowledgeGraphControls, {
+import KnowledgeGraphControls from '@/components/KnowledgeGraphControls'
+import {
   type LayoutEngine,
   type Selection,
   type SizeMode,
@@ -53,7 +54,7 @@ import KnowledgeGraphControls, {
   DEFAULT_MIN_DEGREE,
   DEFAULT_LAYOUT,
   DEFAULT_SIZE_MODE,
-} from '@/components/KnowledgeGraphControls'
+} from '@/components/KnowledgeGraphControls.constants'
 
 cytoscape.use(fcose as unknown as cytoscape.Ext)
 cytoscape.use(elk as unknown as cytoscape.Ext)

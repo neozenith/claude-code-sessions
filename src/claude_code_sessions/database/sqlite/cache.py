@@ -23,7 +23,6 @@ from claude_code_sessions.database.sqlite.calls import extract_calls
 from claude_code_sessions.database.sqlite.embeddings import (
     ensure_model_downloaded,
     setup_embedding_runtime,
-    sync_chunks,
     sync_embeddings,
 )
 from claude_code_sessions.database.sqlite.kg import sync_kg
@@ -69,6 +68,14 @@ class CacheManager:
     def __init__(self, db_path: Path = CACHE_DB_PATH) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        # Cooperative cancellation. ``IndexerService`` calls
+        # ``request_stop()`` to flip this; the wave loop (Phase C)
+        # checks ``is_stop_requested()`` between waves and at file
+        # boundaries inside the parser pool (Phase D). Until those
+        # phases land, this flag is a no-op for the long-running
+        # ingestion paths — but it's defined here so the public surface
+        # is stable across the upcoming changes.
+        self._stop_event = threading.Event()
 
     @property
     def conn(self) -> sqlite3.Connection:
@@ -83,6 +90,24 @@ class CacheManager:
         if self._conn:
             self._conn.close()
             self._conn = None
+
+    # ------------------------------------------------------------------
+    # Cooperative cancellation
+    # ------------------------------------------------------------------
+
+    def request_stop(self) -> None:
+        """Signal that the running pipeline should exit at the next safe
+        boundary. Idempotent."""
+        self._stop_event.set()
+
+    def is_stop_requested(self) -> bool:
+        return self._stop_event.is_set()
+
+    def reset_stop(self) -> None:
+        """Clear the cancellation flag. Called by ``ensure_ready`` so
+        re-running on the same CacheManager (e.g. for a manual rebuild
+        endpoint) starts from a clean slate."""
+        self._stop_event.clear()
 
     def init_schema(self) -> None:
         # Silent: the caller (ensure_ready) owns the "created version X"
@@ -185,26 +210,34 @@ class CacheManager:
     # -- Ingestion -----------------------------------------------------------
 
     def ingest_file(self, file_info: dict[str, Any]) -> int:
-        """Ingest a single JSONL file into the cache. Returns event count."""
+        """Ingest a single JSONL file into the cache. Returns event count.
+
+        Composed of two phases that the parallel ingester
+        (``ParallelIngester``) drives independently:
+
+        * ``_parse_file`` — pure CPU work, no DB access. Safe to call
+          from worker threads in parallel.
+        * ``_write_parsed`` — runs the SQL DELETE/INSERT statements.
+          Must execute on a single thread because SQLite connections
+          aren't safe for concurrent writes.
+        """
+        parsed = self._parse_file(file_info)
+        if parsed is None:
+            return 0
+        return self._write_parsed(parsed)
+
+    def _parse_file(self, file_info: dict[str, Any]) -> dict[str, Any] | None:
+        """Parse a JSONL file into an in-memory event list.
+
+        Returns ``None`` if the file is unreadable (logged and skipped,
+        same contract as the original ingest_file). Otherwise returns
+        a dict with the file_info, parsed events, line count, and the
+        detected session_id (for agent_root files). No DB access — safe
+        to call from any thread.
+        """
         filepath = file_info["filepath"]
-        project_id = file_info["project_id"]
         session_id = file_info.get("session_id")
         file_type = file_info["file_type"]
-        mtime = file_info["mtime"]
-        size_bytes = file_info["size_bytes"]
-
-        cursor = self.conn.cursor()
-
-        # Delete existing data for this file (if re-ingesting)
-        existing = cursor.execute(
-            "SELECT id FROM source_files WHERE filepath = ?", (filepath,)
-        ).fetchone()
-        if existing:
-            cursor.execute("DELETE FROM event_edges WHERE source_file_id = ?", (existing[0],))
-            # event_calls is wiped via ON DELETE CASCADE when its parent
-            # event row is removed below, so no explicit delete is needed.
-            cursor.execute("DELETE FROM events WHERE source_file_id = ?", (existing[0],))
-            cursor.execute("DELETE FROM source_files WHERE id = ?", (existing[0],))
 
         events_data: list[dict[str, Any]] = []
         line_count = 0
@@ -228,19 +261,55 @@ class CacheManager:
                         events_data.append(event)
         except (FileNotFoundError, PermissionError) as e:
             log.warning("Could not read %s: %s", filepath, e)
-            return 0
+            return None
+
+        return {
+            "file_info": file_info,
+            "events_data": events_data,
+            "line_count": line_count,
+            "detected_session_id": detected_session_id,
+        }
+
+    def _write_parsed(self, parsed: dict[str, Any]) -> int:
+        """Persist a parsed file into the cache. Single-threaded only."""
+        file_info = parsed["file_info"]
+        events_data: list[dict[str, Any]] = parsed["events_data"]
+        line_count: int = parsed["line_count"]
+        detected_session_id: str | None = parsed["detected_session_id"]
+
+        filepath = file_info["filepath"]
+        project_id = file_info["project_id"]
+        file_type = file_info["file_type"]
+        mtime = file_info["mtime"]
+        size_bytes = file_info["size_bytes"]
+
+        cursor = self.conn.cursor()
+
+        existing = cursor.execute(
+            "SELECT id FROM source_files WHERE filepath = ?", (filepath,)
+        ).fetchone()
+        if existing:
+            cursor.execute("DELETE FROM event_edges WHERE source_file_id = ?", (existing[0],))
+            cursor.execute("DELETE FROM events WHERE source_file_id = ?", (existing[0],))
+            cursor.execute("DELETE FROM source_files WHERE id = ?", (existing[0],))
 
         cursor.execute(
             """INSERT INTO source_files
                (filepath, mtime, size_bytes, line_count, last_ingested_at,
                 project_id, session_id, file_type)
                VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
-            (filepath, mtime, size_bytes, line_count, datetime.now(UTC).isoformat(),
-             project_id, detected_session_id, file_type),
+            (
+                filepath,
+                mtime,
+                size_bytes,
+                line_count,
+                datetime.now(UTC).isoformat(),
+                project_id,
+                detected_session_id,
+                file_type,
+            ),
         )
         source_file_id = cursor.lastrowid
-        # Expose the new id to the caller so update() can scope agg refresh
-        # to the timestamp window of the files it just ingested.
         file_info["source_file_id"] = source_file_id
 
         for event in events_data:
@@ -255,21 +324,36 @@ class CacheManager:
                     token_rate, billable_tokens, total_cost_usd,
                     source_file_id, line_number, raw_json)
                    VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
-                (event["uuid"], event["parent_uuid"], event["prompt_id"],
-                 event["event_type"], event["msg_kind"],
-                 event["timestamp"], event["timestamp_local"],
-                 detected_session_id, project_id,
-                 event["is_sidechain"], event["agent_id"], event["agent_slug"],
-                 event["message_role"], event["message_content"],
-                 event["message_content_json"], event["model_id"],
-                 event["input_tokens"], event["output_tokens"],
-                 event["cache_read_tokens"], event["cache_creation_tokens"],
-                 event["cache_5m_tokens"],
-                 event["token_rate"], event["billable_tokens"], event["total_cost_usd"],
-                 source_file_id, event["line_number"], event["raw_json"]),
+                (
+                    event["uuid"],
+                    event["parent_uuid"],
+                    event["prompt_id"],
+                    event["event_type"],
+                    event["msg_kind"],
+                    event["timestamp"],
+                    event["timestamp_local"],
+                    detected_session_id,
+                    project_id,
+                    event["is_sidechain"],
+                    event["agent_id"],
+                    event["agent_slug"],
+                    event["message_role"],
+                    event["message_content"],
+                    event["message_content_json"],
+                    event["model_id"],
+                    event["input_tokens"],
+                    event["output_tokens"],
+                    event["cache_read_tokens"],
+                    event["cache_creation_tokens"],
+                    event["cache_5m_tokens"],
+                    event["token_rate"],
+                    event["billable_tokens"],
+                    event["total_cost_usd"],
+                    source_file_id,
+                    event["line_number"],
+                    event["raw_json"],
+                ),
             )
-            # Capture the rowid so the calls-fact-table insert below can
-            # reference the event's primary key without a second lookup.
             event["_db_id"] = cursor.lastrowid
 
         for event in events_data:
@@ -278,13 +362,15 @@ class CacheManager:
                     """INSERT INTO event_edges
                        (project_id, session_id, event_uuid, parent_event_uuid, source_file_id)
                        VALUES (?, ?, ?, ?, ?)""",
-                    (project_id, detected_session_id,
-                     event["uuid"], event["parent_uuid"], source_file_id),
+                    (
+                        project_id,
+                        detected_session_id,
+                        event["uuid"],
+                        event["parent_uuid"],
+                        source_file_id,
+                    ),
                 )
 
-        # Fact-table rows for tool/skill/subagent/cli/rule calls. This is a
-        # pure fan-out from the already-parsed content blocks — no extra
-        # file I/O, no re-parsing JSON.
         for event in events_data:
             event_db_id = event.get("_db_id")
             if not event_db_id:
@@ -295,8 +381,15 @@ class CacheManager:
                        (event_id, ord, call_type, call_name,
                         timestamp, project_id, session_id)
                        VALUES (?, ?, ?, ?, ?, ?, ?)""",
-                    (event_db_id, ord_, call_type, call_name,
-                     event["timestamp"], project_id, detected_session_id),
+                    (
+                        event_db_id,
+                        ord_,
+                        call_type,
+                        call_name,
+                        event["timestamp"],
+                        project_id,
+                        detected_session_id,
+                    ),
                 )
 
         return len(events_data)
@@ -356,26 +449,35 @@ class CacheManager:
                 pass
 
         return {
-            "uuid": uuid, "parent_uuid": parent_uuid, "prompt_id": prompt_id,
-            "event_type": event_type, "msg_kind": msg_kind,
-            "timestamp": timestamp, "timestamp_local": timestamp_local,
+            "uuid": uuid,
+            "parent_uuid": parent_uuid,
+            "prompt_id": prompt_id,
+            "event_type": event_type,
+            "msg_kind": msg_kind,
+            "timestamp": timestamp,
+            "timestamp_local": timestamp_local,
             "is_sidechain": 1 if is_sidechain else 0,
-            "agent_id": agent_id, "agent_slug": agent_slug,
-            "message_role": message_role, "message_content": text,
+            "agent_id": agent_id,
+            "agent_slug": agent_slug,
+            "message_role": message_role,
+            "message_content": text,
             "message_content_json": json.dumps(content_raw) if content_raw else None,
             "model_id": model_id,
-            "input_tokens": input_tokens, "output_tokens": output_tokens,
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
             "cache_creation_tokens": cache_creation_tokens,
             "cache_5m_tokens": cache_5m_tokens,
-            "token_rate": token_rate, "billable_tokens": billable_tokens,
+            "token_rate": token_rate,
+            "billable_tokens": billable_tokens,
             "total_cost_usd": total_cost_usd,
             # raw_json is intentionally empty — the source-of-truth for the
             # raw payload is the JSONL file on disk (see source_files.filepath
             # + line_number). Storing a duplicate copy here was costing 2+ GB
             # and leaking thinking-block signatures into the cache. Use
             # `SQLiteDatabase.get_event_raw_json(event_id)` to fetch on demand.
-            "line_number": line_number, "raw_json": "",
+            "line_number": line_number,
+            "raw_json": "",
             # Fact-table rows for tool/skill/subagent/cli/rule calls. Parsed
             # once here and consumed by ingest_file() after the event row is
             # inserted (so we have the event_id to reference).
@@ -409,15 +511,19 @@ class CacheManager:
     # SQLite expressions that truncate timestamp to each granularity.
     # Used by refresh_aggregates_for_range() to rebuild agg_* tables.
     _AGG_BUCKET_EXPRS: dict[str, str] = {
-        "hourly":  "strftime('%Y-%m-%dT%H:00:00', timestamp)",
-        "daily":   "date(timestamp)",
-        "weekly":  "date(timestamp, 'weekday 0', '-6 days')",
+        "hourly": "strftime('%Y-%m-%dT%H:00:00', timestamp)",
+        "daily": "date(timestamp)",
+        "weekly": "date(timestamp, 'weekday 0', '-6 days')",
         "monthly": "strftime('%Y-%m-01', timestamp)",
     }
 
     def _refresh_one_agg(
-        self, cursor: sqlite3.Cursor, granularity: str, bucket_expr: str,
-        start: str | None, end: str | None,
+        self,
+        cursor: sqlite3.Cursor,
+        granularity: str,
+        bucket_expr: str,
+        start: str | None,
+        end: str | None,
     ) -> int:
         """Delete + re-insert agg rows for one granularity in a time range.
 
@@ -438,7 +544,8 @@ class CacheManager:
             range_clause = f"AND {bucket_expr} BETWEEN ? AND ?"
             range_params = (start, end)
 
-        cursor.execute(f"""
+        cursor.execute(
+            f"""
             INSERT INTO agg (
                 granularity, time_bucket, project_id, session_id, model_id,
                 event_count,
@@ -464,7 +571,9 @@ class CacheManager:
               {range_clause}
             GROUP BY {bucket_expr}, project_id,
                      COALESCE(session_id, ''), COALESCE(model_id, '')
-        """, range_params)
+        """,
+            range_params,
+        )
 
         return cursor.rowcount
 
@@ -474,7 +583,8 @@ class CacheManager:
         return bool(row[0] == 0)
 
     def _timestamp_window_for_files(
-        self, source_file_ids: list[int],
+        self,
+        source_file_ids: list[int],
     ) -> tuple[str, str] | None:
         """Return (min_ts, max_ts) across events from the given source files.
 
@@ -498,7 +608,9 @@ class CacheManager:
         return str(row[0]), str(row[1])
 
     def refresh_aggregates_for_range(
-        self, start_bucket: str | None = None, end_bucket: str | None = None,
+        self,
+        start_bucket: str | None = None,
+        end_bucket: str | None = None,
     ) -> dict[str, int]:
         """Refresh all four agg_* tables for the given time range.
 
@@ -515,7 +627,11 @@ class CacheManager:
         counts: dict[str, int] = {}
         for granularity, expr in self._AGG_BUCKET_EXPRS.items():
             counts[granularity] = self._refresh_one_agg(
-                cursor, granularity, expr, start_bucket, end_bucket,
+                cursor,
+                granularity,
+                expr,
+                start_bucket,
+                end_bucket,
             )
         self.conn.commit()
         elapsed_ms = (time.monotonic() - t0) * 1000
@@ -571,135 +687,39 @@ class CacheManager:
         session_count = cursor.execute("SELECT COUNT(*) FROM sessions").fetchone()[0]
         log.info(
             "  projects+sessions rollup: %d projects, %d sessions (%.0f ms)",
-            project_count, session_count, elapsed_ms,
+            project_count,
+            session_count,
+            elapsed_ms,
         )
 
     # -- Update orchestration ------------------------------------------------
 
     def update(self, projects_path: Path) -> dict[str, Any]:
-        """Run the incremental data-sync phases (2–6 of the lifecycle).
+        """Run the incremental data-sync phases (2–7 of the lifecycle).
 
-        Phase 1 (schema) is owned by ``ensure_ready``. Everything below
-        is driven off a single file-discovery pass so we only scan the
-        source tree once per startup.
+        Phase 1 (schema) is owned by ``ensure_ready``. Phases 2–7 are
+        delegated to ``WavePipeline``: discover files, then process
+        them in bounded waves, where each wave runs ingest →
+        aggregate → chunk → embed → KG end-to-end before the next
+        wave starts. This makes the cache queryable mid-build and
+        scopes failures to a single wave's worth of work.
+
+        Wave size is set by ``CLAUDE_SESSIONS_WAVE_SIZE`` (default
+        50). The same env-var-gated test-isolation flags
+        (``CLAUDE_SESSIONS_DISABLE_EMBEDDINGS`` / ``..._DISABLE_KG``)
+        still apply — they're checked inside each wave.
         """
-        total = _CACHE_PHASE_COUNT
+        # Local import so test isolation can monkey-patch the wave
+        # pipeline without import-time side effects, and so this module
+        # has no circular dependency on its consumer.
+        from claude_code_sessions.database.sqlite.wave_pipeline import WavePipeline
 
-        # ── Phase 2: discover JSONL files ─────────────────────────────
-        _phase(2, total, "discover JSONL files")
-        log.info("scanning %s", projects_path)
-        all_files = self.discover_files(projects_path)
-        files_to_update = self.get_files_needing_update(all_files)
-        new_count = sum(1 for f in files_to_update if f.get("reason") == "new")
-        modified_count = sum(1 for f in files_to_update if f.get("reason") == "modified")
-        unchanged = len(all_files) - len(files_to_update)
-        _phase_done(
-            2, total, "discover JSONL files",
-            f"{len(all_files)} files "
-            f"({new_count} new, {modified_count} modified, {unchanged} unchanged)",
-        )
+        # Reset the cancellation flag so re-running on the same manager
+        # (e.g. a manual rebuild endpoint) starts from a clean slate.
+        self.reset_stop()
 
-        # ── Phase 3: ingest events ────────────────────────────────────
-        _phase(3, total, "ingest events")
-        total_events = 0
-        affected_source_file_ids: list[int] = []
-        if not files_to_update:
-            _phase_done(3, total, "ingest events", "nothing to ingest")
-        else:
-            t_ingest = time.monotonic()
-            for i, file_info in enumerate(files_to_update, 1):
-                events_added = self.ingest_file(file_info)
-                total_events += events_added
-                sfid = file_info.get("source_file_id")
-                if isinstance(sfid, int):
-                    affected_source_file_ids.append(sfid)
-                if i % 50 == 0 or i == len(files_to_update):
-                    log.info(
-                        "  ingested %d/%d files (%d events so far)",
-                        i, len(files_to_update), total_events,
-                    )
-            self.conn.commit()
-            _phase_done(
-                3, total, "ingest events",
-                f"{len(files_to_update)} files, {total_events} events "
-                f"in {time.monotonic() - t_ingest:.1f} s",
-            )
-
-        # ── Phase 4: aggregate tables ─────────────────────────────────
-        _phase(4, total, "aggregate tables")
-        t_agg = time.monotonic()
-        if files_to_update:
-            # Session / project roll-ups are full rebuilds (tiny tables,
-            # cheap) whenever new events landed.
-            self.rebuild_aggregates()
-
-        # Dimensional agg_* is either a full cold rebuild (first start
-        # after schema bump) or a scoped range refresh.
-        if self._agg_tables_empty():
-            log.info("dimensional aggregates empty — full cold rebuild")
-            self.refresh_aggregates_for_range()
-        elif affected_source_file_ids:
-            window = self._timestamp_window_for_files(affected_source_file_ids)
-            if window is not None:
-                log.info("dimensional aggregates — range refresh %s..%s", *window)
-                self.refresh_aggregates_for_range(window[0], window[1])
-            else:
-                log.info("dimensional aggregates — up to date")
-        else:
-            log.info("dimensional aggregates — up to date")
-        _phase_done(
-            4, total, "aggregate tables", f"refreshed in {time.monotonic() - t_agg:.1f} s",
-        )
-
-        # ── Phase 5: chunk human-prompt events ────────────────────────
-        _phase(5, total, "chunk human-prompt events")
-        t_chunk = time.monotonic()
-        chunks_added = sync_chunks(self.conn)
-        if chunks_added:
-            _phase_done(
-                5, total, "chunk human-prompt events",
-                f"{chunks_added} chunks added in {time.monotonic() - t_chunk:.1f} s",
-            )
-        else:
-            _phase_done(5, total, "chunk human-prompt events", "up to date")
-
-        # ── Phase 6: embed chunks ─────────────────────────────────────
-        _phase(6, total, "embed chunks")
-        t_embed = time.monotonic()
-        flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS", "").strip().lower()
-        embeddings_disabled = flag in {"1", "true", "yes", "on"}
-        embeddings_added = self.sync_embeddings()
-        if embeddings_disabled:
-            _phase_done(6, total, "embed chunks", "skipped (env flag)")
-        elif embeddings_added:
-            _phase_done(
-                6, total, "embed chunks",
-                f"{embeddings_added} vectors added in {time.monotonic() - t_embed:.1f} s",
-            )
-        else:
-            _phase_done(6, total, "embed chunks", "up to date")
-
-        # ── Phase 7: knowledge graph ──────────────────────────────────
-        # The KG pipeline runs in a *background daemon thread* so the
-        # web server boot is not gated on a multi-hour NER+RE pass over
-        # the full chunk corpus. All other dashboards stay responsive
-        # immediately; the /kg page sees data appear as the pipeline
-        # progresses and the per-phase commits land.
-        #
-        # CLAUDE_SESSIONS_DISABLE_KG is a TEST-ISOLATION escape hatch
-        # only — never advertised as a user feature.
-        _phase(7, total, "knowledge graph")
-        kg_flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_KG", "").strip().lower()
-        kg_disabled = kg_flag in {"1", "true", "yes", "on"}
-        kg_result: dict[str, Any] = {}
-        if kg_disabled:
-            _phase_done(7, total, "knowledge graph", "skipped (env flag)")
-        else:
-            self._spawn_kg_thread()
-            _phase_done(
-                7, total, "knowledge graph",
-                "running in background — dashboards available immediately",
-            )
+        pipeline = WavePipeline(self)
+        wave_result = pipeline.run(projects_path)
 
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
@@ -707,12 +727,19 @@ class CacheManager:
         )
         self.conn.commit()
 
+        # Preserve the historical return shape so callers (tests,
+        # the introspect skill) don't need to re-learn the keys.
+        # ``embeddings_added`` is no longer tracked separately because
+        # the wave pipeline calls sync_embeddings inline; report 0 here
+        # rather than removing the key (callers index by name).
         return {
-            "files_updated": len(files_to_update),
-            "events_added": total_events,
-            "chunks_added": chunks_added,
-            "embeddings_added": embeddings_added,
-            "kg": kg_result,
+            "files_updated": wave_result["files_processed"],
+            "events_added": wave_result["events_added"],
+            "chunks_added": wave_result["chunks_added"],
+            "embeddings_added": 0,
+            "waves_completed": wave_result["waves_completed"],
+            "cancelled": wave_result["cancelled"],
+            "kg": {},
         }
 
     def _spawn_kg_thread(self) -> None:
@@ -782,7 +809,9 @@ class CacheManager:
                         pass
 
         thread = threading.Thread(
-            target=_runner, name="kg-pipeline", daemon=True,
+            target=_runner,
+            name="kg-pipeline",
+            daemon=True,
         )
         thread.start()
 

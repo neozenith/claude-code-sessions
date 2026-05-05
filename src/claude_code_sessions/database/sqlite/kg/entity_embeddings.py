@@ -57,17 +57,13 @@ def sync_entity_embeddings(conn: sqlite3.Connection) -> int:
     log.info("  entity-embeddings: embedding %d new entity names", len(new_names))
     t0 = time.monotonic()
 
-    max_rowid_row = conn.execute(
-        "SELECT COALESCE(MAX(rowid), 0) FROM entity_vec_map"
-    ).fetchone()
+    max_rowid_row = conn.execute("SELECT COALESCE(MAX(rowid), 0) FROM entity_vec_map").fetchone()
     max_rowid = int(max_rowid_row[0]) if max_rowid_row else 0
     inserted = 0
 
     for offset, name in enumerate(new_names, start=1):
         rowid = max_rowid + offset
-        vec_row = conn.execute(
-            "SELECT muninn_embed(?, ?)", (GGUF_MODEL_NAME, name)
-        ).fetchone()
+        vec_row = conn.execute("SELECT muninn_embed(?, ?)", (GGUF_MODEL_NAME, name)).fetchone()
         if vec_row is None or vec_row[0] is None:
             raise RuntimeError(f"muninn_embed returned NULL for entity name {name!r}")
         conn.execute(

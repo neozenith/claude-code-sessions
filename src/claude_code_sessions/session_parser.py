@@ -119,9 +119,7 @@ class SessionEvent:
             "event_type": self.event_type,
             "timestamp": self.timestamp,
             "timestamp_local": (
-                self.timestamp_dt.strftime("%Y-%m-%dT%H:%M:%S")
-                if self.timestamp_dt
-                else None
+                self.timestamp_dt.strftime("%Y-%m-%dT%H:%M:%S") if self.timestamp_dt else None
             ),
             "session_id": self.session_id,
             "is_sidechain": self.is_sidechain,
@@ -223,9 +221,7 @@ def parse_event_line(
             cache_read_tokens = usage.get("cache_read_input_tokens", 0) or 0
             cache_creation = usage.get("cache_creation", {})
             if isinstance(cache_creation, dict):
-                cache_creation_tokens = (
-                    cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
-                )
+                cache_creation_tokens = cache_creation.get("ephemeral_5m_input_tokens", 0) or 0
 
     timestamp = data.get("timestamp")
     timestamp_dt = parse_timestamp(timestamp)

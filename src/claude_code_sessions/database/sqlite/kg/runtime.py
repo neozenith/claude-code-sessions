@@ -51,8 +51,7 @@ CHAT_MODEL_NAME = "kg_chat"
 # a phase that needs hundreds of inferences per build.
 CHAT_MODEL_FILENAME_DEFAULT = "gemma-4-E2B-it-Q4_K_M.gguf"
 CHAT_MODEL_URL_DEFAULT = (
-    "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/"
-    "gemma-4-E2B-it-Q4_K_M.gguf"
+    "https://huggingface.co/unsloth/gemma-4-E2B-it-GGUF/resolve/main/gemma-4-E2B-it-Q4_K_M.gguf"
 )
 
 MODELS_DIR = Path.home() / ".claude" / "cache" / "models"
@@ -167,8 +166,7 @@ def register_chat_model(conn: sqlite3.Connection, model_path: Path) -> None:
     """
     try:
         conn.execute(
-            "INSERT INTO temp.muninn_chat_models(name, model) "
-            "SELECT ?, muninn_chat_model(?)",
+            "INSERT INTO temp.muninn_chat_models(name, model) SELECT ?, muninn_chat_model(?)",
             (CHAT_MODEL_NAME, str(model_path)),
         )
         log.info("  registered KG chat model in temp.muninn_chat_models: %s", CHAT_MODEL_NAME)

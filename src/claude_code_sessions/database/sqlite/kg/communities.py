@@ -35,9 +35,7 @@ def sync_communities(conn: sqlite3.Connection) -> int:
 
     have_resolutions = {
         float(r[0])
-        for r in conn.execute(
-            "SELECT DISTINCT resolution FROM leiden_communities"
-        ).fetchall()
+        for r in conn.execute("SELECT DISTINCT resolution FROM leiden_communities").fetchall()
     }
     expected_resolutions = set(LEIDEN_RESOLUTIONS)
     nodes_now = int(conn.execute("SELECT count(*) FROM nodes").fetchone()[0])
@@ -45,9 +43,7 @@ def sync_communities(conn: sqlite3.Connection) -> int:
     # If every resolution is already populated AND the graph hasn't changed
     # (membership row count == node count × resolution count), skip.
     if have_resolutions >= expected_resolutions:
-        existing_total = int(
-            conn.execute("SELECT count(*) FROM leiden_communities").fetchone()[0]
-        )
+        existing_total = int(conn.execute("SELECT count(*) FROM leiden_communities").fetchone()[0])
         if existing_total >= nodes_now * len(LEIDEN_RESOLUTIONS):
             log.info(
                 "  communities: %d resolutions already current — skip",

@@ -155,9 +155,7 @@ def _load_nodes(conn: sqlite3.Connection, resolution: float) -> dict[str, KGNode
         ).fetchall()
     }
     nodes: dict[str, KGNode] = {}
-    for row in conn.execute(
-        "SELECT name, entity_type, mention_count FROM nodes"
-    ).fetchall():
+    for row in conn.execute("SELECT name, entity_type, mention_count FROM nodes").fetchall():
         name = str(row[0])
         if name in _FORBIDDEN_NODE_IDS:
             continue
@@ -415,8 +413,7 @@ def load_kg_er(
     selected_nodes = [nodes_by_name[n] for n in visited if n in nodes_by_name]
     selected_node_ids = {n.id for n in selected_nodes}
     selected_edges = [
-        e for e in edges
-        if e.source in selected_node_ids and e.target in selected_node_ids
+        e for e in edges if e.source in selected_node_ids and e.target in selected_node_ids
     ]
 
     # Restrict communities to the selected node set; preserve ordering by id.

@@ -42,5 +42,5 @@ def domain_clause(projects_path: Path, col: str = "e.project_id") -> str:
     blocked_ids = domain_blocked_ids(projects_path)
     if not blocked_ids:
         return ""
-    placeholders = ", ".join(f"'{pid.replace(chr(39), chr(39)+chr(39))}'" for pid in blocked_ids)
+    placeholders = ", ".join(f"'{pid.replace(chr(39), chr(39) + chr(39))}'" for pid in blocked_ids)
     return f"AND {col} NOT IN ({placeholders})"

@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "concurrently --kill-others --names \"backend,frontend\" --prefix-colors \"blue,green\" \"BACKEND_PORT=8100 uv run python -m claude_code_sessions.main\" \"VITE_BACKEND_URL=http://localhost:8100 vite --port 5273\"",
     "agentic-dev": "concurrently --kill-others --names \"backend,frontend\" --prefix-colors \"blue,green\" \"BACKEND_PORT=8101 uv run python -m claude_code_sessions.main\" \"VITE_BACKEND_URL=http://localhost:8101 vite --port 5274\"",
+    "dev:env": "concurrently --kill-others --names \"backend,frontend\" --prefix-colors \"blue,green\" \"uv run python -m claude_code_sessions.main\" \"vite --port ${FRONTEND_PORT:-5273}\"",
     "dev:frontend-only": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",

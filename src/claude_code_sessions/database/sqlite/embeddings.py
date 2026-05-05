@@ -50,8 +50,7 @@ GGUF_MODEL_NAME = "NomicEmbed"
 # the huggingface_hub dependency chain.
 GGUF_MODEL_FILENAME = "nomic-embed-text-v1.5.Q8_0.gguf"
 GGUF_MODEL_URL = (
-    "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/"
-    + GGUF_MODEL_FILENAME
+    "https://huggingface.co/nomic-ai/nomic-embed-text-v1.5-GGUF/resolve/main/" + GGUF_MODEL_FILENAME
 )
 
 # Output vector dimensionality for NomicEmbed v1.5 — matches the HNSW
@@ -138,7 +137,8 @@ def ensure_model_downloaded(*, force: bool = False) -> Path:
     if target.exists() and not force:
         log.info(
             "  GGUF model already present: %s (%.1f MiB)",
-            target, target.stat().st_size / (1024 * 1024),
+            target,
+            target.stat().st_size / (1024 * 1024),
         )
         return target
 
@@ -301,8 +301,7 @@ def sync_chunks(conn: sqlite3.Connection) -> int:
         text = row[1]
         for chunk, chunk_offset in chunk_text(text):
             conn.execute(
-                "INSERT INTO event_message_chunks (event_id, text, chunk_offset) "
-                "VALUES (?, ?, ?)",
+                "INSERT INTO event_message_chunks (event_id, text, chunk_offset) VALUES (?, ?, ?)",
                 (event_id, chunk, chunk_offset),
             )
             total_chunks += 1
@@ -310,13 +309,17 @@ def sync_chunks(conn: sqlite3.Connection) -> int:
         if events_processed % 500 == 0:
             log.info(
                 "    chunked %d/%d events (%d chunks so far)",
-                events_processed, total, total_chunks,
+                events_processed,
+                total,
+                total_chunks,
             )
 
     conn.commit()
     log.info(
         "  created %d chunks from %d events (%.1f s)",
-        total_chunks, events_processed, time.monotonic() - t0,
+        total_chunks,
+        events_processed,
+        time.monotonic() - t0,
     )
     return total_chunks
 
@@ -340,8 +343,7 @@ def setup_embedding_runtime(conn: sqlite3.Connection, model_path: Path) -> None:
     ).fetchone()
     if row is None:
         conn.execute(
-            "INSERT INTO temp.muninn_models(name, model) "
-            "SELECT ?, muninn_embed_model(?)",
+            "INSERT INTO temp.muninn_models(name, model) SELECT ?, muninn_embed_model(?)",
             (GGUF_MODEL_NAME, str(model_path)),
         )
         log.debug("Registered GGUF model %s → %s", GGUF_MODEL_NAME, model_path)
@@ -417,13 +419,20 @@ def sync_embeddings(conn: sqlite3.Connection) -> int:
             eta_s = remaining / rate if rate > 0 else 0
             log.info(
                 "    embedded %d/%d chunks (%.1f chunks/s, elapsed %.0f s, eta %.0f s)",
-                total_embedded, total, rate, elapsed, eta_s,
+                total_embedded,
+                total,
+                rate,
+                elapsed,
+                eta_s,
             )
             last_log = now
 
     conn.commit()
     log.info(
         "  embedded %d/%d chunks (%d failed, %.1f s)",
-        total_embedded, total, failed, time.monotonic() - t0,
+        total_embedded,
+        total,
+        failed,
+        time.monotonic() - t0,
     )
     return total_embedded

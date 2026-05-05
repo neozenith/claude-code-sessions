@@ -75,12 +75,10 @@ def _per_run_limit() -> int:
 
 
 _NER_INSERT_SQL = (
-    "INSERT INTO entities (name, entity_type, source, chunk_id, confidence) "
-    "VALUES (?, ?, ?, ?, ?)"
+    "INSERT INTO entities (name, entity_type, source, chunk_id, confidence) VALUES (?, ?, ?, ?, ?)"
 )
 _RE_INSERT_SQL = (
-    "INSERT INTO relations (src, dst, rel_type, weight, chunk_id, source) "
-    "VALUES (?, ?, ?, ?, ?, ?)"
+    "INSERT INTO relations (src, dst, rel_type, weight, chunk_id, source) VALUES (?, ?, ?, ?, ?, ?)"
 )
 
 

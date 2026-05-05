@@ -31,6 +31,7 @@ from claude_code_sessions.config import (  # noqa: E402
     PROJECTS_PATH,
 )
 from claude_code_sessions.database import Database, SQLiteDatabase  # noqa: E402
+from claude_code_sessions.database.sqlite.indexer import IndexerService  # noqa: E402
 from claude_code_sessions.main import app  # noqa: E402
 
 
@@ -43,13 +44,38 @@ from claude_code_sessions.main import app  # noqa: E402
 def sqlite_instance() -> SQLiteDatabase:
     """Create a SQLite database instance once per test session.
 
-    The constructor calls ``ensure_ready()`` which builds/updates the cache
-    from JSONL files. This runs once and is reused across all tests.
+    Construction is now side-effect-free (the FastAPI server delegates
+    ingestion to a background thread), so tests that depend on a
+    populated cache must call ``ensure_ready()`` explicitly. We do that
+    here once per session and reuse the instance across all tests.
     """
-    return SQLiteDatabase(
+    db = SQLiteDatabase(
         local_projects_path=PROJECTS_PATH,
         home_projects_path=HOME_PROJECTS_PATH,
     )
+    db.ensure_ready()
+    return db
+
+
+@pytest.fixture(scope="session", autouse=True)
+def _install_app_state(sqlite_instance: SQLiteDatabase):
+    """Install ``app.state.db`` and ``app.state.indexer`` for the whole
+    test session.
+
+    The FastAPI lifespan only sets these fields when the server actually
+    runs. Tests that hit the app via ``TestClient(app)`` without
+    entering the lifespan context need the state pre-installed. We
+    use the session-scoped sqlite_instance (already populated) and a
+    fresh IndexerService that we never ``start()`` — its ``.status()``
+    returns the idle dict, which is exactly what the /api/health
+    endpoint expects.
+    """
+    app.state.db = sqlite_instance
+    app.state.indexer = IndexerService(sqlite_instance)
+    yield
+    # Keep the session-wide state in place after the yield — there's no
+    # cleanup to do, and other session-scoped consumers may still be
+    # tearing down.
 
 
 # ---------------------------------------------------------------------------
@@ -61,15 +87,26 @@ def sqlite_instance() -> SQLiteDatabase:
 def db_backend(
     request: pytest.FixtureRequest,
     sqlite_instance: SQLiteDatabase,
-) -> str:
+):
     """Install the SQLite backend on ``app.state.db`` for the duration of
     the test. The ``params=["sqlite"]`` is retained so the test IDs carry
     an explicit ``[sqlite]`` suffix, matching historical convention.
+
+    With the FastAPI lifespan owning startup, ``app.state.db`` is no
+    longer set at module load — it's installed inside the lifespan
+    context. Tests that exercise the API directly (without going
+    through TestClient) need this fixture to set up state explicitly.
+    We tolerate the attribute being absent by falling back to ``None``
+    so the post-test restore is a delete instead of an assignment.
     """
-    original: Database = app.state.db
+    sentinel = object()
+    original: Database | object = getattr(app.state, "db", sentinel)
     app.state.db = sqlite_instance
     yield request.param
-    app.state.db = original
+    if original is sentinel:
+        del app.state.db
+    else:
+        app.state.db = original
 
 
 # ---------------------------------------------------------------------------

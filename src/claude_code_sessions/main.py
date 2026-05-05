@@ -1,5 +1,7 @@
 import argparse
 import logging
+from collections.abc import AsyncIterator
+from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any, cast
 
@@ -22,12 +24,11 @@ from claude_code_sessions.database.sqlite.kg.payload import (
     SeedMetric,
 )
 
-# Configure logging BEFORE importing the database layer — the import
-# itself triggers cache construction (module-level SQLiteDatabase(...)
-# instance below), which emits phase banners we want the user to see.
-# Uvicorn later installs its own handlers for "uvicorn"/"uvicorn.access",
-# but leaves everyone else alone, so this basicConfig governs our own
-# log.info() calls for the rest of the process lifetime.
+# Configure logging BEFORE importing the database layer so the cache
+# manager's phase banners reach the same handlers uvicorn uses for
+# "uvicorn"/"uvicorn.access". The background indexer thread inherits
+# this configuration automatically — Python's logging module is
+# thread-safe and propagates to root by default.
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)-5s %(name)s | %(message)s",
@@ -35,10 +36,42 @@ logging.basicConfig(
 )
 
 from claude_code_sessions.database import Database, SQLiteDatabase  # noqa: E402
+from claude_code_sessions.database.sqlite.indexer import IndexerService  # noqa: E402
 
 log = logging.getLogger(__name__)
 
-app = FastAPI(title="Claude Code Sessions Analytics")
+
+@asynccontextmanager
+async def lifespan(app: FastAPI) -> AsyncIterator[None]:
+    """FastAPI lifespan: spawn the background indexer on startup,
+    stop it on shutdown.
+
+    The server binds its port immediately — the indexer runs in a
+    daemon thread and writes incrementally to the cache so endpoints
+    can serve whatever data is already present (cold-start endpoints
+    return empty lists rather than 503).
+
+    SIGINT / SIGTERM handling is uvicorn's responsibility; the framework
+    drives this lifespan's exit path on shutdown which is what cancels
+    the indexer.
+    """
+    db = SQLiteDatabase(
+        local_projects_path=PROJECTS_PATH,
+        home_projects_path=HOME_PROJECTS_PATH,
+    )
+    indexer = IndexerService(db)
+    app.state.db = db
+    app.state.indexer = indexer
+    indexer.start()
+    log.info("server ready — indexer running in background")
+    try:
+        yield
+    finally:
+        log.info("shutting down — stopping indexer")
+        indexer.stop(timeout=10.0)
+
+
+app = FastAPI(title="Claude Code Sessions Analytics", lifespan=lifespan)
 
 # CORS for frontend
 app.add_middleware(
@@ -49,20 +82,17 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Database backend — SQLite is now the only supported engine. Stored on
-# ``app.state`` for lifecycle management and so test fixtures can swap it
-# for an isolated in-memory instance without mutating a module-level
-# global.
-app.state.db = SQLiteDatabase(
-    local_projects_path=PROJECTS_PATH,
-    home_projects_path=HOME_PROJECTS_PATH,
-)
-
 
 def get_db() -> Database:
     """Typed accessor for the current database backend."""
     db: Database = app.state.db
     return db
+
+
+def get_indexer() -> IndexerService:
+    """Typed accessor for the current indexer service."""
+    indexer: IndexerService = app.state.indexer
+    return indexer
 
 
 # ---------------------------------------------------------------------------
@@ -91,8 +121,20 @@ async def root() -> dict[str, str]:
 
 
 @app.get("/api/health")
-async def health() -> dict[str, str]:
-    return {"status": "healthy", "projects_path": str(get_db().projects_path)}
+async def health() -> dict[str, Any]:
+    """Liveness probe + indexer status.
+
+    The ``indexer`` field exposes the background indexer's current phase
+    (idle/running/completed/cancelled/failed) plus timestamps and an
+    error string when applicable. Frontend code uses this to show a
+    "still building cache" banner during cold start without polling
+    every endpoint individually.
+    """
+    return {
+        "status": "healthy",
+        "projects_path": str(get_db().projects_path),
+        "indexer": get_indexer().status(),
+    }
 
 
 @app.get("/api/summary")
@@ -122,9 +164,7 @@ async def get_monthly_usage(
 
 
 @app.get("/api/usage/sessions")
-async def get_sessions(
-    days: int | None = None, project: str | None = None
-) -> list[dict[str, Any]]:
+async def get_sessions(days: int | None = None, project: str | None = None) -> list[dict[str, Any]]:
     return get_db().get_session_usage(days=days, project=project)
 
 
@@ -146,9 +186,7 @@ async def get_hourly_usage(
 
 
 @app.get("/api/timeline/events/{project_id}")
-async def get_timeline_events(
-    project_id: str, days: int | None = None
-) -> list[dict[str, Any]]:
+async def get_timeline_events(project_id: str, days: int | None = None) -> list[dict[str, Any]]:
     return get_db().get_timeline_events(project_id, days=days)
 
 
@@ -286,9 +324,7 @@ async def search_events(
         return db.semantic_search_events(
             q, days=days, project=project, msg_kind=msg_kind, limit=limit
         )
-    return db.search_events(
-        q, days=days, project=project, msg_kind=msg_kind, limit=limit
-    )
+    return db.search_events(q, days=days, project=project, msg_kind=msg_kind, limit=limit)
 
 
 # ---------------------------------------------------------------------------
@@ -316,8 +352,7 @@ async def kg_er(
         raise HTTPException(
             status_code=400,
             detail=(
-                f"invalid seed_metric {seed_metric!r}; "
-                f"expected one of {list(VALID_SEED_METRICS)}"
+                f"invalid seed_metric {seed_metric!r}; expected one of {list(VALID_SEED_METRICS)}"
             ),
         )
     try:

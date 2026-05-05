@@ -7,9 +7,14 @@ The ``reflections`` and ``event_annotations`` tables are not created here
 but are tolerated if the introspect script creates them.
 """
 
-from pathlib import Path
+# CACHE_DB_PATH lives in claude_code_sessions.config — that's the single
+# source of truth for filesystem locations. We re-export here for
+# backwards compatibility with any external imports (notably the
+# introspect skill script, whose own copy is independent but which other
+# tools sometimes import from).
+from claude_code_sessions.config import CACHE_DB_PATH
 
-CACHE_DB_PATH = Path.home() / ".claude" / "cache" / "introspect_sessions.db"
+__all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 
 # Must match the introspect script's version so both tools coexist.
 # v13: knowledge-graph layer (entities, relations, entity_clusters, nodes, edges,

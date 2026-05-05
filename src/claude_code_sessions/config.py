@@ -9,8 +9,20 @@ BACKEND_HOST: str = os.getenv("BACKEND_HOST", "0.0.0.0")
 PROJECT_ROOT: Path = Path(__file__).parent.parent.parent
 PROJECTS_PATH: Path = Path(os.getenv("PROJECTS_PATH", str(PROJECT_ROOT / "projects")))
 
-# Alternative data source (original location)
-HOME_PROJECTS_PATH: Path = Path.home() / ".claude" / "projects"
+# Alternative data source (original location). The SQLiteDatabase falls back
+# here when the configured PROJECTS_PATH is empty/missing — useful for fresh
+# checkouts that haven't run ``make sync-projects`` yet.
+HOME_PROJECTS_PATH: Path = Path(
+    os.getenv("HOME_PROJECTS_PATH", str(Path.home() / ".claude" / "projects"))
+)
+
+# Cache database location. Defaults to ~/.claude/cache/ so the dashboard
+# shares one cache file with the introspect skill. Override with CACHE_DIR
+# to keep a project-local cache (e.g. ``make dev-here`` points it at
+# ``./cache/`` so the rsync'd ``./all-sessions/...`` corpus indexes into a
+# repo-scoped database without disturbing the global cache).
+CACHE_DIR: Path = Path(os.getenv("CACHE_DIR", str(Path.home() / ".claude" / "cache")))
+CACHE_DB_PATH: Path = CACHE_DIR / "introspect_sessions.db"
 
 # Domain filtering
 # Domains are the first directory under $HOME in encoded project IDs

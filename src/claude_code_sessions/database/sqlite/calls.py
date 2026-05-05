@@ -47,70 +47,105 @@ _SHELL_SPLIT_RE = re.compile(r"\|\||&&|;|\|")
 
 # Command "wrappers" whose first positional argument is itself a command.
 # We skip past them (and any of their flags) to find the real program head.
-_WRAPPERS: frozenset[str] = frozenset({
-    "sudo", "time", "nohup", "exec", "xargs", "env", "command",
-})
+_WRAPPERS: frozenset[str] = frozenset(
+    {
+        "sudo",
+        "time",
+        "nohup",
+        "exec",
+        "xargs",
+        "env",
+        "command",
+    }
+)
 
 # Bash control-flow keywords that INTRODUCE a command. A segment like
 # ``do cmd`` really invokes ``cmd`` — the ``do`` is syntactic scaffolding
 # from a surrounding for/while/until loop that survived the segment
 # splitter. Unwrapping them behaves like ``_WRAPPERS`` but without flag
 # consumption (these keywords don't take ``-flags``).
-_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset({
-    "if", "elif", "then", "else", "do", "while", "until",
-})
+_SHELL_KEYWORDS_UNWRAP: frozenset[str] = frozenset(
+    {
+        "if",
+        "elif",
+        "then",
+        "else",
+        "do",
+        "while",
+        "until",
+    }
+)
 
 # Bash tokens that, when appearing as the first non-env word, mean the
 # segment carries no real command — either a loop header (``for i in …``,
 # ``case X in``) or a block terminator (``done``, ``fi``, ``esac``).
-_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset({
-    "for", "case", "in",
-    "done", "fi", "esac",
-})
+_SHELL_SEGMENT_REJECT: frozenset[str] = frozenset(
+    {
+        "for",
+        "case",
+        "in",
+        "done",
+        "fi",
+        "esac",
+    }
+)
 
 # GNU make flags that take a following positional argument. When parsing
 # ``make <target>`` segments we need to skip past these flag+arg pairs so
 # the arg isn't misread as a target name (e.g. ``make -C subproject test``
 # has target ``test``, not ``subproject``).
-_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset({
-    "-C", "-f", "-I", "-j", "-l", "-o", "-W",
-})
+_MAKE_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+    {
+        "-C",
+        "-f",
+        "-I",
+        "-j",
+        "-l",
+        "-o",
+        "-W",
+    }
+)
 
 # ``uv run`` flags that take a following positional argument. Needed so
 # we don't mistake the argument for the script being invoked — e.g. in
 # ``uv run --directory subproject pytest`` the script is ``pytest``.
-_UV_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset({
-    "--directory",
-    "--with",
-    "--with-editable",
-    "--with-requirements",
-    "--python",
-    "-p",
-    "--group",
-    "--extra",
-    "--index-url",
-    "--extra-index-url",
-    "--find-links",
-    "--package",
-    "--prerelease",
-    "--index-strategy",
-    "--resolution",
-    "--exclude-newer",
-    "--keyring-provider",
-    "--refresh-package",
-})
+_UV_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+    {
+        "--directory",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--python",
+        "-p",
+        "--group",
+        "--extra",
+        "--index-url",
+        "--extra-index-url",
+        "--find-links",
+        "--package",
+        "--prerelease",
+        "--index-strategy",
+        "--resolution",
+        "--exclude-newer",
+        "--keyring-provider",
+        "--refresh-package",
+    }
+)
 
 # ``bun run`` flags that take a following positional argument.
-_BUN_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset({
-    "--cwd",
-    "--config",
-    "-c",
-})
+_BUN_RUN_FLAGS_WITH_ARG: frozenset[str] = frozenset(
+    {
+        "--cwd",
+        "--config",
+        "-c",
+    }
+)
 
 
 # ---------------------------------------------------------------------------
 # CLI head parsing
 # ---------------------------------------------------------------------------
+
 
 def _parse_cli_segments(command: str) -> list[tuple[str, list[str]]]:
     """Parse a shell command into ``(head, post_head_tokens)`` segments.
@@ -336,7 +371,7 @@ def _segment_head_and_rest(tokens: list[str]) -> tuple[str, list[str]] | None:
     # name always contains at least one letter or digit.
     if not any(c.isalnum() for c in raw):
         return None
-    return raw, tokens[i + 1:]
+    return raw, tokens[i + 1 :]
 
 
 def _head_of_segment(tokens: list[str]) -> str | None:
@@ -362,6 +397,7 @@ def _is_env_assignment(token: str) -> bool:
 # Rule-path parsing
 # ---------------------------------------------------------------------------
 
+
 def _extract_rule_paths(text: str) -> list[str]:
     """Return every rule-file path cited in <system-reminder> blocks in ``text``."""
     paths: list[str] = []
@@ -374,6 +410,7 @@ def _extract_rule_paths(text: str) -> list[str]:
 # ---------------------------------------------------------------------------
 # Top-level extractor
 # ---------------------------------------------------------------------------
+
 
 def extract_calls(raw: dict[str, Any]) -> list[tuple[int, str, str]]:
     """Return ``(ord, call_type, call_name)`` rows for an event's signals.

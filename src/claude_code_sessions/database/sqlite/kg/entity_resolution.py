@@ -114,15 +114,11 @@ def sync_entity_clusters(conn: sqlite3.Connection) -> tuple[int, int]:
     # Group cluster members and pick the highest-mention name as canonical.
     name_to_count: dict[str, int] = {
         str(r[0]): int(r[1])
-        for r in conn.execute(
-            "SELECT name, count(*) FROM entities GROUP BY name"
-        ).fetchall()
+        for r in conn.execute("SELECT name, count(*) FROM entities GROUP BY name").fetchall()
     }
     name_to_type: dict[str, str | None] = {
         str(r[0]): (r[1] if r[1] else None)
-        for r in conn.execute(
-            "SELECT name, entity_type FROM entities GROUP BY name"
-        ).fetchall()
+        for r in conn.execute("SELECT name, entity_type FROM entities GROUP BY name").fetchall()
     }
 
     members_by_cluster: dict[int, list[str]] = {}
@@ -163,8 +159,7 @@ def sync_entity_clusters(conn: sqlite3.Connection) -> tuple[int, int]:
     for canonical in sorted(canonical_stats):
         stats = canonical_stats[canonical]
         conn.execute(
-            "INSERT OR IGNORE INTO nodes (name, entity_type, mention_count) "
-            "VALUES (?, ?, ?)",
+            "INSERT OR IGNORE INTO nodes (name, entity_type, mention_count) VALUES (?, ?, ?)",
             (canonical, stats.get("entity_type"), stats.get("mention_count", 0)),
         )
     num_nodes = int(conn.execute("SELECT count(*) FROM nodes").fetchone()[0])

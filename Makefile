@@ -4,6 +4,7 @@
 .PHONY: dev-backend-sqlite agentic-dev-backend-sqlite
 .PHONY: test-frontend-e2e-last-failed
 .PHONY: e2e-baseline e2e-after e2e-compare
+.PHONY: dev-here dev-backend-here agentic-dev-here agentic-dev-backend-here
 
 # Port Configuration
 # Human developer ports (default)
@@ -86,6 +87,70 @@ demo-backend: ## Run backend in demo mode (blocks work, clients domains)
 
 agentic-dev-frontend: ## Run frontend dev server only (AI agent - port 5274)
 	VITE_BACKEND_URL=http://localhost:$(AGENTIC_BACKEND_PORT) npm --prefix frontend run dev:frontend-only -- --port $(AGENTIC_FRONTEND_PORT)
+
+# =============================================================================
+# "Here" profile — index repo-local data into a repo-local cache
+# =============================================================================
+# Targets a fully self-contained build that does NOT touch ~/.claude/cache or
+# ~/.claude/projects. Useful when the repo holds a full rsync'd archive of
+# session JSONLs under ./all-sessions/ (see ``make sync-projects``) and you
+# want a separate cache file for the dashboard.
+#
+#   PROJECTS_PATH      — points at the rsync target inside the repo
+#   HOME_PROJECTS_PATH — pointed at the same dir so the in-app fallback
+#                        cannot escape the repo even if PROJECTS_PATH is empty
+#   CACHE_DIR          — repo-local cache file location
+
+HERE_PROJECTS_PATH := $(CURDIR)/all-sessions/claude/projects
+HERE_CACHE_DIR     := $(CURDIR)/cache
+
+dev-here: install-frontend ## Run servers against repo-local data + cache (ports 8100, 5273)
+	@echo "==============================================================================="
+	@echo "| 🏠 Starting dev servers (HERE profile)...                                  |"
+	@echo "|                                                                             |"
+	@echo "|   PROJECTS_PATH = $(HERE_PROJECTS_PATH)"
+	@echo "|   CACHE_DIR     = $(HERE_CACHE_DIR)"
+	@echo "|   Backend:  http://localhost:$(BACKEND_PORT)"
+	@echo "|   Frontend: http://localhost:$(FRONTEND_PORT)"
+	@echo "==============================================================================="
+	PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	HOME_PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	CACHE_DIR=$(HERE_CACHE_DIR) \
+	BACKEND_PORT=$(BACKEND_PORT) \
+	FRONTEND_PORT=$(FRONTEND_PORT) \
+	VITE_BACKEND_URL=http://localhost:$(BACKEND_PORT) \
+	npm --prefix frontend run dev:env
+
+dev-backend-here: ## Run backend only against repo-local data + cache (port 8100)
+	PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	HOME_PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	CACHE_DIR=$(HERE_CACHE_DIR) \
+	BACKEND_PORT=$(BACKEND_PORT) \
+	uv run python -m claude_code_sessions.main
+
+agentic-dev-here: install-frontend ## Run servers against repo-local data + cache (ports 8101, 5274)
+	@echo "==============================================================================="
+	@echo "| 🤖🏠 Starting dev servers (AGENTIC HERE profile)...                        |"
+	@echo "|                                                                             |"
+	@echo "|   PROJECTS_PATH = $(HERE_PROJECTS_PATH)"
+	@echo "|   CACHE_DIR     = $(HERE_CACHE_DIR)"
+	@echo "|   Backend:  http://localhost:$(AGENTIC_BACKEND_PORT)"
+	@echo "|   Frontend: http://localhost:$(AGENTIC_FRONTEND_PORT)"
+	@echo "==============================================================================="
+	PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	HOME_PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	CACHE_DIR=$(HERE_CACHE_DIR) \
+	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) \
+	FRONTEND_PORT=$(AGENTIC_FRONTEND_PORT) \
+	VITE_BACKEND_URL=http://localhost:$(AGENTIC_BACKEND_PORT) \
+	npm --prefix frontend run dev:env
+
+agentic-dev-backend-here: ## Run backend only — agentic ports against repo-local data + cache
+	PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	HOME_PROJECTS_PATH=$(HERE_PROJECTS_PATH) \
+	CACHE_DIR=$(HERE_CACHE_DIR) \
+	BACKEND_PORT=$(AGENTIC_BACKEND_PORT) \
+	uv run python -m claude_code_sessions.main
 
 # =============================================================================
 # Build & Test

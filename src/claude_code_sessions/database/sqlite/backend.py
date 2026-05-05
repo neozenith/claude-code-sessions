@@ -54,7 +54,32 @@ class SQLiteDatabase:
         self._local_projects_path = local_projects_path
         self._home_projects_path = home_projects_path
         self._cache = CacheManager(db_path)
+        # Initialize the schema eagerly so query endpoints can run while
+        # the background indexer is still ingesting (they just return
+        # empty results). The full ``ensure_ready()`` — which does the
+        # multi-hour ingestion + embedding + KG passes — is NOT called
+        # here; ``IndexerService`` drives that from a background thread
+        # so the server binds its port immediately on cold start.
+        if self._cache.needs_rebuild():
+            self._cache.reset()
+        else:
+            self._cache.init_schema()
+
+    def ensure_ready(self) -> None:
+        """Synchronously bring the cache up to date.
+
+        Blocks until all phases complete. Use ``IndexerService`` to drive
+        this from a background thread when the caller (e.g. uvicorn) must
+        not block on a multi-hour cold start.
+        """
         self._cache.ensure_ready(self.projects_path)
+
+    @property
+    def cache(self) -> CacheManager:
+        """The underlying CacheManager. Exposed for IndexerService and
+        for tests that need to drive the cache directly without going
+        through the high-level query methods."""
+        return self._cache
 
     @property
     def projects_path(self) -> Path:
@@ -100,7 +125,10 @@ class SQLiteDatabase:
     # of events. The table is maintained incrementally by CacheManager.
 
     def _agg_filters(
-        self, days: int | None, project: str | None, time_col: str = "a.time_bucket",
+        self,
+        days: int | None,
+        project: str | None,
+        time_col: str = "a.time_bucket",
     ) -> str:
         """Filter clauses for agg_* reads. Re-uses days/project/domain clauses
         but scoped to the agg table column aliases."""
@@ -380,7 +408,8 @@ class SQLiteDatabase:
         #   cumulative_output_tokens, message_content.
         # Without the full set, Timeline.tsx crashes at
         # `e.input_tokens.toLocaleString()` during hover-text build.
-        return self._q(f"""
+        return self._q(
+            f"""
             SELECT
                 e.project_id,
                 e.session_id,
@@ -410,7 +439,9 @@ class SQLiteDatabase:
             FROM events e
             WHERE e.project_id = ? AND e.timestamp IS NOT NULL {day_filter}
             ORDER BY first_event_time, e.timestamp
-        """, (project_id,))
+        """,
+            (project_id,),
+        )
 
     def get_schema_timeline(
         self, *, days: int | None = None, project: str | None = None
@@ -440,7 +471,8 @@ class SQLiteDatabase:
                 SELECT uuid FROM tree
             )"""
             params = (project_id, session_id, event_uuid, session_id)
-        return self._q(f"""
+        return self._q(
+            f"""
             SELECT
                 e.uuid, e.parent_uuid, e.event_type, e.timestamp,
                 e.timestamp_local, e.session_id, e.is_sidechain,
@@ -458,7 +490,9 @@ class SQLiteDatabase:
             -- NULL timestamps (e.g. last-prompt markers) sort to the END so
             -- the chronologically first real event appears at position 0.
             ORDER BY e.timestamp IS NULL, e.timestamp
-        """, params)
+        """,
+            params,
+        )
 
     def search_events(
         self,
@@ -501,8 +535,15 @@ class SQLiteDatabase:
         params: tuple[Any, ...] = (fts_query,)
         if msg_kind:
             allowed = {
-                "human", "task_notification", "tool_result", "user_text",
-                "meta", "assistant_text", "thinking", "tool_use", "other",
+                "human",
+                "task_notification",
+                "tool_result",
+                "user_text",
+                "meta",
+                "assistant_text",
+                "thinking",
+                "tool_use",
+                "other",
             }
             if msg_kind in allowed:
                 kind_clause = "AND e.msg_kind = ?"
@@ -510,7 +551,8 @@ class SQLiteDatabase:
 
         # ``snippet()`` highlights the matched terms in a 200-char window.
         # ``bm25()`` ranks by TF-IDF-like relevance; lower = more relevant.
-        return self._q(f"""
+        return self._q(
+            f"""
             SELECT
                 e.project_id,
                 e.session_id,
@@ -530,7 +572,9 @@ class SQLiteDatabase:
               {f}
             ORDER BY rank
             LIMIT {safe_limit}
-        """, params)
+        """,
+            params,
+        )
 
     # -----------------------------------------------------------------
     # Semantic search — vector KNN against the HNSW chunk index
@@ -617,7 +661,8 @@ class SQLiteDatabase:
         #
         # ``rank`` is aliased to ``distance`` so the response shape
         # matches the FTS search's ``rank`` field (both lower-is-better).
-        return self._q(f"""
+        return self._q(
+            f"""
             WITH ann AS (
                 SELECT rowid AS chunk_id, distance
                 FROM chunks_vec
@@ -642,11 +687,11 @@ class SQLiteDatabase:
               {f}
             ORDER BY ann.distance
             LIMIT {safe_limit}
-        """, (GGUF_MODEL_NAME, embed_text, knn_k) + extra_params)
+        """,
+            (GGUF_MODEL_NAME, embed_text, knn_k) + extra_params,
+        )
 
-    def get_event_raw_json(
-        self, project_id: str, session_id: str, event_uuid: str
-    ) -> str | None:
+    def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch raw JSON line from the source JSONL file on demand."""
         if is_project_blocked(project_id):
             raise LookupError(f"Project not found: {project_id}")
@@ -695,9 +740,9 @@ class SQLiteDatabase:
     # inline here because `agg` doesn't carry call_type/call_name — only
     # additive token measures — so we can't read off it.
     _CALLS_BUCKET_EXPRS: dict[str, str] = {
-        "hourly":  "strftime('%Y-%m-%dT%H:00:00', ec.timestamp)",
-        "daily":   "date(ec.timestamp)",
-        "weekly":  "date(ec.timestamp, 'weekday 0', '-6 days')",
+        "hourly": "strftime('%Y-%m-%dT%H:00:00', ec.timestamp)",
+        "daily": "date(ec.timestamp)",
+        "weekly": "date(ec.timestamp, 'weekday 0', '-6 days')",
         "monthly": "strftime('%Y-%m-01', ec.timestamp)",
     }
 
@@ -748,8 +793,14 @@ class SQLiteDatabase:
         # call_type comes from the API — constrain it to the known set
         # so we can safely interpolate (no user-controlled SQL).
         if call_type not in {
-            "tool", "skill", "subagent", "cli", "rule",
-            "make_target", "uv_script", "bun_script",
+            "tool",
+            "skill",
+            "subagent",
+            "cli",
+            "rule",
+            "make_target",
+            "uv_script",
+            "bun_script",
         }:
             raise ValueError(f"unknown call_type: {call_type}")
         safe_limit = max(1, min(int(limit), 500))
@@ -764,7 +815,8 @@ class SQLiteDatabase:
             exclude_clause = f"AND ec.call_name NOT IN ({placeholders})"
             params = tuple(exclude)
 
-        return self._q(f"""
+        return self._q(
+            f"""
             SELECT
                 ec.call_name,
                 COUNT(*) AS call_count,
@@ -774,7 +826,9 @@ class SQLiteDatabase:
             GROUP BY ec.call_name
             ORDER BY call_count DESC, ec.call_name ASC
             LIMIT {safe_limit}
-        """, params)
+        """,
+            params,
+        )
 
     # -- Knowledge graph ----------------------------------------------------
 

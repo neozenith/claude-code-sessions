@@ -79,12 +79,8 @@ def sync_community_labels(conn: sqlite3.Connection) -> tuple[int, int]:
     if _LABEL_ENTITY_CLUSTERS:
         ecl_count = _label_entity_clusters(conn, now)
     else:
-        ecl_count = int(
-            conn.execute("SELECT count(*) FROM entity_cluster_labels").fetchone()[0]
-        )
-        log.info(
-            "  community-naming: skipping entity_cluster_labels (UI does not use)"
-        )
+        ecl_count = int(conn.execute("SELECT count(*) FROM entity_cluster_labels").fetchone()[0])
+        log.info("  community-naming: skipping entity_cluster_labels (UI does not use)")
     log.info(
         "  community-naming: %d community labels + %d cluster labels in %.1f s",
         cl_count,
@@ -113,9 +109,7 @@ def _label_one(conn: sqlite3.Connection, members: list[str]) -> str:
     """
     sample = members[:_MAX_MEMBERS_IN_PROMPT]
     member_block = "\n".join(f"- {m}" for m in sample)
-    prompt = (
-        f"{_LABEL_PROMPT}\n\nGroup members\n{member_block}\n\nLabel:"
-    )
+    prompt = f"{_LABEL_PROMPT}\n\nGroup members\n{member_block}\n\nLabel:"
     row = conn.execute(
         "SELECT muninn_chat(?, ?)",
         (CHAT_MODEL_NAME, prompt),
@@ -153,8 +147,7 @@ def _label_entity_clusters(conn: sqlite3.Connection, now: str) -> int:
 
     # Resume support — skip canonicals we've already labelled.
     already = {
-        str(r[0])
-        for r in conn.execute("SELECT canonical FROM entity_cluster_labels").fetchall()
+        str(r[0]) for r in conn.execute("SELECT canonical FROM entity_cluster_labels").fetchall()
     }
     todo = [(c, ms) for c, ms in eligible if c not in already]
     log.info(
@@ -229,9 +222,7 @@ def _label_leiden_communities(conn: sqlite3.Connection, now: str) -> int:
         )
         return int(conn.execute("SELECT count(*) FROM community_labels").fetchone()[0])
 
-    already_rows = conn.execute(
-        "SELECT resolution, community_id FROM community_labels"
-    ).fetchall()
+    already_rows = conn.execute("SELECT resolution, community_id FROM community_labels").fetchall()
     already = {(float(r[0]), int(r[1])) for r in already_rows}
     todo = [(k, ms) for k, ms in eligible if k not in already]
     log.info(
