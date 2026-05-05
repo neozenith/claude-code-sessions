@@ -40,3 +40,5 @@ frontend/playwright-report/
 tmp/
 *.pid
 .vite/
+
+all-sessions/
