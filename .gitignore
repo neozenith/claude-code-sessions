@@ -42,3 +42,4 @@ tmp/
 .vite/
 
 all-sessions/
+cache/
