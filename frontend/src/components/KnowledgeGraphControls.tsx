@@ -7,23 +7,32 @@
  */
 
 import type { KGCommunity, KGEdge, KGNode, KGPayload, SeedMetric } from '@/lib/kg-client'
-import type { LayoutEngine, Selection, SizeMode } from './KnowledgeGraphControls.constants'
+import type {
+  EdgeSizeMode,
+  LayoutEngine,
+  Selection,
+  SizeMode,
+} from './KnowledgeGraphControls.constants'
 
 interface Props {
   topN: number
   seedMetric: SeedMetric
   maxDepth: number
   minDegree: number
+  minEdgeBetweenness: number
   layoutEngine: LayoutEngine
   sizeMode: SizeMode
+  edgeSizeMode: EdgeSizeMode
   fcoseConfig: string
   fcoseConfigError: string | null
   onTopNChange: (v: number) => void
   onSeedMetricChange: (v: SeedMetric) => void
   onMaxDepthChange: (v: number) => void
   onMinDegreeChange: (v: number) => void
+  onMinEdgeBetweennessChange: (v: number) => void
   onLayoutChange: (v: LayoutEngine) => void
   onSizeModeChange: (v: SizeMode) => void
+  onEdgeSizeModeChange: (v: EdgeSizeMode) => void
   onFcoseConfigChange: (v: string) => void
   onFcoseConfigReset: () => void
   onApplyLayout: () => void
@@ -37,16 +46,20 @@ export default function KnowledgeGraphControls({
   seedMetric,
   maxDepth,
   minDegree,
+  minEdgeBetweenness,
   layoutEngine,
   sizeMode,
+  edgeSizeMode,
   fcoseConfig,
   fcoseConfigError,
   onTopNChange,
   onSeedMetricChange,
   onMaxDepthChange,
   onMinDegreeChange,
+  onMinEdgeBetweennessChange,
   onLayoutChange,
   onSizeModeChange,
+  onEdgeSizeModeChange,
   onFcoseConfigChange,
   onFcoseConfigReset,
   onApplyLayout,
@@ -117,7 +130,12 @@ export default function KnowledgeGraphControls({
             className="rounded border border-input bg-background px-2 py-1 text-xs"
           />
         </label>
+      </section>
 
+      <section className="flex flex-col gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Node Filters
+        </h2>
         <label className="flex flex-col gap-1" data-testid="kg-control-min-degree">
           <span>Min degree (prune isolates)</span>
           <input
@@ -126,6 +144,26 @@ export default function KnowledgeGraphControls({
             step={1}
             value={minDegree}
             onChange={(e) => onMinDegreeChange(Number(e.target.value))}
+            className="rounded border border-input bg-background px-2 py-1 text-xs"
+          />
+        </label>
+      </section>
+
+      <section className="flex flex-col gap-2">
+        <h2 className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+          Edge Filters
+        </h2>
+        <label
+          className="flex flex-col gap-1"
+          data-testid="kg-control-min-edge-betweenness"
+        >
+          <span>Min edge betweenness (0 = allow all)</span>
+          <input
+            type="number"
+            min={0}
+            step={0.001}
+            value={minEdgeBetweenness}
+            onChange={(e) => onMinEdgeBetweennessChange(Number(e.target.value))}
             className="rounded border border-input bg-background px-2 py-1 text-xs"
           />
         </label>
@@ -200,8 +238,21 @@ export default function KnowledgeGraphControls({
             onChange={(e) => onSizeModeChange(e.target.value as SizeMode)}
             className="rounded border border-input bg-background px-2 py-1 text-xs"
           >
-            <option value="degree">degree</option>
             <option value="betweenness">node betweenness</option>
+            <option value="degree">degree</option>
+            <option value="uniform">uniform</option>
+          </select>
+        </label>
+
+        <label className="flex flex-col gap-1" data-testid="kg-control-edge-size-mode">
+          <span>Edge size by</span>
+          <select
+            value={edgeSizeMode}
+            onChange={(e) => onEdgeSizeModeChange(e.target.value as EdgeSizeMode)}
+            className="rounded border border-input bg-background px-2 py-1 text-xs"
+          >
+            <option value="betweenness">edge betweenness</option>
+            <option value="weight">weight</option>
             <option value="uniform">uniform</option>
           </select>
         </label>

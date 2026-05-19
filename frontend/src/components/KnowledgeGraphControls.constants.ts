@@ -12,6 +12,7 @@ import type { KGCommunity, KGEdge, KGNode, SeedMetric } from '@/lib/kg-client'
 
 export type LayoutEngine = 'fcose' | 'elk' | 'grid'
 export type SizeMode = 'uniform' | 'degree' | 'betweenness'
+export type EdgeSizeMode = 'uniform' | 'weight' | 'betweenness'
 
 export type Selection =
   | { kind: 'node'; node: KGNode }
@@ -22,8 +23,10 @@ export const DEFAULT_TOP_N = 2
 export const DEFAULT_SEED_METRIC: SeedMetric = 'edge_betweenness'
 export const DEFAULT_MAX_DEPTH = 1
 export const DEFAULT_MIN_DEGREE = 5
+export const DEFAULT_MIN_EDGE_BETWEENNESS = 0
 export const DEFAULT_LAYOUT: LayoutEngine = 'fcose'
-export const DEFAULT_SIZE_MODE: SizeMode = 'degree'
+export const DEFAULT_SIZE_MODE: SizeMode = 'betweenness'
+export const DEFAULT_EDGE_SIZE_MODE: EdgeSizeMode = 'betweenness'
 
 export const DEFAULT_FCOSE_CONFIG = {
   quality: 'default',

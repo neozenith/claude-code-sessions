@@ -4,12 +4,14 @@
  * Visual parity target: http://localhost:5282/sessions_demo/kg/er/
  *
  * URL state:
- *   ?topN=2          — number of seed nodes (default 2)
- *   ?seedMetric=...  — degree | node_betweenness | edge_betweenness (default edge_betweenness)
- *   ?maxDepth=1      — BFS depth from seeds, 0 = unlimited (default 1)
- *   ?minDegree=5     — prune nodes with degree below this (default 5)
- *   ?layout=fcose    — fcose | elk | grid (default fcose)
- *   ?sizeMode=...    — uniform | degree | betweenness (default degree)
+ *   ?topN=2                 — number of seed nodes (default 2)
+ *   ?seedMetric=...         — degree | node_betweenness | edge_betweenness (default edge_betweenness)
+ *   ?maxDepth=1             — BFS depth from seeds, 0 = unlimited (default 1)
+ *   ?minDegree=5            — prune nodes with degree below this (default 5; server-side)
+ *   ?minEdgeBetweenness=0   — prune edges with edge_betweenness below this (default 0; client-side)
+ *   ?layout=fcose           — fcose | elk | grid (default fcose)
+ *   ?sizeMode=...           — uniform | degree | betweenness (default betweenness)
+ *   ?edgeSizeMode=...       — uniform | weight | betweenness (default betweenness)
  *
  * Defaults are *omitted* from the URL for clean deep links, matching the
  * project convention documented in CLAUDE.md.
@@ -43,6 +45,7 @@ import { useTheme } from '@/contexts/ThemeContext'
 import { useFilters } from '@/hooks/useFilters'
 import KnowledgeGraphControls from '@/components/KnowledgeGraphControls'
 import {
+  type EdgeSizeMode,
   type LayoutEngine,
   type Selection,
   type SizeMode,
@@ -52,8 +55,10 @@ import {
   DEFAULT_SEED_METRIC,
   DEFAULT_MAX_DEPTH,
   DEFAULT_MIN_DEGREE,
+  DEFAULT_MIN_EDGE_BETWEENNESS,
   DEFAULT_LAYOUT,
   DEFAULT_SIZE_MODE,
+  DEFAULT_EDGE_SIZE_MODE,
 } from '@/components/KnowledgeGraphControls.constants'
 
 cytoscape.use(fcose as unknown as cytoscape.Ext)
@@ -101,45 +106,93 @@ const colorForKey = (key: string): string => {
   return hueToHex(hue)
 }
 
-const buildElements = (payload: KGPayload): cytoscape.ElementDefinition[] => {
+const buildElements = (
+  payload: KGPayload,
+  minEdgeBetweenness: number,
+  minDegree: number,
+): cytoscape.ElementDefinition[] => {
   const parentIdFor = (cid: number) => `${COMMUNITY_ID_PREFIX}${cid}`
 
-  const parents: cytoscape.ElementDefinition[] = payload.communities.map((c) => ({
-    group: 'nodes',
-    data: {
-      id: parentIdFor(c.id),
-      label: c.label ?? `community #${c.id}`,
-      isCommunity: true,
-      memberCount: c.member_count,
-    },
-  }))
+  // Server filtered nodes by min_degree against the FULL edge set; the
+  // edge_betweenness threshold below is client-side, so we must re-apply
+  // the degree predicate against the surviving edges or orphaned nodes leak through.
+  const allNodeIds = new Set(payload.nodes.map((n) => n.id))
+  let survivingEdges = payload.edges.filter(
+    (e) =>
+      allNodeIds.has(e.source) &&
+      allNodeIds.has(e.target) &&
+      (e.edge_betweenness ?? 0) >= minEdgeBetweenness,
+  )
 
-  const children: cytoscape.ElementDefinition[] = payload.nodes.map((n) => ({
-    group: 'nodes',
-    data: {
-      id: n.id,
-      label: n.label,
-      entityType: n.entity_type ?? '',
-      mentionCount: n.mention_count ?? 0,
-      nodeBetweenness: n.node_betweenness ?? 0,
-      parent: n.community_id !== null ? parentIdFor(n.community_id) : undefined,
-    },
-  }))
+  // k-core: dropping a low-degree node removes its edges and may push a neighbour
+  // below the threshold, so iterate until the surviving set is stable.
+  let keptNodeIds = new Set(allNodeIds)
+  if (minDegree > 0) {
+    while (true) {
+      const degree = new Map<string, number>()
+      for (const e of survivingEdges) {
+        degree.set(e.source, (degree.get(e.source) ?? 0) + 1)
+        degree.set(e.target, (degree.get(e.target) ?? 0) + 1)
+      }
+      const next = new Set<string>()
+      for (const id of keptNodeIds) {
+        if ((degree.get(id) ?? 0) >= minDegree) next.add(id)
+      }
+      if (next.size === keptNodeIds.size) break
+      keptNodeIds = next
+      survivingEdges = survivingEdges.filter(
+        (e) => keptNodeIds.has(e.source) && keptNodeIds.has(e.target),
+      )
+    }
+  }
 
-  const nodeIdSet = new Set(children.map((c) => c.data.id as string))
-  const edges: cytoscape.ElementDefinition[] = payload.edges
-    .filter((e) => nodeIdSet.has(e.source) && nodeIdSet.has(e.target))
-    .map((e, i) => ({
-      group: 'edges',
+  const communitiesInUse = new Set<number>()
+  for (const n of payload.nodes) {
+    if (keptNodeIds.has(n.id) && n.community_id !== null) {
+      communitiesInUse.add(n.community_id)
+    }
+  }
+
+  const parents: cytoscape.ElementDefinition[] = payload.communities
+    .filter((c) => communitiesInUse.has(c.id))
+    .map((c) => ({
+      group: 'nodes',
       data: {
-        id: `e${i}`,
-        source: e.source,
-        target: e.target,
-        relType: e.rel_type ?? '',
-        weight: e.weight ?? 1,
-        edgeBetweenness: e.edge_betweenness ?? 0,
+        id: parentIdFor(c.id),
+        label: c.label ?? `community #${c.id}`,
+        isCommunity: true,
+        memberCount: c.member_count,
       },
     }))
+
+  const children: cytoscape.ElementDefinition[] = payload.nodes
+    .filter((n) => keptNodeIds.has(n.id))
+    .map((n) => ({
+      group: 'nodes',
+      data: {
+        id: n.id,
+        label: n.label,
+        entityType: n.entity_type ?? '',
+        mentionCount: n.mention_count ?? 0,
+        nodeBetweenness: n.node_betweenness ?? 0,
+        parent:
+          n.community_id !== null && communitiesInUse.has(n.community_id)
+            ? parentIdFor(n.community_id)
+            : undefined,
+      },
+    }))
+
+  const edges: cytoscape.ElementDefinition[] = survivingEdges.map((e, i) => ({
+    group: 'edges',
+    data: {
+      id: `e${i}`,
+      source: e.source,
+      target: e.target,
+      relType: e.rel_type ?? '',
+      weight: e.weight ?? 1,
+      edgeBetweenness: e.edge_betweenness ?? 0,
+    },
+  }))
 
   return [...parents, ...children, ...edges]
 }
@@ -148,6 +201,7 @@ const buildStylesheet = (
   payload: KGPayload,
   theme: 'light' | 'dark',
   sizeMode: SizeMode,
+  edgeSizeMode: EdgeSizeMode,
 ): cytoscape.StylesheetStyle[] => {
   const isDark = theme === 'dark'
   const base = {
@@ -193,6 +247,23 @@ const buildStylesheet = (
   const relTypes = Array.from(new Set(payload.edges.map((e) => e.rel_type ?? 'rel')))
   const edgeColorByType = new Map(relTypes.map((t) => [t, colorForKey(t)]))
 
+  let edgeWidthFn: (ele: cytoscape.EdgeSingular) => number
+  if (edgeSizeMode === 'uniform') {
+    edgeWidthFn = () => 1
+  } else if (edgeSizeMode === 'weight') {
+    const maxW = Math.max(0.001, ...payload.edges.map((e) => e.weight ?? 1))
+    edgeWidthFn = (ele) => {
+      const w = Number(ele.data('weight') ?? 1)
+      return 0.5 + Math.sqrt(Math.max(0, w) / maxW) * 5
+    }
+  } else {
+    const maxEb = Math.max(0.0001, ...payload.edges.map((e) => e.edge_betweenness ?? 0))
+    edgeWidthFn = (ele) => {
+      const v = Number(ele.data('edgeBetweenness') ?? 0)
+      return 0.5 + Math.sqrt(Math.max(0, v) / maxEb) * 5
+    }
+  }
+
   return [
     {
       selector: 'node',
@@ -229,7 +300,7 @@ const buildStylesheet = (
     {
       selector: 'edge',
       style: {
-        width: 1,
+        width: edgeWidthFn,
         'line-color': (ele: cytoscape.EdgeSingular) => {
           const t = (ele.data('relType') as string) || 'rel'
           return edgeColorByType.get(t) ?? (isDark ? '#5a6375' : '#999')
@@ -292,8 +363,12 @@ export default function KnowledgeGraph(): JSX.Element {
   const seedMetric = (searchParams.get('seedMetric') ?? DEFAULT_SEED_METRIC) as SeedMetric
   const maxDepth = Number(searchParams.get('maxDepth') ?? DEFAULT_MAX_DEPTH)
   const minDegree = Number(searchParams.get('minDegree') ?? DEFAULT_MIN_DEGREE)
+  const minEdgeBetweenness = Number(
+    searchParams.get('minEdgeBetweenness') ?? DEFAULT_MIN_EDGE_BETWEENNESS,
+  )
   const layoutEngine = (searchParams.get('layout') ?? DEFAULT_LAYOUT) as LayoutEngine
   const sizeMode = (searchParams.get('sizeMode') ?? DEFAULT_SIZE_MODE) as SizeMode
+  const edgeSizeMode = (searchParams.get('edgeSizeMode') ?? DEFAULT_EDGE_SIZE_MODE) as EdgeSizeMode
   const filterDays = filters.days
   const filterProject = filters.project
 
@@ -377,15 +452,23 @@ export default function KnowledgeGraph(): JSX.Element {
   }, [state])
 
   const elements = useMemo(
-    () => (state.status === 'ready' ? buildElements(state.payload) : []),
-    [state],
+    () =>
+      state.status === 'ready'
+        ? buildElements(state.payload, minEdgeBetweenness, minDegree)
+        : [],
+    [state, minEdgeBetweenness, minDegree],
   )
   const stylesheet = useMemo(
     () =>
       state.status === 'ready'
-        ? buildStylesheet(state.payload, theme === 'dark' ? 'dark' : 'light', sizeMode)
+        ? buildStylesheet(
+            state.payload,
+            theme === 'dark' ? 'dark' : 'light',
+            sizeMode,
+            edgeSizeMode,
+          )
         : [],
-    [state, theme, sizeMode],
+    [state, theme, sizeMode, edgeSizeMode],
   )
 
   const runLayout = useCallback(() => {
@@ -553,8 +636,10 @@ export default function KnowledgeGraph(): JSX.Element {
           seedMetric={seedMetric}
           maxDepth={maxDepth}
           minDegree={minDegree}
+          minEdgeBetweenness={minEdgeBetweenness}
           layoutEngine={layoutEngine}
           sizeMode={sizeMode}
+          edgeSizeMode={edgeSizeMode}
           fcoseConfig={fcoseConfigText}
           fcoseConfigError={fcoseConfigError}
           onTopNChange={(v) => updateParam('topN', String(v), String(DEFAULT_TOP_N))}
@@ -563,8 +648,16 @@ export default function KnowledgeGraph(): JSX.Element {
           onMinDegreeChange={(v) =>
             updateParam('minDegree', String(v), String(DEFAULT_MIN_DEGREE))
           }
+          onMinEdgeBetweennessChange={(v) =>
+            updateParam(
+              'minEdgeBetweenness',
+              String(v),
+              String(DEFAULT_MIN_EDGE_BETWEENNESS),
+            )
+          }
           onLayoutChange={(v) => updateParam('layout', v, DEFAULT_LAYOUT)}
           onSizeModeChange={(v) => updateParam('sizeMode', v, DEFAULT_SIZE_MODE)}
+          onEdgeSizeModeChange={(v) => updateParam('edgeSizeMode', v, DEFAULT_EDGE_SIZE_MODE)}
           onFcoseConfigChange={setFcoseConfigText}
           onFcoseConfigReset={() => setFcoseConfigText(DEFAULT_FCOSE_CONFIG_JSON)}
           onApplyLayout={runLayout}
