@@ -62,6 +62,12 @@ def _phase_done(step: int, total: int, label: str, summary: str) -> None:
 _CACHE_PHASE_COUNT = 7
 
 
+# Sentinel key in cache_metadata used to gate one-shot data migrations.
+# The value is "1" once the migration has run successfully. Unset/missing
+# means the migration hasn't run yet on this cache file.
+DEDUPE_SESSION_UUID_MIGRATION_KEY = "dedupe_session_uuid_v1"
+
+
 class CacheManager:
     """Manages the SQLite cache for session data."""
 
@@ -313,6 +319,25 @@ class CacheManager:
         file_info["source_file_id"] = source_file_id
 
         for event in events_data:
+            # Append-if-not-exists on canonical (session_id, uuid). When the
+            # same JSONL is ingested via a second filepath (e.g. an rsync
+            # mirror) the event already lives in the cache — reuse its id
+            # and skip the dependent edges/calls writes below so we don't
+            # duplicate them either. Backed by idx_events_session_uuid.
+            existing_id: int | None = None
+            if event["uuid"] is not None:
+                row = cursor.execute(
+                    "SELECT id FROM events WHERE session_id IS ? AND uuid = ?",
+                    (detected_session_id, event["uuid"]),
+                ).fetchone()
+                if row is not None:
+                    existing_id = row[0]
+
+            if existing_id is not None:
+                event["_db_id"] = existing_id
+                event["_dedup_skip"] = True
+                continue
+
             cursor.execute(
                 """INSERT INTO events
                    (uuid, parent_uuid, prompt_id, event_type, msg_kind,
@@ -357,6 +382,8 @@ class CacheManager:
             event["_db_id"] = cursor.lastrowid
 
         for event in events_data:
+            if event.get("_dedup_skip"):
+                continue
             if event["uuid"] and event["parent_uuid"]:
                 cursor.execute(
                     """INSERT INTO event_edges
@@ -372,6 +399,8 @@ class CacheManager:
                 )
 
         for event in events_data:
+            if event.get("_dedup_skip"):
+                continue
             event_db_id = event.get("_db_id")
             if not event_db_id:
                 continue
@@ -692,6 +721,138 @@ class CacheManager:
             elapsed_ms,
         )
 
+    # -- One-shot data migrations -------------------------------------------
+
+    def migrate_dedupe_session_uuid(self) -> dict[str, int] | None:
+        """Prune (session_id, uuid) duplicates left behind by rsync-mirror
+        ingestion that predates append-if-not-exists semantics in
+        ``_write_parsed``.
+
+        Strategy: keep the lowest event id per (session_id, uuid), let the
+        FK CASCADE on events sweep event_calls and event_message_chunks
+        (which in turn cascades entities and fires the chunks_fts trigger),
+        then dedupe event_edges on its natural key, drop source_files that
+        no longer back any event/edge, clean orphan KG phase-log rows, and
+        rebuild the projects/sessions/agg roll-ups so dashboard totals
+        match the pruned event set.
+
+        Idempotent — guarded by the DEDUPE_SESSION_UUID_MIGRATION_KEY
+        sentinel in cache_metadata. Returns the per-table delete counts
+        on first run, or None if it was already complete.
+        """
+        cursor = self.conn.cursor()
+        row = cursor.execute(
+            "SELECT value FROM cache_metadata WHERE key = ?",
+            (DEDUPE_SESSION_UUID_MIGRATION_KEY,),
+        ).fetchone()
+        if row is not None and row[0] == "1":
+            return None
+
+        t0 = time.monotonic()
+        log.info("════════════════════════════════════════════════════════")
+        log.info(" Dedupe migration: (session_id, uuid) prune")
+        log.info("════════════════════════════════════════════════════════")
+
+        events_before = cursor.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        # 1. Prune duplicate event rows. The FK CASCADE on events takes care
+        #    of event_calls and event_message_chunks; the chunks delete also
+        #    cascades entities and fires the chunks_fts delete trigger.
+        cursor.execute(
+            """
+            DELETE FROM events
+            WHERE uuid IS NOT NULL
+              AND id NOT IN (
+                SELECT MIN(id) FROM events
+                WHERE uuid IS NOT NULL
+                GROUP BY session_id, uuid
+              )
+            """
+        )
+        events_deleted = cursor.rowcount
+
+        # 2. Dedupe event_edges on its natural key — the table has no FK to
+        #    events so it didn't cascade with step 1, and the same
+        #    (session_id, event_uuid, parent_event_uuid) edge was written
+        #    once per duplicated source_file.
+        cursor.execute(
+            """
+            DELETE FROM event_edges
+            WHERE id NOT IN (
+                SELECT MIN(id) FROM event_edges
+                GROUP BY project_id, session_id, event_uuid, parent_event_uuid
+            )
+            """
+        )
+        edges_deleted = cursor.rowcount
+
+        # 3. Drop source_files that no longer back any event or edge.
+        cursor.execute(
+            """
+            DELETE FROM source_files
+            WHERE id NOT IN (
+                    SELECT DISTINCT source_file_id FROM events
+                    WHERE source_file_id IS NOT NULL
+                )
+              AND id NOT IN (
+                    SELECT DISTINCT source_file_id FROM event_edges
+                    WHERE source_file_id IS NOT NULL
+                )
+            """
+        )
+        source_files_deleted = cursor.rowcount
+
+        # 4. KG phase-log rows are independent tables keyed by chunk_id; the
+        #    chunks they referenced were cascaded away in step 1.
+        cursor.execute(
+            "DELETE FROM ner_chunks_log WHERE chunk_id NOT IN "
+            "(SELECT chunk_id FROM event_message_chunks)"
+        )
+        ner_log_deleted = cursor.rowcount
+        cursor.execute(
+            "DELETE FROM re_chunks_log WHERE chunk_id NOT IN "
+            "(SELECT chunk_id FROM event_message_chunks)"
+        )
+        re_log_deleted = cursor.rowcount
+
+        cursor.execute(
+            "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",
+            (DEDUPE_SESSION_UUID_MIGRATION_KEY, "1"),
+        )
+        self.conn.commit()
+
+        events_after = cursor.execute("SELECT COUNT(*) FROM events").fetchone()[0]
+
+        log.info(
+            "  pruned: events %d → %d (-%d), edges -%d, source_files -%d, "
+            "ner_log -%d, re_log -%d",
+            events_before,
+            events_after,
+            events_deleted,
+            edges_deleted,
+            source_files_deleted,
+            ner_log_deleted,
+            re_log_deleted,
+        )
+
+        # Roll-ups must be rebuilt from the pruned event set.
+        self.rebuild_aggregates()
+        self.refresh_aggregates_for_range()
+
+        log.info(
+            "  dedupe migration complete in %.1f s "
+            "(run VACUUM separately to reclaim disk space)",
+            time.monotonic() - t0,
+        )
+
+        return {
+            "events_deleted": events_deleted,
+            "edges_deleted": edges_deleted,
+            "source_files_deleted": source_files_deleted,
+            "ner_log_deleted": ner_log_deleted,
+            "re_log_deleted": re_log_deleted,
+        }
+
     # -- Update orchestration ------------------------------------------------
 
     def update(self, projects_path: Path) -> dict[str, Any]:
@@ -879,6 +1040,11 @@ class CacheManager:
             # tables) without forcing a full rebuild.
             self.init_schema()
             _phase_done(1, total, "schema check", f"up to date (version {SCHEMA_VERSION})")
+
+        # One-shot data migrations run after schema check but before the
+        # regular update cycle. They're idempotent (sentinel-gated in
+        # cache_metadata) so this is a no-op once they've succeeded once.
+        self.migrate_dedupe_session_uuid()
 
         # Phases 2-6 live inside update() so they share the same
         # discovery + needs_update scan. update() uses _phase()/
