@@ -19,12 +19,12 @@
 ## ADR: Performance summary aggregation grain
 | Option | Pros | Cons |
 |--------|------|------|
-| Per-model (TPS, smart-zone buckets, idle/active) | Compares model performance directly | No per-project drilldown |
+| Per-model (TPS, context-ratio buckets, idle/active) | Compares model performance directly | No per-project drilldown |
 | Per-model × per-project | Richer drilldown | Larger payload; sparse cells |
-| Per-model + global smart-zone histogram | Compact, answers "am I in the zone" | Less granular |
+| Per-model + global context-ratio histogram | Compact, shows utilization spread | Less granular |
 
-**Decision:** **Per-model aggregation that honors the global `days`/`project` filters**, plus a global smart-zone histogram (counts of response heads per zone). The endpoint returns: `by_model: [{model_id, avg_tps, median_tps, response_count, total_idle_ms, total_active_ms}]` and `zone_histogram: {smart, caution, danger}`.
-**Rationale:** Project drilldown comes for free from the existing global filter (`useFilters`), so per-model rows already scope to the selected project without a sparse per-model×project matrix. The global histogram directly answers "am I staying in the smart zone." This matches how every other endpoint in the app consumes `days`/`project`.
+**Decision:** **Per-model aggregation that honors the global `days`/`project` filters**, plus a global context-ratio histogram (counts of response heads binned by their raw `context_ratio`). The endpoint returns: `by_model: [{model_id, avg_tps, median_tps, response_count, total_idle_ms, total_active_ms}]` and `ratio_histogram: [{bin_lo, bin_hi, count}]` (fixed-width ratio bins, e.g. 0–10%, 10–20%, …). No categorical zone labels (per the G2 ADR "Quantitative ratio only").
+**Rationale:** Project drilldown comes for free from the existing global filter (`useFilters`), so per-model rows already scope to the selected project without a sparse per-model×project matrix. The global histogram shows how full the window tends to get, quantitatively. This matches how every other endpoint in the app consumes `days`/`project`.
 
 ## Tickets
 

@@ -1,6 +1,6 @@
 # Tokenometrics: Performance, Idle Time & Context-Window Analytics
 
-<!-- VERIFICATION: Smart-zone citations (RULER, NoLiMa, Databricks, Chroma) verified via WebFetch at authoring time. Claude 4.6/4.7/4.8 + Sonnet 4.6 window figures postdate the model knowledge cutoff and are sourced from live vendor docs; independently corroborated by observed occupancy (opus-4-7 reached ~1M, sonnet/opus-4-5/haiku stayed <200k — see Current State). No LINK_NOT_VERIFIED markers remain. -->
+<!-- VERIFICATION: Claude 4.6/4.7/4.8 + Sonnet 4.6 window figures postdate the model knowledge cutoff and are sourced from live vendor docs; independently corroborated by observed occupancy (opus-4-7 reached ~1M, sonnet/opus-4-5/haiku stayed <200k — see Current State). No LINK_NOT_VERIFIED markers remain. NOTE: zone-labeling (smart/caution/danger) was dropped per the G2 ADR "Quantitative ratio only"; context utilization is exposed as the raw context_ratio. -->
 
 ---
 
@@ -67,13 +67,15 @@ loop can resume.
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
 | [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G2](./tokenometrics-G2.md) | 6 | 3 | 3 | [T2.4](./tokenometrics-G2-T2.4.md) | — |
+| [G2](./tokenometrics-G2.md) | 6 | 4 | 2 | [T2.4](./tokenometrics-G2-T2.4.md) | — |
 | [G3](./tokenometrics-G3.md) | 3 | 0 | 3 | [T3.1](./tokenometrics-G3-T3.1.md) | — |
 | [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | [T4.1](./tokenometrics-G4-T4.1.md) | — |
 | [G5](./tokenometrics-G5.md) | 4 | 0 | 4 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
 | [G6](./tokenometrics-G6.md) | 3 | 0 | 3 | — | [T1.1](./tokenometrics-G1-T1.1.md), [T2.6](./tokenometrics-G2-T2.6.md), [T3.2](./tokenometrics-G3-T3.2.md), [T5.1](./tokenometrics-G5-T5.1.md) |
-| [G7](./tokenometrics-G7.md) | 4 | 0 | 4 | — | [T2.4](./tokenometrics-G2-T2.4.md), [T3.1](./tokenometrics-G3-T3.1.md), [T6.1](./tokenometrics-G6-T6.1.md), [T6.2](./tokenometrics-G6-T6.2.md) |
+| [G7](./tokenometrics-G7.md) | 4 | 1 | 3 | — | [T3.1](./tokenometrics-G3-T3.1.md), [T6.1](./tokenometrics-G6-T6.1.md), [T6.2](./tokenometrics-G6-T6.2.md) |
 | [G8](./tokenometrics-G8.md) | 1 | 0 | 1 | — | [T1.1](./tokenometrics-G1-T1.1.md), [T2.6](./tokenometrics-G2-T2.6.md), [T3.2](./tokenometrics-G3-T3.2.md), [T4.1](./tokenometrics-G4-T4.1.md) |
+
+**Dropped tickets** (counted as `[x]`, no work required): **T2.5** — the smart/caution/danger zone classifier and its absolute-token override were removed per the G2 ADR "Quantitative ratio only"; **T7.1** — the frontend zone classifier is likewise unnecessary. Context utilization is exposed as the raw `context_ratio` everywhere.
 
 "Next eligible" = lowest-numbered `[ ]` ticket whose `Depends on` are all `[x]`. The leaf tracer bullets (no deps) are **[T1.1](./tokenometrics-G1-T1.1.md), [T2.1](./tokenometrics-G2-T2.1.md), [T3.1](./tokenometrics-G3-T3.1.md)** — any is a valid starting point; [T1.1](./tokenometrics-G1-T1.1.md) is recommended first since the most gaps transitively depend on it.
 
@@ -90,7 +92,7 @@ This initiative derives new analytics from Claude Code session JSONL logs, surfa
 
 1. **Tokens/sec (TPS)** — model *performance*: a response's output tokens ÷ that response's own generation duration.
 2. **Idle / active time** — the call-and-response delay between the assistant yielding the turn and the human's next prompt, plus the inverse "active/working" time, plus a flag for "responded implausibly fast to have read the output."
-3. **Context-window utilization ratio (normalized)** — how full the model's context window is at each response, normalized per model (200k / 1M / 32k locals), to see whether we stay "in the smart zone."
+3. **Context-window utilization ratio (normalized)** — how full the model's context window is at each response, normalized per model (200k / 1M / 32k locals), exposed as a raw quantitative ratio (no categorical zone labeling).
 4. **Accurate per-event accumulation** — annotate each event with its live context occupancy and the ratio of the model's window budget it represents.
 5. **Subagent labeling** — prefix every `msg_kind` with `subagent-` when the event belongs to a subagent context.
 
@@ -162,7 +164,7 @@ A response-aware ingestion pass corrects the counts and annotates each event, ne
 - Ingestion gains a per-file post-pass `_annotate_responses` that groups assistant events by `requestId`, marks one **head** per response, **zeroes the duplicated usage on non-heads** (so every existing `SUM()` is correct with no query rewrites), and stamps `response_duration_ms` on the head.
 - Each event carries `context_tokens`, `context_window` (from a curated map), and `context_ratio`. Subagent events carry `subagent-<kind>` msg_kinds.
 - New `sessions` rollups (`avg_tps`, `total_idle_ms`, `total_active_ms`, `peak_context_ratio`, …) and two new endpoints: per-session turn metrics and a cross-session performance summary.
-- Frontend: per-event context-occupancy bar + TPS + idle markers in SessionDetail, a new **Performance** page (TPS by model, context-utilization smart-zone histogram, idle/active split), sessions-list columns, and a subagent dimension on the message-kind filter.
+- Frontend: per-event context-occupancy bar + TPS + idle markers in SessionDetail, a new **Performance** page (TPS by model, context-utilization ratio histogram, idle/active split), sessions-list columns, and a subagent dimension on the message-kind filter.
 
 ```mermaid
 flowchart TD
@@ -209,7 +211,7 @@ flowchart TD
     end
     subgraph Desired
         D1["Accurate totals/costs"]
-        D2["Per-event smart-zone ratio"]
+        D2["Per-event context ratio"]
         D3["Correct human vs subagent"]
         D4["Per-response TPS"]
         D5["Call-and-response analytics"]
@@ -270,7 +272,7 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 | Gap | Spec | Tickets | Summary |
 |-----|------|:-------:|---------|
 | G1 | [Response-level token accounting](./tokenometrics-G1.md) | 4 | Dedupe per `requestId`; zero duplicated usage so all existing totals/costs become accurate. |
-| G2 | [Context-window utilization annotations](./tokenometrics-G2.md) | 6 | Curated `model_id → window` map; per-event occupancy + normalized smart-zone ratio. |
+| G2 | [Context-window utilization annotations](./tokenometrics-G2.md) | 6 | Curated `model_id → window` map; per-event occupancy + normalized context ratio (raw quantitative, no zone labels). |
 | G3 | [Subagent message-kind prefixing](./tokenometrics-G3.md) | 3 | `subagent-<kind>` prefix whenever the event belongs to a subagent context. |
 | G4 | [Response performance (TPS)](./tokenometrics-G4.md) | 2 | Per-response `response_duration_ms` + derived tokens/sec on response heads. |
 | G5 | [Turn timing (idle / active)](./tokenometrics-G5.md) | 4 | Idle/active call-and-response decomposition + a too-fast-reply flag. |
@@ -296,7 +298,7 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 ### Domain-Specific Measures
 
 - **[G1](./tokenometrics-G1.md):** For the known sample file, post-reingest `SUM(output_tokens)` over a session equals the requestId-deduped value (≈8.44M → 3.46M); exactly one `is_response_head=1` per `requestId`.
-- **[G2](./tokenometrics-G2.md):** `context_window('claude-opus-4-7')==1_000_000`, `('claude-sonnet-4-5-...')==200_000`, `('qwen2.5-coder-7b-instruct')==32_768`, `('<synthetic>')` is `None`; `context_ratio` ∈ (0,1] for known windows. `context_zone` honors the absolute override: a 1M-window event at 50K tokens (5%) is `caution` (≥32K abs), and an event at 70K tokens is `danger` (≥64K abs), while a 200k event at 10% stays `smart`. Backend and frontend zone constants are identical.
+- **[G2](./tokenometrics-G2.md):** `context_window('claude-opus-4-7')==1_000_000`, `('claude-sonnet-4-5-...')==200_000`, `('qwen2.5-coder-7b-instruct')==32_768`, `('<synthetic>')` is `None`; `context_ratio(tokens, window)` returns the raw fraction `tokens/window` ∈ (0,1] for known windows and `None` for an unknown window. No categorical zone labeling exists (dropped per the G2 ADR "Quantitative ratio only").
 - **[G3](./tokenometrics-G3.md):** Zero events in subagent/`agent_root` files retain a bare `human`/`user_text` kind; all are `subagent-*`.
 - **[G4](./tokenometrics-G4.md):** `tps` is `None` when `response_duration_ms` is 0/NULL, else `output_tokens/(ms/1000)`; never negative.
 - **[G5](./tokenometrics-G5.md):** `total_active_ms + total_idle_ms` reconciles to the session wall-clock within tolerance; `too_fast` set only when idle < output/READ_TOKENS_PER_SEC.

@@ -7,7 +7,7 @@
 
 - [ ] **Done**
 - **Cycle:** RED → GREEN
-- **Behavior:** Loading a real session renders a context-occupancy bar (zone-colored) and TPS on assistant heads, and an idle-gap marker between turns (with a fast-reply badge when flagged).
+- **Behavior:** Loading a real session renders a context-occupancy bar (width ∝ raw `context_ratio`, no zone colors) and TPS on assistant heads, and an idle-gap marker between turns (with a fast-reply badge when flagged).
 - **Test outline:**
   - File: `frontend/e2e/session-detail-metrics.spec.ts`
   - Name: `session detail shows occupancy, tps and idle markers`
@@ -15,4 +15,4 @@
 - **Implementation outline:**
   - File(s): `frontend/src/pages/SessionDetail.tsx` (EventCard bar + TPS + idle markers; `MESSAGE_KIND_CONFIG` subagent accent), `api-client.ts` (`SessionEvent` new fields + `getSessionMetrics`).
 - **Mocks:** `none` (real backend per project e2e convention).
-- **Depends on:** [T6.1](./tokenometrics-G6-T6.1.md), [T7.1](./tokenometrics-G7-T7.1.md)
+- **Depends on:** [T6.1](./tokenometrics-G6-T6.1.md)

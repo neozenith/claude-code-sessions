@@ -7,7 +7,7 @@
 
 - [ ] **Done**
 - **Cycle:** RED → GREEN
-- **Behavior:** `GET /api/performance?days=7&project=X` returns `by_model` rows (avg/median TPS, idle/active) and a `zone_histogram` {smart, caution, danger}, scoped to the filter.
+- **Behavior:** `GET /api/performance?days=7&project=X` returns `by_model` rows (avg/median TPS, idle/active) and a `ratio_histogram` (response-head counts binned by raw `context_ratio`), scoped to the filter. No zone labels (per the G2 ADR "Quantitative ratio only").
 - **Test outline:**
   - File: `tests/test_performance_api.py`
   - Name: `test_performance_summary_endpoint`

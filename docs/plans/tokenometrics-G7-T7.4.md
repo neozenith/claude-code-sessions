@@ -7,11 +7,11 @@
 
 - [ ] **Done**
 - **Cycle:** RED → GREEN
-- **Behavior:** Navigating to `/performance` renders the TPS-by-model chart, the smart-zone utilization histogram, and the idle-vs-active split, honoring the global `days`/`project` filters.
+- **Behavior:** Navigating to `/performance` renders the TPS-by-model chart, the context-ratio utilization histogram (binned by raw `context_ratio`, no zone labels), and the idle-vs-active split, honoring the global `days`/`project` filters.
 - **Test outline:**
   - File: `frontend/e2e/performance.spec.ts`
   - Name: `performance page renders charts`
-  - Asserts: testids `perf-tps-chart`, `perf-zone-histogram`, `perf-idle-active` visible.
+  - Asserts: testids `perf-tps-chart`, `perf-context-histogram`, `perf-idle-active` visible.
 - **Implementation outline:**
   - File(s): `frontend/src/pages/Performance.tsx`, route in `App.tsx`, nav in `Layout.tsx`, `api-client.ts` (`getPerformanceSummary` + interface).
 - **Mocks:** `none`
