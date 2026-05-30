@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T1.2 »](./tokenometrics-G1-T1.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN → REFACTOR
 - **Behavior:** After ingesting a session whose single response is logged as 3 content-block events that each repeat `output_tokens=100`, the session's reported total output tokens is `100`, not `300`. (Tracer bullet — proves the dedup path end-to-end through ingestion + query.)
 - **Test outline:**
