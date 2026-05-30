@@ -82,3 +82,45 @@ def test_response_tps(tmp_path: Path) -> None:
 
     assert head["response_duration_ms"] == 2000
     assert head["tps"] == pytest.approx(100.0)
+
+
+def test_tps_none_when_no_duration(tmp_path: Path) -> None:
+    """A response whose head shares its triggering event's timestamp has
+    response_duration_ms=0; tps is None, never a divide-by-zero."""
+    session_id = "sess-instant"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    same = base.replace(second=5).isoformat().replace("+00:00", "Z")
+    rows = [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": same,
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "go"},
+        },
+        {
+            "uuid": "a1",
+            "parentUuid": "u0",
+            "type": "assistant",
+            "requestId": "req_instant",
+            "timestamp": same,  # same instant as the trigger → zero duration
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 200},
+                "content": [{"type": "text", "text": "done"}],
+            },
+        },
+    ]
+
+    db = _ingest(tmp_path, rows, session_id=session_id)
+    head = next(
+        e for e in db.get_session_events("-Users-test-proj", session_id)
+        if e["event_type"] == "assistant"
+    )
+
+    assert head["response_duration_ms"] == 0
+    assert head["tps"] is None

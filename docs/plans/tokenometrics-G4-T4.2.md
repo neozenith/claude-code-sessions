@@ -5,7 +5,7 @@
 > **Nav:** [« T4.1](./tokenometrics-G4-T4.1.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** When `response_duration_ms` is 0 or NULL (e.g. single-instant response or missing timestamp), `tps` is `None`, never a divide-by-zero or negative value.
 - **Test outline:**
