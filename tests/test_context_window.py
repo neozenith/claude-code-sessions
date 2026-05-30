@@ -10,7 +10,11 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code_sessions.database.sqlite.pricing import CONTEXT_WINDOWS, context_window
+from claude_code_sessions.database.sqlite.pricing import (
+    CONTEXT_WINDOWS,
+    context_ratio,
+    context_window,
+)
 
 
 @pytest.mark.parametrize(
@@ -81,3 +85,20 @@ def test_window_longest_key_first_wins(monkeypatch: pytest.MonkeyPatch) -> None:
     exists at lookup time, then tears it down automatically."""
     monkeypatch.setitem(CONTEXT_WINDOWS, "opus-4-50", 2_000_000)
     assert context_window("claude-opus-4-50-20270101") == 2_000_000
+
+
+@pytest.mark.parametrize(
+    "tokens,window,expected",
+    [
+        (40_000, 200_000, 0.2),
+        (150_000, 200_000, 0.75),
+        (0, 200_000, 0.0),
+        (1_000_000, 1_000_000, 1.0),
+        (50_000, None, None),  # unknown window → ratio undefined
+        (50_000, 0, None),  # zero window is falsy → undefined, no ZeroDivisionError
+    ],
+)
+def test_context_ratio(tokens: int, window: int | None, expected: float | None) -> None:
+    """context_ratio is the raw fraction tokens/window, or None when the window
+    is unknown — a quantitative measure with no categorical zone labeling."""
+    assert context_ratio(tokens, window) == expected

@@ -5,7 +5,7 @@
 > **Nav:** [« T2.3](./tokenometrics-G2-T2.3.md)  ·  [T2.5 »](./tokenometrics-G2-T2.5.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `context_ratio(tokens, window)` returns the raw fraction `tokens / window` — e.g. `context_ratio(40_000, 200_000) == 0.2`, `context_ratio(150_000, 200_000) == 0.75` — and `None` when the window is unknown (`context_ratio(50_000, None) is None`). No categorical zone labeling (see G2 ADR: Quantitative ratio only).
 - **Test outline:**

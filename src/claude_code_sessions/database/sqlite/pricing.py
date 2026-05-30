@@ -46,6 +46,18 @@ def context_window(model_id: str | None) -> int | None:
     return None
 
 
+def context_ratio(tokens: int, window: int | None) -> float | None:
+    """Raw context-window utilization: the fraction ``tokens / window``.
+
+    Returns None when the window is unknown/zero (ratio undefined). This is a
+    purely quantitative measure — no categorical "smart/caution/danger" zone
+    labeling (see the G2 ADR "Quantitative ratio only").
+    """
+    if not window:
+        return None
+    return tokens / window
+
+
 def model_family(model_id: str | None) -> str:
     """Extract model family (opus/sonnet/haiku) from a full model ID string."""
     if model_id is None:
