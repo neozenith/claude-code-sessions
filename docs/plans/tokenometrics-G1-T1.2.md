@@ -5,7 +5,7 @@
 > **Nav:** [« T1.1](./tokenometrics-G1-T1.1.md)  ·  [T1.3 »](./tokenometrics-G1-T1.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** For an ingested multi-block response, exactly one returned event has `is_response_head == true`; the rest are `false`.
 - **Test outline:**

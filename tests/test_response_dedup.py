@@ -139,5 +139,69 @@ def test_multiblock_response_counted_once(tmp_path: Path) -> None:
     db = _build_cache(tmp_path, rows, session_id=session_id)
     usage = db.get_session_usage()
 
-    total_output = sum(row["total_output_tokens"] for row in usage if row["session_id"] == session_id)
+    total_output = sum(
+        row["total_output_tokens"] for row in usage if row["session_id"] == session_id
+    )
     assert total_output == 100, f"expected deduped 100, got {total_output} from {usage}"
+
+
+def _three_block_response(session_id: str) -> list[dict[str, Any]]:
+    """A user prompt followed by one response logged as 3 content blocks
+    that all share a single ``requestId``."""
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    ts = lambda i: base.replace(second=i).isoformat().replace("+00:00", "Z")  # noqa: E731
+    request_id = "req_multiblock"
+    return [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": ts(0),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "do the thing"},
+        },
+        _assistant_block(
+            request_id=request_id,
+            uuid="a1",
+            parent_uuid="u0",
+            session_id=session_id,
+            timestamp=ts(1),
+            output_tokens=100,
+            stop_reason=None,
+            content=[{"type": "thinking", "thinking": "hmm"}],
+        ),
+        _assistant_block(
+            request_id=request_id,
+            uuid="a2",
+            parent_uuid="a1",
+            session_id=session_id,
+            timestamp=ts(2),
+            output_tokens=100,
+            stop_reason=None,
+            content=[{"type": "text", "text": "here you go"}],
+        ),
+        _assistant_block(
+            request_id=request_id,
+            uuid="a3",
+            parent_uuid="a2",
+            session_id=session_id,
+            timestamp=ts(3),
+            output_tokens=100,
+            stop_reason="tool_use",
+            content=[{"type": "tool_use", "name": "Read", "input": {}}],
+        ),
+    ]
+
+
+def test_one_head_per_request_id(tmp_path: Path) -> None:
+    """Exactly one of the blocks sharing a requestId is the response head;
+    the rest are non-heads, surfaced through the public events query."""
+    session_id = "sess-head"
+    db = _build_cache(tmp_path, _three_block_response(session_id), session_id=session_id)
+
+    events = db.get_session_events("-Users-test-proj", session_id)
+    assistant_events = [e for e in events if e["event_type"] == "assistant"]
+    heads = [e for e in assistant_events if e["is_response_head"]]
+
+    assert len(assistant_events) == 3, f"expected 3 assistant blocks, got {assistant_events}"
+    assert len(heads) == 1, f"expected exactly one head, got {len(heads)}: {assistant_events}"

@@ -66,7 +66,7 @@ loop can resume.
 
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
-| [G1](./tokenometrics-G1.md) | 4 | 1 | 3 | [T1.2](./tokenometrics-G1-T1.2.md) | — |
+| [G1](./tokenometrics-G1.md) | 4 | 2 | 2 | [T1.3](./tokenometrics-G1-T1.3.md) | — |
 | [G2](./tokenometrics-G2.md) | 6 | 0 | 6 | [T2.1](./tokenometrics-G2-T2.1.md) | — |
 | [G3](./tokenometrics-G3.md) | 3 | 0 | 3 | [T3.1](./tokenometrics-G3-T3.1.md) | — |
 | [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | — | [T1.1](./tokenometrics-G1-T1.1.md) |
