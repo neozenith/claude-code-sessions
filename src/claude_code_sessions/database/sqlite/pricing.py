@@ -58,6 +58,14 @@ def context_ratio(tokens: int, window: int | None) -> float | None:
     return tokens / window
 
 
+# "Too-fast" reply detection (G5): flag a human reply that arrived faster than
+# even a fast skim of the assistant's response could be read. READ_TOKENS_PER_SEC
+# ≈ 480 wpm fast-skim (~0.75 words/token); the min-token floor prevents flagging
+# instant replies to short outputs. See the G5 ADR for the WPM evidence.
+READ_TOKENS_PER_SEC = 8
+TOO_FAST_MIN_TOKENS = 200
+
+
 def model_family(model_id: str | None) -> str:
     """Extract model family (opus/sonnet/haiku) from a full model ID string."""
     if model_id is None:

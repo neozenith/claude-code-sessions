@@ -38,6 +38,10 @@ from claude_code_sessions.database.sqlite.kg.payload import (
     SeedMetric,
     load_kg_er,
 )
+from claude_code_sessions.database.sqlite.pricing import (
+    READ_TOKENS_PER_SEC,
+    TOO_FAST_MIN_TOKENS,
+)
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH
 
 
@@ -565,13 +569,24 @@ class SQLiteDatabase:
             if not is_turn_end:
                 continue
             next_ts = rows[i + 1]["timestamp"] if i + 1 < len(rows) else None
+            idle_ms = _delta_ms(r["timestamp"], next_ts)
+            output_tokens = r["output_tokens"] or 0
+            # too_fast: the human replied faster than even a fast skim of this
+            # response could be read — but only for responses long enough to
+            # be worth reading (≥ the min-token floor).
+            too_fast = (
+                idle_ms is not None
+                and output_tokens >= TOO_FAST_MIN_TOKENS
+                and (idle_ms / 1000) < (output_tokens / READ_TOKENS_PER_SEC)
+            )
             turns.append(
                 {
                     "uuid": r["uuid"],
                     "timestamp": r["timestamp"],
-                    "output_tokens": r["output_tokens"],
+                    "output_tokens": output_tokens,
                     "active_ms": _delta_ms(last_human_ts, r["timestamp"]),
-                    "idle_ms": _delta_ms(r["timestamp"], next_ts),
+                    "idle_ms": idle_ms,
+                    "too_fast": too_fast,
                 }
             )
         return turns

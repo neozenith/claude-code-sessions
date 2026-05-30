@@ -5,7 +5,7 @@
 > **Nav:** [« T5.2](./tokenometrics-G5-T5.2.md)  ·  [T5.4 »](./tokenometrics-G5-T5.4.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** A human reply 1s after a 2,000-token response is `too_fast=true` (1s < 2000/8 = 250s); a reply 1s after a 50-token response is `too_fast=false` (below the 200-token floor).
 - **Test outline:**

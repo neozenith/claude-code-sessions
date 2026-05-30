@@ -216,3 +216,54 @@ def test_active_time_per_turn(tmp_path: Path) -> None:
 
     assert turns, "expected at least one turn"
     assert turns[0]["active_ms"] == pytest.approx(8000, abs=50)
+
+
+def _assistant_turn(uuid: str, parent: str, req: str, sec: int, session_id: str, out: int) -> dict:
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    return {
+        "uuid": uuid,
+        "parentUuid": parent,
+        "type": "assistant",
+        "requestId": req,
+        "timestamp": base.replace(second=sec).isoformat().replace("+00:00", "Z"),
+        "sessionId": session_id,
+        "message": {
+            "role": "assistant",
+            "model": "claude-sonnet-4-5-20250929",
+            "stop_reason": "end_turn",
+            "usage": {"input_tokens": 5, "output_tokens": out},
+            "content": [{"type": "text", "text": "answer"}],
+        },
+    }
+
+
+def _human(uuid: str, parent: str | None, sec: int, session_id: str) -> dict:
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    return {
+        "uuid": uuid,
+        "parentUuid": parent,
+        "type": "user",
+        "timestamp": base.replace(second=sec).isoformat().replace("+00:00", "Z"),
+        "sessionId": session_id,
+        "message": {"role": "user", "content": "prompt"},
+    }
+
+
+def test_too_fast_flag(tmp_path: Path) -> None:
+    """A 1s reply after a 2,000-token response is too_fast (1s < 2000/8=250s);
+    a 1s reply after a 50-token response is not (below the 200-token floor)."""
+    session_id = "sess-fast"
+    rows = [
+        _human("u0", None, 0, session_id),
+        _assistant_turn("a1", "u0", "req1", 1, session_id, out=2000),
+        _human("u1", "a1", 2, session_id),  # 1s after a1's 2000-token response
+        _assistant_turn("a2", "u1", "req2", 3, session_id, out=50),
+        _human("u2", "a2", 4, session_id),  # 1s after a2's 50-token response
+    ]
+
+    db = _ingest(tmp_path, rows, session_id=session_id)
+    turns = db.get_session_metrics("-Users-test-proj", session_id)
+
+    assert len(turns) == 2, f"expected 2 turns, got {turns}"
+    assert turns[0]["too_fast"] is True  # 2000 tokens, replied in 1s
+    assert turns[1]["too_fast"] is False  # 50 tokens — below the floor
