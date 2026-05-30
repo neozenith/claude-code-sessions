@@ -7,6 +7,7 @@ import MonthlyUsage from './pages/MonthlyUsage'
 import HourlyUsage from './pages/HourlyUsage'
 import HourOfDay from './pages/HourOfDay'
 import SessionsList from './pages/SessionsList'
+import Performance from './pages/Performance'
 import ProjectSessions from './pages/ProjectSessions'
 import SessionDetail from './pages/SessionDetail'
 import Timeline from './pages/Timeline'
@@ -26,6 +27,7 @@ export default function App() {
         <Route path="/hourly" element={<HourlyUsage />} />
         <Route path="/hour-of-day" element={<HourOfDay />} />
         <Route path="/sessions" element={<SessionsList />} />
+        <Route path="/performance" element={<Performance />} />
         <Route path="/sessions/:projectId" element={<ProjectSessions />} />
         <Route path="/sessions/:projectId/:sessionId" element={<SessionDetail />} />
         <Route path="/timeline" element={<Timeline />} />

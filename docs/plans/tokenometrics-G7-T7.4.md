@@ -5,7 +5,7 @@
 > **Nav:** [« T7.3](./tokenometrics-G7-T7.3.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** Navigating to `/performance` renders the TPS-by-model chart, the context-ratio utilization histogram (binned by raw `context_ratio`, no zone labels), and the idle-vs-active split, honoring the global `days`/`project` filters.
 - **Test outline:**

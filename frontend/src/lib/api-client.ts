@@ -228,6 +228,14 @@ export class ApiClient {
     )
   }
 
+  /** Per-model TPS rows + context-ratio histogram, scoped by days/project. */
+  async getPerformanceSummary(params?: {
+    days?: number
+    project?: string
+  }): Promise<ApiResult<PerformanceSummary>> {
+    return this.get('/performance', params)
+  }
+
   /** Per-turn idle/active/tps/too_fast + a session summary. */
   async getSessionMetrics(
     projectId: string,
@@ -622,6 +630,28 @@ export interface SessionMetricsSummary {
 export interface SessionMetrics {
   turns: SessionMetricsTurn[]
   summary: SessionMetricsSummary
+}
+
+/** Per-model performance row from /api/performance. */
+export interface PerfModelRow {
+  model_id: string
+  response_count: number
+  avg_tps: number | null
+  median_tps: number | null
+  total_idle_ms: number
+  total_active_ms: number
+}
+
+/** One context-ratio histogram bin (raw utilization fraction, no zone label). */
+export interface RatioBin {
+  bin_lo: number
+  bin_hi: number
+  count: number
+}
+
+export interface PerformanceSummary {
+  by_model: PerfModelRow[]
+  ratio_histogram: RatioBin[]
 }
 
 /** Message content item (for assistant messages with typed content) */
