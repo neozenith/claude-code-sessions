@@ -108,6 +108,13 @@ class Database(Protocol):
         assistant end-of-turn head."""
         ...
 
+    def get_performance_summary(
+        self, *, days: int | None = None, project: str | None = None
+    ) -> dict[str, Any]:
+        """Cross-session performance: per-model TPS rows + a context-ratio
+        histogram, honoring the global days/project filters."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

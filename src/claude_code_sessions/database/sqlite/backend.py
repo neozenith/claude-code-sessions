@@ -7,6 +7,7 @@ JSONL session files and serves queries from pre-computed aggregates.
 
 from __future__ import annotations
 
+import statistics
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -595,6 +596,93 @@ class SQLiteDatabase:
                 }
             )
         return turns
+
+    def get_performance_summary(
+        self, *, days: int | None = None, project: str | None = None
+    ) -> dict[str, Any]:
+        """Cross-session performance: per-model TPS rows + a context-ratio
+        histogram, honoring the global days/project filters.
+
+        One ordered pass over in-scope main-thread events: response heads feed
+        per-model TPS and the ratio histogram; the turn walk (assistant
+        end_turn → next event) feeds per-model idle/active. No zone labels —
+        utilization is the raw context_ratio (G2 ADR "Quantitative ratio only").
+        """
+        f = self._filters(days, project)
+        rows = self._q(
+            f"""
+            SELECT e.session_id, e.model_id, e.event_type, e.msg_kind, e.timestamp,
+                   e.stop_reason, e.is_response_head, e.output_tokens,
+                   e.response_duration_ms, e.context_ratio
+            FROM events e
+            WHERE e.session_id IS NOT NULL AND e.is_sidechain = 0 {f}
+            ORDER BY e.session_id, e.timestamp IS NULL, e.timestamp
+            """,
+            (),
+        )
+
+        by_model: dict[str, dict[str, Any]] = {}
+
+        def _bucket(model_id: str) -> dict[str, Any]:
+            return by_model.setdefault(
+                model_id,
+                {"tps": [], "output": 0, "dur": 0, "count": 0, "idle": 0, "active": 0},
+            )
+
+        ratio_bins = [0] * 10  # 0–10%, 10–20%, …, 90–100%
+        cur_session: str | None = None
+        last_human_ts: str | None = None
+        for i, r in enumerate(rows):
+            if r["session_id"] != cur_session:
+                cur_session = r["session_id"]
+                last_human_ts = None
+            is_head = (
+                r["event_type"] == "assistant" and r["is_response_head"] == 1 and r["model_id"]
+            )
+            if is_head:
+                m = _bucket(r["model_id"])
+                m["count"] += 1
+                dur = r["response_duration_ms"]
+                if dur:
+                    out = r["output_tokens"] or 0
+                    m["output"] += out
+                    m["dur"] += dur
+                    m["tps"].append(out / (dur / 1000))
+                cr = r["context_ratio"]
+                if cr is not None:
+                    ratio_bins[min(int(cr * 10), 9)] += 1
+            if r["msg_kind"] == "human":
+                last_human_ts = r["timestamp"]
+            if (
+                r["event_type"] == "assistant"
+                and r["is_response_head"] == 1
+                and r["stop_reason"] == "end_turn"
+                and r["model_id"]
+            ):
+                same_session_next = i + 1 < len(rows) and rows[i + 1]["session_id"] == cur_session
+                next_ts = rows[i + 1]["timestamp"] if same_session_next else None
+                m = _bucket(r["model_id"])
+                idle = _delta_ms(r["timestamp"], next_ts)
+                active = _delta_ms(last_human_ts, r["timestamp"])
+                m["idle"] += idle or 0
+                m["active"] += active or 0
+
+        by_model_rows = [
+            {
+                "model_id": model_id,
+                "response_count": m["count"],
+                "avg_tps": round(m["output"] / (m["dur"] / 1000), 2) if m["dur"] else None,
+                "median_tps": round(statistics.median(m["tps"]), 2) if m["tps"] else None,
+                "total_idle_ms": m["idle"],
+                "total_active_ms": m["active"],
+            }
+            for model_id, m in sorted(by_model.items())
+        ]
+        ratio_histogram = [
+            {"bin_lo": round(b / 10, 1), "bin_hi": round((b + 1) / 10, 1), "count": c}
+            for b, c in enumerate(ratio_bins)
+        ]
+        return {"by_model": by_model_rows, "ratio_histogram": ratio_histogram}
 
     def search_events(
         self,

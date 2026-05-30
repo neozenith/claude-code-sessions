@@ -238,6 +238,15 @@ async def get_session_metrics(project_id: str, session_id: str) -> dict[str, Any
     return {"turns": turns, "summary": summary}
 
 
+@app.get("/api/performance")
+async def get_performance_summary(
+    days: int | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """Per-model TPS rows + a context-ratio histogram, scoped by days/project."""
+    return get_db().get_performance_summary(days=days, project=project)
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

@@ -5,7 +5,7 @@
 > **Nav:** [« T6.1](./tokenometrics-G6-T6.1.md)  ·  [T6.3 »](./tokenometrics-G6-T6.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `GET /api/performance?days=7&project=X` returns `by_model` rows (avg/median TPS, idle/active) and a `ratio_histogram` (response-head counts binned by raw `context_ratio`), scoped to the filter. No zone labels (per the G2 ADR "Quantitative ratio only").
 - **Test outline:**
