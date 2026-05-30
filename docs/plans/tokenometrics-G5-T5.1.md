@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T5.2 »](./tokenometrics-G5-T5.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN → REFACTOR
 - **Behavior:** For a session where the assistant ends its turn (`stop_reason='end_turn'`) at t0 and the human submits the next prompt at t0+30s, `get_session_metrics()` reports that turn's `idle_ms≈30000`. (Tracer bullet for the LEAD timing query.)
 - **Test outline:**

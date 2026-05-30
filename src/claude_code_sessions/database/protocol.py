@@ -102,6 +102,12 @@ class Database(Protocol):
         """All events for a specific session including subagent events."""
         ...
 
+    def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
+        """Per-turn timing for a session's main thread: idle (assistant
+        turn-end → next human prompt) and related spans, one row per
+        assistant end-of-turn head."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

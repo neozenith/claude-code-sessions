@@ -124,3 +124,53 @@ def test_tps_none_when_no_duration(tmp_path: Path) -> None:
 
     assert head["response_duration_ms"] == 0
     assert head["tps"] is None
+
+
+def test_idle_between_turns(tmp_path: Path) -> None:
+    """When the assistant ends its turn at t0 and the human's next prompt
+    arrives at t0+30s, that turn's idle_ms is ~30000."""
+    session_id = "sess-idle"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+
+    def ts(sec: int) -> str:
+        return base.replace(second=sec).isoformat().replace("+00:00", "Z")
+
+    rows = [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": ts(0),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "first prompt"},
+        },
+        {
+            "uuid": "a1",
+            "parentUuid": "u0",
+            "type": "assistant",
+            "requestId": "req_idle",
+            "timestamp": ts(5),  # assistant ends its turn at t=5s
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 5, "output_tokens": 50},
+                "content": [{"type": "text", "text": "answer"}],
+            },
+        },
+        {
+            "uuid": "u1",
+            "parentUuid": "a1",
+            "type": "user",
+            "timestamp": ts(35),  # human replies 30s later
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "second prompt"},
+        },
+    ]
+
+    db = _ingest(tmp_path, rows, session_id=session_id)
+    turns = db.get_session_metrics("-Users-test-proj", session_id)
+
+    idles = [t["idle_ms"] for t in turns if t.get("idle_ms") is not None]
+    assert any(abs(i - 30_000) <= 50 for i in idles), f"expected ~30000 idle, got {idles}"

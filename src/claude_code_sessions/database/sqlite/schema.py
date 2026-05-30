@@ -132,6 +132,7 @@ CREATE INDEX IF NOT EXISTS idx_events_source_file ON events(source_file_id);
 CREATE INDEX IF NOT EXISTS idx_events_project_session ON events(project_id, session_id);
 CREATE INDEX IF NOT EXISTS idx_events_session_type ON events(session_id, event_type);
 CREATE INDEX IF NOT EXISTS idx_events_session_uuid ON events(session_id, uuid);
+CREATE INDEX IF NOT EXISTS idx_events_session_ts ON events(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_source_files_project_session
     ON source_files(project_id, session_id);
 

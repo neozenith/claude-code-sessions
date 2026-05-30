@@ -17,7 +17,7 @@ from claude_code_sessions.config import (
     is_project_blocked,
 )
 from claude_code_sessions.database.raw_json import read_jsonl_line
-from claude_code_sessions.database.sqlite.cache import CacheManager
+from claude_code_sessions.database.sqlite.cache import CacheManager, _delta_ms
 from claude_code_sessions.database.sqlite.embeddings import (
     EMBED_MAX_CHARS,
     EMBEDDED_MSG_KINDS,
@@ -526,6 +526,48 @@ class SQLiteDatabase:
         """,
             params,
         )
+
+    def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
+        """Per-turn idle timing for a session's main thread.
+
+        Idle is the gap from an assistant turn-end (``stop_reason='end_turn'``
+        on the response head) to the next event in the main thread, via a
+        ``LEAD()`` window ordered by timestamp. Only ``is_sidechain = 0``
+        events participate, so subagent activity never counts as human idle.
+        One row per assistant end-of-turn head.
+        """
+        if is_project_blocked(project_id):
+            raise LookupError(f"Project not found: {project_id}")
+        rows = self._q(
+            """
+            WITH ordered AS (
+                SELECT
+                    e.uuid, e.event_type, e.timestamp, e.stop_reason,
+                    e.is_response_head, e.output_tokens,
+                    LEAD(e.timestamp) OVER (
+                        PARTITION BY e.session_id ORDER BY e.timestamp
+                    ) AS next_ts
+                FROM events e
+                WHERE e.project_id = ? AND e.session_id = ? AND e.is_sidechain = 0
+            )
+            SELECT uuid, timestamp, output_tokens, next_ts
+            FROM ordered
+            WHERE event_type = 'assistant'
+              AND is_response_head = 1
+              AND stop_reason = 'end_turn'
+            ORDER BY timestamp
+            """,
+            (project_id, session_id),
+        )
+        return [
+            {
+                "uuid": r["uuid"],
+                "timestamp": r["timestamp"],
+                "output_tokens": r["output_tokens"],
+                "idle_ms": _delta_ms(r["timestamp"], r["next_ts"]),
+            }
+            for r in rows
+        ]
 
     def search_events(
         self,
