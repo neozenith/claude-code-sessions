@@ -286,7 +286,7 @@ class CacheManager:
                         continue
                     if file_type == "agent_root" and detected_session_id is None:
                         detected_session_id = raw.get("sessionId")
-                    event = self._parse_event(raw, line_num)
+                    event = self._parse_event(raw, line_num, file_type)
                     if event:
                         events_data.append(event)
         except (FileNotFoundError, PermissionError) as e:
@@ -502,7 +502,9 @@ class CacheManager:
                     for c in self._USAGE_COLS:
                         events[j][c] = 0
 
-    def _parse_event(self, raw: dict[str, Any], line_number: int) -> dict[str, Any] | None:
+    def _parse_event(
+        self, raw: dict[str, Any], line_number: int, file_type: str = "main_session"
+    ) -> dict[str, Any] | None:
         """Parse a raw JSON event dict for cache insertion."""
         event_type = raw.get("type", "")
         if event_type == "file-history-snapshot":
@@ -535,7 +537,11 @@ class CacheManager:
                 for block in content_raw
             ]
 
-        msg_kind = message_kind(event_type, bool(is_meta), content_raw)
+        # Subagent context: per-event sidechain flag OR the file's type
+        # (belt-and-braces union per the G3 ADR). Prefixes the kind so
+        # subagent activity is distinguishable from the main thread.
+        is_subagent = bool(is_sidechain) or file_type in ("subagent", "agent_root")
+        msg_kind = message_kind(event_type, bool(is_meta), content_raw, is_subagent=is_subagent)
         text = self._extract_text(content_raw)
 
         usage = message.get("usage", {}) if isinstance(message, dict) else {}

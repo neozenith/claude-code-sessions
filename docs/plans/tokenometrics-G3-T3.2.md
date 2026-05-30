@@ -5,7 +5,7 @@
 > **Nav:** [« T3.1](./tokenometrics-G3-T3.1.md)  ·  [T3.3 »](./tokenometrics-G3-T3.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** After ingesting a subagent fixture file, every event from it has a `subagent-*` kind and none is bare `human`/`user_text`.
 - **Test outline:**
