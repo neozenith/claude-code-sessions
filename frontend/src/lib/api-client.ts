@@ -228,6 +228,16 @@ export class ApiClient {
     )
   }
 
+  /** Per-turn idle/active/tps/too_fast + a session summary. */
+  async getSessionMetrics(
+    projectId: string,
+    sessionId: string,
+  ): Promise<ApiResult<SessionMetrics>> {
+    return this.get(
+      `/sessions/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/metrics`,
+    )
+  }
+
   /** On-demand raw JSONL line for a single event (not stored in cache). */
   async getEventRawJson(
     projectId: string,
@@ -570,12 +580,48 @@ export interface SessionEvent {
   output_tokens: number
   cache_read_tokens: number
   cache_creation_tokens: number
+  // Response-level accounting + context occupancy (tokenometrics G1/G2/G4).
+  // is_response_head marks the one event per requestId that carries the
+  // deduped usage; context_ratio is the raw window-utilization fraction
+  // (null when the model window is unknown); tps is the head's tokens/sec.
+  is_response_head: number
+  context_tokens: number
+  context_window: number | null
+  context_ratio: number | null
+  response_duration_ms: number | null
+  tps: number | null
   // Source file info
   filepath: string
   line_number: number
   is_subagent_file: boolean
   // Raw message JSON for expandable view
   message_json: unknown
+}
+
+/** One turn from /api/sessions/{p}/{s}/metrics — an assistant end-of-turn head. */
+export interface SessionMetricsTurn {
+  uuid: string | null
+  timestamp: string | null
+  output_tokens: number
+  response_duration_ms: number | null
+  tps: number | null
+  active_ms: number | null
+  idle_ms: number | null
+  too_fast: boolean
+}
+
+/** Session summary folded over the turns. */
+export interface SessionMetricsSummary {
+  turn_count: number
+  total_idle_ms: number
+  total_active_ms: number
+  avg_tps: number | null
+  too_fast_count: number
+}
+
+export interface SessionMetrics {
+  turns: SessionMetricsTurn[]
+  summary: SessionMetricsSummary
 }
 
 /** Message content item (for assistant messages with typed content) */

@@ -5,7 +5,7 @@
 > **Nav:** [« T7.2](./tokenometrics-G7-T7.2.md)  ·  [T7.4 »](./tokenometrics-G7-T7.4.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** Loading a real session renders a context-occupancy bar (width ∝ raw `context_ratio`, no zone colors) and TPS on assistant heads, and an idle-gap marker between turns (with a fast-reply badge when flagged).
 - **Test outline:**

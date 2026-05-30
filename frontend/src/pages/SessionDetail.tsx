@@ -4,7 +4,14 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName } from '@/lib/formatters'
-import type { SessionEvent, MessageContentItem, MessageKind, BaseMessageKind } from '@/lib/api-client'
+import type {
+  SessionEvent,
+  MessageContentItem,
+  MessageKind,
+  BaseMessageKind,
+  SessionMetrics,
+  SessionMetricsTurn,
+} from '@/lib/api-client'
 import { MSG_KIND_OPTIONS, baseKind } from '@/lib/message-kinds'
 import {
   ChevronLeft,
@@ -222,6 +229,7 @@ function EventCard({
   onUuidClick,
   onFilterClick,
   isHighlighted,
+  turn,
 }: {
   event: SessionEvent
   eventMap: Map<string, SessionEvent>
@@ -230,6 +238,7 @@ function EventCard({
   onUuidClick: (uuid: string) => void
   onFilterClick: (uuid: string) => void
   isHighlighted?: boolean
+  turn?: SessionMetricsTurn
 }) {
   const [showJson, setShowJson] = useState(false)
   // Raw JSON is fetched on demand — not stored in the cache any more
@@ -326,6 +335,45 @@ function EventCard({
         )}
       </div>
 
+      {/* Tokenometrics strip: context occupancy + TPS + too-fast badge (G7).
+          The occupancy bar width is the raw context_ratio (no zone colors). */}
+      {(event.context_ratio != null ||
+        (event.is_response_head === 1 && event.tps != null) ||
+        turn?.too_fast) && (
+        <div className="flex items-center gap-3 mb-3 text-xs flex-wrap">
+          {event.context_ratio != null && (
+            <div
+              className="flex items-center gap-1.5"
+              title={`Context window ${(event.context_ratio * 100).toFixed(1)}% full ` +
+                `(${event.context_tokens.toLocaleString()} tokens)`}
+            >
+              <span className="text-muted-foreground">ctx</span>
+              <div className="h-2 w-24 rounded-full bg-muted overflow-hidden">
+                <div
+                  data-testid="context-occupancy-bar"
+                  className="h-full bg-blue-500"
+                  style={{ width: `${Math.min(event.context_ratio * 100, 100)}%` }}
+                />
+              </div>
+              <span className="text-muted-foreground">{(event.context_ratio * 100).toFixed(0)}%</span>
+            </div>
+          )}
+          {event.is_response_head === 1 && event.tps != null && (
+            <span data-testid="response-tps" className="text-muted-foreground">
+              {event.tps.toFixed(0)} tok/s
+            </span>
+          )}
+          {turn?.too_fast && (
+            <span
+              data-testid="too-fast-badge"
+              className="inline-flex items-center gap-1 px-2 py-0.5 rounded font-medium bg-amber-100 text-amber-800 dark:bg-amber-900/60 dark:text-amber-300"
+            >
+              ⚡ fast reply
+            </span>
+          )}
+        </div>
+      )}
+
       {/* Event header */}
       <div className="flex items-start justify-between gap-4">
         <div className="flex items-center gap-3">
@@ -415,6 +463,16 @@ function EventCard({
           </pre>
         )}
       </div>
+
+      {/* Idle gap until the next human prompt — only on assistant turn-ends. */}
+      {turn?.idle_ms != null && turn.idle_ms > 0 && (
+        <div
+          data-testid="idle-gap"
+          className="mt-3 pt-2 border-t border-dashed border-muted-foreground/30 text-xs text-muted-foreground"
+        >
+          ⏳ {(turn.idle_ms / 1000).toFixed(0)}s idle until next prompt
+        </div>
+      )}
     </div>
   )
 }
@@ -492,6 +550,21 @@ export default function SessionDetail() {
     })
     return map
   }, [events])
+
+  // Per-turn idle/active/too_fast, keyed by the turn's assistant head uuid so
+  // each EventCard can render its idle gap + fast-reply badge.
+  const metricsUrl = useMemo(() => {
+    if (!projectId || !sessionId) return null
+    return `/sessions/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/metrics`
+  }, [projectId, sessionId])
+  const { data: metrics } = useApi<SessionMetrics>(metricsUrl)
+  const turnsByUuid = useMemo(() => {
+    const map = new Map<string, SessionMetricsTurn>()
+    metrics?.turns.forEach((t) => {
+      if (t.uuid) map.set(t.uuid, t)
+    })
+    return map
+  }, [metrics])
 
   // Scroll to element by UUID
   const scrollToUuid = useCallback((uuid: string) => {
@@ -725,6 +798,7 @@ export default function SessionDetail() {
                   onUuidClick={handleUuidClick}
                   onFilterClick={handleFilterClick}
                   isHighlighted={event.uuid === highlightedUuid}
+                  turn={event.uuid ? turnsByUuid.get(event.uuid) : undefined}
                 />
               ))}
             </div>
