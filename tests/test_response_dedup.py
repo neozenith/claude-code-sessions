@@ -205,3 +205,45 @@ def test_one_head_per_request_id(tmp_path: Path) -> None:
 
     assert len(assistant_events) == 3, f"expected 3 assistant blocks, got {assistant_events}"
     assert len(heads) == 1, f"expected exactly one head, got {len(heads)}: {assistant_events}"
+
+
+def test_single_block_response_intact(tmp_path: Path) -> None:
+    """A response logged as a single event keeps its full output_tokens
+    and is marked head — the size-1 group path zeroes nothing."""
+    session_id = "sess-single"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    ts = lambda i: base.replace(second=i).isoformat().replace("+00:00", "Z")  # noqa: E731
+    rows = [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": ts(0),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "ping"},
+        },
+        _assistant_block(
+            request_id="req_single",
+            uuid="a1",
+            parent_uuid="u0",
+            session_id=session_id,
+            timestamp=ts(1),
+            output_tokens=100,
+            stop_reason="end_turn",
+            content=[{"type": "text", "text": "pong"}],
+        ),
+    ]
+
+    db = _build_cache(tmp_path, rows, session_id=session_id)
+
+    events = db.get_session_events("-Users-test-proj", session_id)
+    assistant_events = [e for e in events if e["event_type"] == "assistant"]
+    assert len(assistant_events) == 1
+    assert assistant_events[0]["is_response_head"]
+    assert assistant_events[0]["output_tokens"] == 100
+
+    usage = db.get_session_usage()
+    total_output = sum(
+        row["total_output_tokens"] for row in usage if row["session_id"] == session_id
+    )
+    assert total_output == 100
