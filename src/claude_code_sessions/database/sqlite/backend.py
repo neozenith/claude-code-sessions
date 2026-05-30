@@ -538,36 +538,43 @@ class SQLiteDatabase:
         """
         if is_project_blocked(project_id):
             raise LookupError(f"Project not found: {project_id}")
+        # All main-thread events in time order. We walk them once, tracking the
+        # most recent human prompt; at each assistant turn-end head we emit a
+        # turn with its active span (human → turn-end) and idle span
+        # (turn-end → next event).
         rows = self._q(
             """
-            WITH ordered AS (
-                SELECT
-                    e.uuid, e.event_type, e.timestamp, e.stop_reason,
-                    e.is_response_head, e.output_tokens,
-                    LEAD(e.timestamp) OVER (
-                        PARTITION BY e.session_id ORDER BY e.timestamp
-                    ) AS next_ts
-                FROM events e
-                WHERE e.project_id = ? AND e.session_id = ? AND e.is_sidechain = 0
-            )
-            SELECT uuid, timestamp, output_tokens, next_ts
-            FROM ordered
-            WHERE event_type = 'assistant'
-              AND is_response_head = 1
-              AND stop_reason = 'end_turn'
-            ORDER BY timestamp
+            SELECT e.uuid, e.event_type, e.msg_kind, e.timestamp,
+                   e.stop_reason, e.is_response_head, e.output_tokens
+            FROM events e
+            WHERE e.project_id = ? AND e.session_id = ? AND e.is_sidechain = 0
+            ORDER BY e.timestamp IS NULL, e.timestamp
             """,
             (project_id, session_id),
         )
-        return [
-            {
-                "uuid": r["uuid"],
-                "timestamp": r["timestamp"],
-                "output_tokens": r["output_tokens"],
-                "idle_ms": _delta_ms(r["timestamp"], r["next_ts"]),
-            }
-            for r in rows
-        ]
+        turns: list[dict[str, Any]] = []
+        last_human_ts: str | None = None
+        for i, r in enumerate(rows):
+            if r["msg_kind"] == "human":
+                last_human_ts = r["timestamp"]
+            is_turn_end = (
+                r["event_type"] == "assistant"
+                and r["is_response_head"] == 1
+                and r["stop_reason"] == "end_turn"
+            )
+            if not is_turn_end:
+                continue
+            next_ts = rows[i + 1]["timestamp"] if i + 1 < len(rows) else None
+            turns.append(
+                {
+                    "uuid": r["uuid"],
+                    "timestamp": r["timestamp"],
+                    "output_tokens": r["output_tokens"],
+                    "active_ms": _delta_ms(last_human_ts, r["timestamp"]),
+                    "idle_ms": _delta_ms(r["timestamp"], next_ts),
+                }
+            )
+        return turns
 
     def search_events(
         self,

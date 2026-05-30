@@ -5,7 +5,7 @@
 > **Nav:** [« T5.1](./tokenometrics-G5-T5.1.md)  ·  [T5.3 »](./tokenometrics-G5-T5.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `active_ms` for a turn = human prompt → that turn's final assistant head timestamp.
 - **Test outline:**
