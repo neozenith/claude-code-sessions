@@ -25,6 +25,11 @@ CONTEXT_WINDOWS: dict[str, int] = {
     "opus-4-7": 1_000_000,
     "opus-4-8": 1_000_000,
     "sonnet-4-6": 1_000_000,
+    "opus-4-5": 200_000,
+    "sonnet-4-5": 200_000,
+    "haiku-4-5": 200_000,
+    "qwen2.5-coder": 32_768,  # native default; YaRN 128k is off by default
+    "devstral-small-2": 256_000,
 }
 
 

@@ -5,7 +5,7 @@
 > **Nav:** [« T2.1](./tokenometrics-G2-T2.1.md)  ·  [T2.3 »](./tokenometrics-G2-T2.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `context_window` returns `200_000` for opus-4-5 / sonnet-4-5 / haiku-4-5 and `None` for `<synthetic>` / empty / unrecognized ids.
 - **Test outline:**
