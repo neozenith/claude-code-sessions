@@ -5,7 +5,7 @@
 > **Nav:** [« T5.3](./tokenometrics-G5-T5.3.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** Gaps caused by `tool_result` events or subagent (`is_sidechain=1`) activity are excluded from `idle_ms` — only assistant-stop → human gaps count.
 - **Test outline:**

@@ -267,3 +267,73 @@ def test_too_fast_flag(tmp_path: Path) -> None:
     assert len(turns) == 2, f"expected 2 turns, got {turns}"
     assert turns[0]["too_fast"] is True  # 2000 tokens, replied in 1s
     assert turns[1]["too_fast"] is False  # 50 tokens — below the floor
+
+
+def test_tool_and_subagent_gaps_not_idle(tmp_path: Path) -> None:
+    """Within-turn tool_result gaps and intervening subagent (is_sidechain=1)
+    activity must not inflate idle. Only the genuine assistant end_turn → next
+    human gap counts."""
+    session_id = "sess-machine"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+
+    def ts(sec: int) -> str:
+        return base.replace(second=sec).isoformat().replace("+00:00", "Z")
+
+    rows = [
+        _human("u0", None, 0, session_id),
+        # tool_use turn (NOT end_turn) — does not produce a turn or idle
+        {
+            "uuid": "a1",
+            "parentUuid": "u0",
+            "type": "assistant",
+            "requestId": "req1",
+            "timestamp": ts(1),
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "tool_use",
+                "usage": {"input_tokens": 5, "output_tokens": 10},
+                "content": [{"type": "tool_use", "name": "Read", "input": {}}],
+            },
+        },
+        # tool_result (type:user) — machine latency, inside the active span
+        {
+            "uuid": "ur1",
+            "parentUuid": "a1",
+            "type": "user",
+            "timestamp": ts(2),
+            "sessionId": session_id,
+            "message": {
+                "role": "user",
+                "content": [{"type": "tool_result", "tool_use_id": "x", "content": "ok"}],
+            },
+        },
+        # the real end_turn response at t=5
+        _assistant_turn("a2", "ur1", "req2", 5, session_id, out=50),
+        # subagent activity (is_sidechain=1) at t=20 — must be ignored entirely
+        {
+            "uuid": "sub1",
+            "parentUuid": "a2",
+            "type": "assistant",
+            "isSidechain": True,
+            "requestId": "req3",
+            "timestamp": ts(20),
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "model": "claude-sonnet-4-5-20250929",
+                "stop_reason": "end_turn",
+                "usage": {"input_tokens": 1, "output_tokens": 1},
+                "content": [{"type": "text", "text": "subtask"}],
+            },
+        },
+        _human("u1", "a2", 35, session_id),  # human replies 30s after a2
+    ]
+
+    db = _ingest(tmp_path, rows, session_id=session_id)
+    turns = db.get_session_metrics("-Users-test-proj", session_id)
+
+    # Only a2 (end_turn) is a turn; a1 (tool_use) and sub1 (subagent) are not.
+    assert len(turns) == 1, f"expected one turn, got {turns}"
+    assert turns[0]["idle_ms"] == 30_000  # a2(5s) → u1(35s); tool/subagent gaps excluded
