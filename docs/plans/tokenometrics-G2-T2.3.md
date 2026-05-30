@@ -5,7 +5,7 @@
 > **Nav:** [« T2.2](./tokenometrics-G2-T2.2.md)  ·  [T2.4 »](./tokenometrics-G2-T2.4.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** A model id containing one key as a substring of another (e.g. `sonnet-4-5` vs `sonnet-4-6`, or a hypothetical `opus-4-50`) resolves to the correct window via longest-key-first matching.
 - **Test outline:**

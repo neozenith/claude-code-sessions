@@ -38,9 +38,11 @@ def context_window(model_id: str | None) -> int | None:
     if not model_id:
         return None
     low = model_id.lower()
-    for key, window in CONTEXT_WINDOWS.items():
+    # Longest-key-first so a shorter key can't shadow a more specific
+    # superstring key (e.g. "opus-4-5" must not win over "opus-4-50").
+    for key in sorted(CONTEXT_WINDOWS, key=len, reverse=True):
         if key in low:
-            return window
+            return CONTEXT_WINDOWS[key]
     return None
 
 

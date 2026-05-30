@@ -10,7 +10,7 @@ from __future__ import annotations
 
 import pytest
 
-from claude_code_sessions.database.sqlite.pricing import context_window
+from claude_code_sessions.database.sqlite.pricing import CONTEXT_WINDOWS, context_window
 
 
 @pytest.mark.parametrize(
@@ -57,3 +57,27 @@ def test_window_local_models(model_id: str, expected: int) -> None:
     """Curated local-model windows (native defaults): qwen2.5-coder 32k,
     devstral-small 256k. Required by the G2 success measure."""
     assert context_window(model_id) == expected
+
+
+@pytest.mark.parametrize(
+    "model_id,expected",
+    [
+        ("claude-sonnet-4-6", 1_000_000),
+        ("claude-sonnet-4-5-20250929", 200_000),
+    ],
+)
+def test_window_real_ids_resolve(model_id: str, expected: int) -> None:
+    """The real curated ids resolve to their windows (regression guard)."""
+    assert context_window(model_id) == expected
+
+
+def test_window_longest_key_first_wins(monkeypatch: pytest.MonkeyPatch) -> None:
+    """When one window key is a superstring of another (the spec's hypothetical
+    ``opus-4-50`` vs existing ``opus-4-5``), the longer, more specific key must
+    win. With naive insertion-order iteration the shorter ``opus-4-5`` (200k)
+    shadows it; longest-key-first resolves it correctly.
+
+    Uses a real injected map entry (not a mock) so the collision actually
+    exists at lookup time, then tears it down automatically."""
+    monkeypatch.setitem(CONTEXT_WINDOWS, "opus-4-50", 2_000_000)
+    assert context_window("claude-opus-4-50-20270101") == 2_000_000
