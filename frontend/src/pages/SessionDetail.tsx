@@ -4,8 +4,8 @@ import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { formatProjectName } from '@/lib/formatters'
-import type { SessionEvent, MessageContentItem, MessageKind } from '@/lib/api-client'
-import { MSG_KIND_OPTIONS } from '@/lib/message-kinds'
+import type { SessionEvent, MessageContentItem, MessageKind, BaseMessageKind } from '@/lib/api-client'
+import { MSG_KIND_OPTIONS, baseKind } from '@/lib/message-kinds'
 import {
   ChevronLeft,
   ChevronDown,
@@ -29,7 +29,9 @@ import {
 
 // Message kind filter options — "All messages" + the 9 fine-grained kinds
 // Message kind styling — one unique color + icon per derived kind
-const MESSAGE_KIND_CONFIG: Record<MessageKind, { icon: typeof User; label: string; color: string; bgColor: string; badgeBg: string }> = {
+// Keyed by base kind; a subagent-<base> event reuses its base styling (the
+// subagent badge is applied separately). getMessageKindConfig strips the prefix.
+const MESSAGE_KIND_CONFIG: Record<BaseMessageKind, { icon: typeof User; label: string; color: string; bgColor: string; badgeBg: string }> = {
   human: {
     icon: User,
     label: 'Human prompt',
@@ -96,7 +98,8 @@ const MESSAGE_KIND_CONFIG: Record<MessageKind, { icon: typeof User; label: strin
 }
 
 function getMessageKindConfig(kind: MessageKind) {
-  return MESSAGE_KIND_CONFIG[kind] ?? MESSAGE_KIND_CONFIG.other
+  // Strip any subagent- prefix so subagent events share their base styling.
+  return MESSAGE_KIND_CONFIG[baseKind(kind) as BaseMessageKind] ?? MESSAGE_KIND_CONFIG.other
 }
 
 // Parse message content - handles nested content types

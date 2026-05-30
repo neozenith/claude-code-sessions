@@ -5,7 +5,7 @@
 > **Nav:** [« T7.1](./tokenometrics-G7-T7.1.md)  ·  [T7.3 »](./tokenometrics-G7-T7.3.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** The message-kind helper strips/keeps the `subagent-` prefix so that `?msg=tool_use` matches both `tool_use` and `subagent-tool_use`, while `?scope=subagent` narrows to subagent-prefixed kinds only.
 - **Test outline:**
