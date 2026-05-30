@@ -73,7 +73,7 @@ loop can resume.
 | [G5](./tokenometrics-G5.md) | 4 | 4 | 0 | — _(done)_ | — |
 | [G6](./tokenometrics-G6.md) | 3 | 3 | 0 | — _(done)_ | — |
 | [G7](./tokenometrics-G7.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G8](./tokenometrics-G8.md) | 1 | 0 | 1 | [T8.1](./tokenometrics-G8-T8.1.md) | — |
+| [G8](./tokenometrics-G8.md) | 1 | 1 | 0 | — _(done)_ | — |
 
 **Dropped tickets** (counted as `[x]`, no work required): **T2.5** — the smart/caution/danger zone classifier and its absolute-token override were removed per the G2 ADR "Quantitative ratio only"; **T7.1** — the frontend zone classifier is likewise unnecessary. Context utilization is exposed as the raw `context_ratio` everywhere.
 
@@ -81,10 +81,10 @@ loop can resume.
 
 ### Done Criteria
 
-- [ ] Every ticket in every `G<N>` is marked `[x]`
-- [ ] Every Success Measure (Project Quality Bar + Domain-Specific) passes when executed (commands listed in the Success Measures table)
-- [ ] No `<!-- UNRESOLVED -->` ADR markers remain
-- [ ] No `<!-- LINK_NOT_VERIFIED -->`, `<!-- ASSUMPTION -->`, or `<!-- PAYWALLED -->` markers requiring user resolution
+- [x] Every ticket in every `G<N>` is marked `[x]` (T2.5 + T7.1 dropped per the zone-labeling ADR)
+- [~] Every Success Measure passes when executed — backend/frontend domain measures verified via the hermetic test suite (391 backend tests; vitest; two live Playwright e2e); the G1 domain measure's exact **8.44M→3.46M** figure is a property of the full production corpus and needs a one-time `~/.claude/cache` reingest at `SCHEMA_VERSION 17` to confirm against the real sample file. Full `make ci` not run end-to-end in-loop (frontend e2e verified per-spec against the loop's v17 cache).
+- [x] No `<!-- UNRESOLVED -->` ADR markers remain
+- [x] No `<!-- LINK_NOT_VERIFIED -->`, `<!-- ASSUMPTION -->`, or `<!-- PAYWALLED -->` markers requiring user resolution
 
 ## Overview
 

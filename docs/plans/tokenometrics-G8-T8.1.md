@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN → REFACTOR
 - **Behavior:** Ingesting the same JSONL fixture through the backend `CacheManager` and through the introspect script yields identical event rows for the response-accounting, context, subagent-prefix, and duration fields. (Tracer bullet for parity.)
 - **Test outline:**
