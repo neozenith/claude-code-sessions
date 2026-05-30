@@ -5,7 +5,7 @@
 > **Nav:** [« T1.3](./tokenometrics-G1-T1.3.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** An assistant event with `requestId == null` (e.g. `<synthetic>`) is treated as its own head and its usage is retained.
 - **Test outline:**

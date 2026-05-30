@@ -247,3 +247,62 @@ def test_single_block_response_intact(tmp_path: Path) -> None:
         row["total_output_tokens"] for row in usage if row["session_id"] == session_id
     )
     assert total_output == 100
+
+
+def _synthetic_assistant(
+    *, uuid: str, parent_uuid: str, session_id: str, timestamp: str, output_tokens: int
+) -> dict[str, Any]:
+    """An assistant event with NO ``requestId`` (e.g. a ``<synthetic>``
+    placeholder). The absence of the top-level key makes
+    ``raw.get("requestId")`` return None."""
+    return {
+        "uuid": uuid,
+        "parentUuid": parent_uuid,
+        "type": "assistant",
+        "timestamp": timestamp,
+        "sessionId": session_id,
+        "message": {
+            "role": "assistant",
+            "model": "<synthetic>",
+            "usage": {"input_tokens": 0, "output_tokens": output_tokens},
+            "content": [{"type": "text", "text": "synthetic"}],
+        },
+    }
+
+
+def test_null_request_id_is_own_head(tmp_path: Path) -> None:
+    """Each assistant event with requestId==null is its own head with usage
+    retained — null is never used as a grouping key, so two distinct
+    synthetic responses are not collapsed into one (which would zero one)."""
+    session_id = "sess-synthetic"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    ts = lambda i: base.replace(second=i).isoformat().replace("+00:00", "Z")  # noqa: E731
+    rows = [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": ts(0),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "ping"},
+        },
+        _synthetic_assistant(
+            uuid="s1", parent_uuid="u0", session_id=session_id, timestamp=ts(1), output_tokens=42
+        ),
+        _synthetic_assistant(
+            uuid="s2", parent_uuid="s1", session_id=session_id, timestamp=ts(2), output_tokens=42
+        ),
+    ]
+
+    db = _build_cache(tmp_path, rows, session_id=session_id)
+
+    events = db.get_session_events("-Users-test-proj", session_id)
+    synthetic = [e for e in events if e["event_type"] == "assistant"]
+    assert len(synthetic) == 2
+    assert all(e["is_response_head"] for e in synthetic), f"both should be heads: {synthetic}"
+
+    usage = db.get_session_usage()
+    total_output = sum(
+        row["total_output_tokens"] for row in usage if row["session_id"] == session_id
+    )
+    assert total_output == 84, f"both synthetic events retained, expected 84, got {total_output}"

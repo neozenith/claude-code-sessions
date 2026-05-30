@@ -66,10 +66,10 @@ loop can resume.
 
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
-| [G1](./tokenometrics-G1.md) | 4 | 3 | 1 | [T1.4](./tokenometrics-G1-T1.4.md) | — |
+| [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
 | [G2](./tokenometrics-G2.md) | 6 | 0 | 6 | [T2.1](./tokenometrics-G2-T2.1.md) | — |
 | [G3](./tokenometrics-G3.md) | 3 | 0 | 3 | [T3.1](./tokenometrics-G3-T3.1.md) | — |
-| [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | — | [T1.1](./tokenometrics-G1-T1.1.md) |
+| [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | [T4.1](./tokenometrics-G4-T4.1.md) | — |
 | [G5](./tokenometrics-G5.md) | 4 | 0 | 4 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
 | [G6](./tokenometrics-G6.md) | 3 | 0 | 3 | — | [T1.1](./tokenometrics-G1-T1.1.md), [T2.6](./tokenometrics-G2-T2.6.md), [T3.2](./tokenometrics-G3-T3.2.md), [T5.1](./tokenometrics-G5-T5.1.md) |
 | [G7](./tokenometrics-G7.md) | 4 | 0 | 4 | — | [T2.4](./tokenometrics-G2-T2.4.md), [T3.1](./tokenometrics-G3-T3.1.md), [T6.1](./tokenometrics-G6-T6.1.md), [T6.2](./tokenometrics-G6-T6.2.md) |
