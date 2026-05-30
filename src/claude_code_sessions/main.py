@@ -219,6 +219,25 @@ async def get_session_events(
     return get_db().get_session_events(project_id, session_id, event_uuid=event_uuid)
 
 
+@app.get("/api/sessions/{project_id}/{session_id}/metrics")
+async def get_session_metrics(project_id: str, session_id: str) -> dict[str, Any]:
+    """Per-turn idle/active/tps/too_fast plus a session summary."""
+    turns = get_db().get_session_metrics(project_id, session_id)
+    total_idle = sum(t["idle_ms"] for t in turns if t["idle_ms"] is not None)
+    total_active = sum(t["active_ms"] for t in turns if t["active_ms"] is not None)
+    # Session avg TPS = Σ output ÷ Σ duration over the turns that have a duration.
+    out_tokens = sum(t["output_tokens"] for t in turns if t["response_duration_ms"])
+    dur_ms = sum(t["response_duration_ms"] for t in turns if t["response_duration_ms"])
+    summary = {
+        "turn_count": len(turns),
+        "total_idle_ms": total_idle,
+        "total_active_ms": total_active,
+        "avg_tps": round(out_tokens / (dur_ms / 1000), 2) if dur_ms else None,
+        "too_fast_count": sum(1 for t in turns if t["too_fast"]),
+    }
+    return {"turns": turns, "summary": summary}
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

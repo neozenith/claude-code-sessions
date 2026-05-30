@@ -549,7 +549,8 @@ class SQLiteDatabase:
         rows = self._q(
             """
             SELECT e.uuid, e.event_type, e.msg_kind, e.timestamp,
-                   e.stop_reason, e.is_response_head, e.output_tokens
+                   e.stop_reason, e.is_response_head, e.output_tokens,
+                   e.response_duration_ms
             FROM events e
             WHERE e.project_id = ? AND e.session_id = ? AND e.is_sidechain = 0
             ORDER BY e.timestamp IS NULL, e.timestamp
@@ -571,6 +572,8 @@ class SQLiteDatabase:
             next_ts = rows[i + 1]["timestamp"] if i + 1 < len(rows) else None
             idle_ms = _delta_ms(r["timestamp"], next_ts)
             output_tokens = r["output_tokens"] or 0
+            duration_ms = r["response_duration_ms"]
+            tps = round(output_tokens / (duration_ms / 1000), 2) if duration_ms else None
             # too_fast: the human replied faster than even a fast skim of this
             # response could be read — but only for responses long enough to
             # be worth reading (≥ the min-token floor).
@@ -584,6 +587,8 @@ class SQLiteDatabase:
                     "uuid": r["uuid"],
                     "timestamp": r["timestamp"],
                     "output_tokens": output_tokens,
+                    "response_duration_ms": duration_ms,
+                    "tps": tps,
                     "active_ms": _delta_ms(last_human_ts, r["timestamp"]),
                     "idle_ms": idle_ms,
                     "too_fast": too_fast,

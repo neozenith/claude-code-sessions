@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T6.2 »](./tokenometrics-G6-T6.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `GET /api/sessions/{projectId}/{sessionId}/metrics` returns 200 with a per-turn list (each having `idle_ms`, `active_ms`, `tps`, `too_fast`) and a session summary. (Tracer bullet for the metrics endpoint.)
 - **Test outline:**

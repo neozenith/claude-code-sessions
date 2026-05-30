@@ -71,7 +71,7 @@ loop can resume.
 | [G3](./tokenometrics-G3.md) | 3 | 3 | 0 | — _(done)_ | — |
 | [G4](./tokenometrics-G4.md) | 2 | 2 | 0 | — _(done)_ | — |
 | [G5](./tokenometrics-G5.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G6](./tokenometrics-G6.md) | 3 | 0 | 3 | [T6.1](./tokenometrics-G6-T6.1.md) | — _(runs after G5 by numbering)_ |
+| [G6](./tokenometrics-G6.md) | 3 | 1 | 2 | [T6.2](./tokenometrics-G6-T6.2.md) | — |
 | [G7](./tokenometrics-G7.md) | 4 | 1 | 3 | — | [T3.1](./tokenometrics-G3-T3.1.md), [T6.1](./tokenometrics-G6-T6.1.md), [T6.2](./tokenometrics-G6-T6.2.md) |
 | [G8](./tokenometrics-G8.md) | 1 | 0 | 1 | [T8.1](./tokenometrics-G8-T8.1.md) | — _(also mirrors G5; runs last by numbering)_ |
 
