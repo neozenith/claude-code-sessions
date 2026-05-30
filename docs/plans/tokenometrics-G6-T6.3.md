@@ -5,7 +5,7 @@
 > **Nav:** [« T6.2](./tokenometrics-G6-T6.2.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `get_sessions_list()` rows include `avg_tps`, `total_idle_ms`, `total_active_ms`, `peak_context_ratio`.
 - **Test outline:**

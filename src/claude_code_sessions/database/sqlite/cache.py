@@ -841,6 +841,7 @@ class CacheManager:
                   AND e.project_id = sessions.project_id
             )
         """)
+        self._compute_session_timing(cursor)
         self.conn.commit()
         elapsed_ms = (time.monotonic() - t0) * 1000
         project_count = cursor.execute("SELECT COUNT(*) FROM projects").fetchone()[0]
@@ -851,6 +852,73 @@ class CacheManager:
             session_count,
             elapsed_ms,
         )
+
+    def _compute_session_timing(self, cursor: sqlite3.Cursor) -> None:
+        """Populate the per-session timing/throughput rollups on the sessions
+        table: avg_tps, peak_context_ratio, total_idle_ms, total_active_ms.
+
+        Called inside rebuild_aggregates once the sessions rows exist, so the
+        hot sessions-list read serves precomputed values instead of windowing
+        over events per request. Idle/active use the same main-thread turn walk
+        as get_session_metrics (LEAD for idle; running-max human ts for active).
+        Timestamps are UTC 'Z'; stripping the suffix lets julianday parse the
+        naive form — the delta is unaffected.
+        """
+        # avg_tps + peak_context_ratio: correlated subqueries over the heads.
+        cursor.execute("""
+            UPDATE sessions SET
+                peak_context_ratio = (
+                    SELECT MAX(e.context_ratio) FROM events e
+                    WHERE e.session_id = sessions.session_id
+                      AND e.project_id = sessions.project_id
+                ),
+                avg_tps = (
+                    SELECT CASE WHEN SUM(e.response_duration_ms) > 0
+                                THEN ROUND(SUM(e.output_tokens) * 1000.0
+                                           / SUM(e.response_duration_ms), 4)
+                                ELSE NULL END
+                    FROM events e
+                    WHERE e.session_id = sessions.session_id
+                      AND e.project_id = sessions.project_id
+                      AND e.is_response_head = 1 AND e.event_type = 'assistant'
+                      AND e.response_duration_ms > 0
+                )
+        """)
+        # idle/active: one windowed turn walk, summed per (project, session).
+        cursor.execute("""
+            UPDATE sessions SET
+                total_idle_ms = COALESCE(tt.idle_ms, 0),
+                total_active_ms = COALESCE(tt.active_ms, 0)
+            FROM (
+                WITH walk AS (
+                    SELECT project_id, session_id, event_type, stop_reason,
+                           is_response_head, timestamp,
+                           LEAD(timestamp) OVER w AS next_ts,
+                           MAX(CASE WHEN msg_kind = 'human' THEN timestamp END) OVER (
+                               PARTITION BY session_id ORDER BY timestamp
+                               ROWS BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW
+                           ) AS last_human
+                    FROM events
+                    WHERE is_sidechain = 0
+                    WINDOW w AS (PARTITION BY session_id ORDER BY timestamp)
+                )
+                SELECT project_id, session_id,
+                       CAST(ROUND(SUM(CASE WHEN next_ts IS NOT NULL THEN MAX(0,
+                           (julianday(REPLACE(next_ts, 'Z', ''))
+                            - julianday(REPLACE(timestamp, 'Z', ''))) * 86400000)
+                           ELSE 0 END)) AS INTEGER) AS idle_ms,
+                       CAST(ROUND(SUM(CASE WHEN last_human IS NOT NULL THEN MAX(0,
+                           (julianday(REPLACE(timestamp, 'Z', ''))
+                            - julianday(REPLACE(last_human, 'Z', ''))) * 86400000)
+                           ELSE 0 END)) AS INTEGER) AS active_ms
+                FROM walk
+                WHERE event_type = 'assistant' AND is_response_head = 1
+                  AND stop_reason = 'end_turn'
+                GROUP BY project_id, session_id
+            ) AS tt
+            WHERE sessions.session_id = tt.session_id
+              AND sessions.project_id = tt.project_id
+        """)
 
     # -- One-shot data migrations -------------------------------------------
 

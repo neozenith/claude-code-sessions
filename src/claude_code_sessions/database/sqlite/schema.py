@@ -31,7 +31,10 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 # v16 (G4): response performance — events.response_duration_ms (stamped on
 #           each response head: triggering-event ts → head ts); TPS derived
 #           in the query layer.
-SCHEMA_VERSION = "16"
+# v17 (G5/G6): per-session timing rollups — sessions.avg_tps, total_idle_ms,
+#           total_active_ms, peak_context_ratio (computed in rebuild_aggregates
+#           by _compute_session_timing).
+SCHEMA_VERSION = "17"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -77,6 +80,10 @@ CREATE TABLE IF NOT EXISTS sessions (
     total_cache_read_tokens INTEGER DEFAULT 0,
     total_cache_creation_tokens INTEGER DEFAULT 0,
     total_cost_usd REAL DEFAULT 0.0,
+    avg_tps REAL,
+    total_idle_ms INTEGER DEFAULT 0,
+    total_active_ms INTEGER DEFAULT 0,
+    peak_context_ratio REAL,
     UNIQUE(project_id, session_id)
 );
 CREATE INDEX IF NOT EXISTS idx_sessions_project ON sessions(project_id);

@@ -360,6 +360,7 @@ class SQLiteDatabase:
                 s.total_input_tokens, s.total_output_tokens,
                 s.total_cache_read_tokens, s.total_cache_creation_tokens,
                 ROUND(COALESCE(s.total_cost_usd, 0), 4) AS total_cost_usd,
+                s.avg_tps, s.total_idle_ms, s.total_active_ms, s.peak_context_ratio,
                 COALESCE(cc.tool_call_count, 0) AS tool_call_count,
                 COALESCE(cc.skill_call_count, 0) AS skill_call_count,
                 COALESCE(cc.make_target_call_count, 0) AS make_target_call_count,
