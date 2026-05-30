@@ -68,7 +68,7 @@ loop can resume.
 |-----|---------------|-----------|-----------|---------------|------------|
 | [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
 | [G2](./tokenometrics-G2.md) | 6 | 6 | 0 | — _(done)_ | — |
-| [G3](./tokenometrics-G3.md) | 3 | 2 | 1 | [T3.3](./tokenometrics-G3-T3.3.md) | — |
+| [G3](./tokenometrics-G3.md) | 3 | 3 | 0 | — _(done)_ | — |
 | [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | [T4.1](./tokenometrics-G4-T4.1.md) | — |
 | [G5](./tokenometrics-G5.md) | 4 | 0 | 4 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
 | [G6](./tokenometrics-G6.md) | 3 | 0 | 3 | — | [T5.1](./tokenometrics-G5-T5.1.md) |

@@ -92,3 +92,45 @@ def test_subagent_file_events_all_prefixed(tmp_path: Path) -> None:
     assert kinds, "expected ingested events"
     assert all(k.startswith("subagent-") for k in kinds), f"unprefixed kinds present: {kinds}"
     assert "subagent-human" in kinds  # the user prompt, formerly bare 'human'
+
+
+def test_main_session_human_unprefixed(tmp_path: Path) -> None:
+    """A non-sidechain human prompt in a main_session file stays bare 'human'
+    — the subagent prefix must not leak onto main-thread events."""
+    session_id = "main-sess"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    rows = [
+        {
+            "uuid": "mu0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": base.replace(second=0).isoformat().replace("+00:00", "Z"),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "hello from the main thread"},
+        },
+    ]
+    projects = tmp_path / "projects"
+    project_dir = projects / "-Users-test-proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    jsonl = project_dir / f"{session_id}.jsonl"
+    jsonl.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    db = SQLiteDatabase(
+        local_projects_path=projects,
+        home_projects_path=projects,
+        db_path=tmp_path / "cache.db",
+    )
+    db.cache.ingest_file(
+        {
+            "filepath": str(jsonl),
+            "project_id": "-Users-test-proj",
+            "file_type": "main_session",
+            "session_id": session_id,
+            "mtime": jsonl.stat().st_mtime,
+            "size_bytes": jsonl.stat().st_size,
+        }
+    )
+
+    events = db.get_session_events("-Users-test-proj", session_id)
+    human = next(e for e in events if e["event_type"] == "user")
+    assert human["message_kind"] == "human"

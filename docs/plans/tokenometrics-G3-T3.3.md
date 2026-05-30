@@ -5,7 +5,7 @@
 > **Nav:** [« T3.2](./tokenometrics-G3-T3.2.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** A human prompt in a main session file keeps `msg_kind == "human"`.
 - **Test outline:**
