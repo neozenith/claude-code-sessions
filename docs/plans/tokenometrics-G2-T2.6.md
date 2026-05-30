@@ -5,7 +5,7 @@
 > **Nav:** [« T2.5](./tokenometrics-G2-T2.5.md)  ·  _(last)_ »
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** After ingesting an assistant response with `input=6, cache_read=180_000, cache_creation=0` on a 200k model, `get_session_events()` reports `context_tokens=180_006` and `context_ratio≈0.90`.
 - **Test outline:**

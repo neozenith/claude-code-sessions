@@ -11,7 +11,7 @@
 - **Test outline:**
   - File: `tests/test_introspect_parity.py`
   - Name: `test_backend_and_introspect_agree`
-  - Asserts: for a shared fixture, the two caches' `get_session_events`-equivalent rows match on `is_response_head`, `output_tokens`, `context_tokens`, `context_window`, `msg_kind`, `response_duration_ms`, and both report `SCHEMA_VERSION == "14"`.
+  - Asserts: for a shared fixture, the two caches' `get_session_events`-equivalent rows match on `is_response_head`, `output_tokens`, `context_tokens`, `context_window`, `context_ratio`, `msg_kind`, `response_duration_ms`, and both report the **same** `SCHEMA_VERSION` (import the constant; do not hardcode — it is bumped per schema-changing gap, `"15"` after G2).
 - **Implementation outline:**
   - File(s): `.claude/skills/introspect/scripts/introspect_sessions.py` (mirror `CONTEXT_WINDOWS`, `context_ratio`, requestId dedup/head, response duration, `subagent-` prefix, `SCHEMA_VERSION`).
 - **Mocks:** `none`

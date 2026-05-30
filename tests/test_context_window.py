@@ -8,8 +8,13 @@ no fixtures.
 
 from __future__ import annotations
 
+import json
+from datetime import UTC, datetime
+from pathlib import Path
+
 import pytest
 
+from claude_code_sessions.database import SQLiteDatabase
 from claude_code_sessions.database.sqlite.pricing import (
     CONTEXT_WINDOWS,
     context_ratio,
@@ -102,3 +107,80 @@ def test_context_ratio(tokens: int, window: int | None, expected: float | None) 
     """context_ratio is the raw fraction tokens/window, or None when the window
     is unknown — a quantitative measure with no categorical zone labeling."""
     assert context_ratio(tokens, window) == expected
+
+
+def _ingest_one_response(tmp_path: Path, *, model: str, usage: dict[str, int]) -> SQLiteDatabase:
+    """Ingest a session of one user prompt + one single-block assistant
+    response (which is its own head) carrying ``usage``, into a fresh cache."""
+    session_id = "sess-ctx"
+    base = datetime(2025, 1, 1, tzinfo=UTC)
+    rows = [
+        {
+            "uuid": "u0",
+            "parentUuid": None,
+            "type": "user",
+            "timestamp": base.replace(second=0).isoformat().replace("+00:00", "Z"),
+            "sessionId": session_id,
+            "message": {"role": "user", "content": "hi"},
+        },
+        {
+            "uuid": "a1",
+            "parentUuid": "u0",
+            "type": "assistant",
+            "requestId": "req_ctx",
+            "timestamp": base.replace(second=1).isoformat().replace("+00:00", "Z"),
+            "sessionId": session_id,
+            "message": {
+                "role": "assistant",
+                "model": model,
+                "stop_reason": "end_turn",
+                "usage": usage,
+                "content": [{"type": "text", "text": "hello"}],
+            },
+        },
+    ]
+    projects = tmp_path / "projects"
+    project_dir = projects / "-Users-test-proj"
+    project_dir.mkdir(parents=True, exist_ok=True)
+    jsonl = project_dir / f"{session_id}.jsonl"
+    jsonl.write_text("\n".join(json.dumps(r) for r in rows), encoding="utf-8")
+
+    db = SQLiteDatabase(
+        local_projects_path=projects,
+        home_projects_path=projects,
+        db_path=tmp_path / "cache.db",
+    )
+    db.cache.ingest_file(
+        {
+            "filepath": str(jsonl),
+            "project_id": "-Users-test-proj",
+            "file_type": "main_session",
+            "session_id": session_id,
+            "mtime": jsonl.stat().st_mtime,
+            "size_bytes": jsonl.stat().st_size,
+        }
+    )
+    return db
+
+
+def test_event_context_fields_after_ingest(tmp_path: Path) -> None:
+    """After ingestion, an assistant head carries context_tokens (live
+    occupancy = input + cache_read + cache_creation) and context_ratio
+    (occupancy / model window) on a known-window model."""
+    db = _ingest_one_response(
+        tmp_path,
+        model="claude-sonnet-4-5-20250929",  # 200k window
+        usage={
+            "input_tokens": 6,
+            "output_tokens": 20,
+            "cache_read_input_tokens": 180_000,
+            "cache_creation_input_tokens": 0,
+        },
+    )
+
+    events = db.get_session_events("-Users-test-proj", "sess-ctx")
+    head = next(e for e in events if e["event_type"] == "assistant")
+
+    assert head["context_tokens"] == 180_006
+    assert head["context_ratio"] == pytest.approx(180_006 / 200_000)
+    assert head["context_window"] == 200_000

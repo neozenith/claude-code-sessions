@@ -26,7 +26,12 @@ from claude_code_sessions.database.sqlite.embeddings import (
     sync_embeddings,
 )
 from claude_code_sessions.database.sqlite.kg import sync_kg
-from claude_code_sessions.database.sqlite.pricing import compute_event_costs, message_kind
+from claude_code_sessions.database.sqlite.pricing import (
+    compute_event_costs,
+    context_ratio,
+    context_window,
+    message_kind,
+)
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQL, SCHEMA_VERSION
 
 log = logging.getLogger(__name__)
@@ -366,11 +371,12 @@ class CacheManager:
                     is_sidechain, agent_id, agent_slug,
                     message_role, message_content, message_content_json, model_id,
                     request_id, stop_reason, is_response_head,
+                    context_tokens, context_window, context_ratio,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
                     token_rate, billable_tokens, total_cost_usd,
                     source_file_id, line_number, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
@@ -391,6 +397,9 @@ class CacheManager:
                     event["request_id"],
                     event["stop_reason"],
                     event["is_response_head"],
+                    event["context_tokens"],
+                    event["context_window"],
+                    event["context_ratio"],
                     event["input_tokens"],
                     event["output_tokens"],
                     event["cache_read_tokens"],
@@ -541,6 +550,16 @@ class CacheManager:
             model_id, input_tokens, output_tokens, cache_read_tokens, cache_creation_tokens
         )
 
+        # Live context-window occupancy: the full prompt sent for an assistant
+        # response (input + cache_read + cache_creation). Only assistant events
+        # carry a meaningful occupancy/window/ratio; others stay 0/None.
+        if event_type == "assistant":
+            ctx_tokens = input_tokens + cache_read_tokens + cache_creation_tokens
+        else:
+            ctx_tokens = 0
+        ctx_window = context_window(model_id)
+        ctx_ratio = context_ratio(ctx_tokens, ctx_window)
+
         timestamp_local = None
         if timestamp:
             try:
@@ -570,6 +589,9 @@ class CacheManager:
             # post-pass) demotes the duplicated continuation blocks of a
             # multi-block response to is_response_head=0 and zeroes their usage.
             "is_response_head": 1,
+            "context_tokens": ctx_tokens,
+            "context_window": ctx_window,
+            "context_ratio": ctx_ratio,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,

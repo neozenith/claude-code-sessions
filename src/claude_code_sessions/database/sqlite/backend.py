@@ -505,6 +505,7 @@ class SQLiteDatabase:
                 e.message_content_json AS message_content,
                 e.model_id, e.msg_kind AS message_kind,
                 e.is_response_head,
+                e.context_tokens, e.context_window, e.context_ratio,
                 CASE WHEN e.is_sidechain = 1 THEN 1 ELSE 0 END AS is_meta,
                 e.input_tokens, e.output_tokens,
                 e.cache_read_tokens, e.cache_creation_tokens,

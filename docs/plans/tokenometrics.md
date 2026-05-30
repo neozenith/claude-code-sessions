@@ -60,14 +60,14 @@ The user must re-enter Phase 2 refinement to resolve the ADR before the
 loop can resume.
 ```
 
-> **Note for the runner:** G1's schema change bumps `SCHEMA_VERSION` to `"14"`. After the G1 tickets land, a full reingest is required before G4–G8 integration tickets will see populated columns (delete `~/.claude/cache/introspect_sessions.db` or let `ensure_cache` DROP+recreate). Backend ticket tests should build a tiny fixture cache rather than depend on the 2 GB production DB.
+> **Note for the runner:** Each schema-changing gap bumps `SCHEMA_VERSION` (G1 → `"14"`, G2 → `"15"`, and G4/G5 bump further as they add columns) so `ensure_cache` auto-DROPs+recreates an existing cache — adding columns at the *same* version is unsafe, because `CREATE TABLE IF NOT EXISTS` can't add columns to a live cache and ingestion of new files then fails with "no such column". A reingest happens automatically on each bump. Backend ticket tests should build a tiny fixture cache rather than depend on the 2 GB production DB. The **final** `SCHEMA_VERSION` (after G5) is whatever the constant reads — G8 parity asserts both ingesters share that same value, not a hardcoded literal.
 
 ### Progress
 
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
 | [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G2](./tokenometrics-G2.md) | 6 | 5 | 1 | [T2.6](./tokenometrics-G2-T2.6.md) | — |
+| [G2](./tokenometrics-G2.md) | 6 | 6 | 0 | — _(done)_ | — |
 | [G3](./tokenometrics-G3.md) | 3 | 0 | 3 | [T3.1](./tokenometrics-G3-T3.1.md) | — |
 | [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | [T4.1](./tokenometrics-G4-T4.1.md) | — |
 | [G5](./tokenometrics-G5.md) | 4 | 0 | 4 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
@@ -261,7 +261,7 @@ flowchart LR
     class G8 parity
 ```
 
-**Recommended implementation order:** G1 (foundation: schema bump + dedup + reingest) → G2, G3, G4 in parallel (all ride the same ingestion change) → G5 (needs G4's duration/heads) → G6 (queries over the new columns) → G7 (frontend) → G8 (introspect-script parity, mirrors G1–G5). G1's schema-version bump forces a single full reingest of the 2 GB corpus that G2–G5 piggyback on, so they should land together before the reingest.
+**Recommended implementation order:** G1 (foundation: schema bump + dedup + reingest) → G2, G3, G4 in parallel (all ride the same ingestion change) → G5 (needs G4's duration/heads) → G6 (queries over the new columns) → G7 (frontend) → G8 (introspect-script parity, mirrors G1–G5). Each schema-changing gap (G1, G2, G4, G5) bumps `SCHEMA_VERSION`, so `ensure_cache` auto-DROPs+recreates the corpus on the next run — no manual reingest needed, but the full rebuild does cost a pass over the 2 GB corpus each time.
 
 ---
 
@@ -304,7 +304,7 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 - **[G5](./tokenometrics-G5.md):** `total_active_ms + total_idle_ms` reconciles to the session wall-clock within tolerance; `too_fast` set only when idle < output/READ_TOKENS_PER_SEC.
 - **[G6](./tokenometrics-G6.md):** `/api/performance` and `/api/sessions/{p}/{s}/metrics` return typed payloads honoring `days`/`project`.
 - **[G7](./tokenometrics-G7.md):** SessionDetail shows occupancy bar + TPS + idle markers; Performance page renders all charts; subagent filter works via `?msg=`.
-- **[G8](./tokenometrics-G8.md):** Backend and introspect script produce byte-identical event rows for a shared fixture at `SCHEMA_VERSION 14`.
+- **[G8](./tokenometrics-G8.md):** Backend and introspect script produce byte-identical event rows for a shared fixture and report the **same** `SCHEMA_VERSION` (the current constant, bumped per schema-changing gap — `"15"` after G2).
 
 ## Negative Measures
 

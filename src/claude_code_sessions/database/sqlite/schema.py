@@ -19,10 +19,16 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 # Must match the introspect script's version so both tools coexist.
 # v13: knowledge-graph layer (entities, relations, entity_clusters, nodes, edges,
 #      leiden_communities, entity_cluster_labels, community_labels).
-# v14: response-level token accounting — events.request_id, events.stop_reason,
-#      events.is_response_head (one head per requestId; non-heads zeroed so
-#      every SUM() is deduped without query rewrites).
-SCHEMA_VERSION = "14"
+# Tokenometrics initiative — each column-adding gap bumps the version so an
+# existing cache is DROP+recreated (CREATE TABLE IF NOT EXISTS can't add
+# columns to a live cache; a bump is the only safe migration).
+# v14 (G1): response-level token accounting — events.request_id,
+#           events.stop_reason, events.is_response_head (one head per
+#           requestId; non-heads zeroed so every SUM() is deduped).
+# v15 (G2): context-window utilization — events.context_tokens (live
+#           occupancy), events.context_window (per-model budget),
+#           events.context_ratio (raw fraction; no zone labeling).
+SCHEMA_VERSION = "15"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -94,6 +100,9 @@ CREATE TABLE IF NOT EXISTS events (
     request_id TEXT,
     stop_reason TEXT,
     is_response_head INTEGER DEFAULT 1,
+    context_tokens INTEGER DEFAULT 0,
+    context_window INTEGER,
+    context_ratio REAL,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0,

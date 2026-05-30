@@ -11,7 +11,7 @@
 **Gap:** Mirror the schema columns, requestId dedup/head logic, context-window map, response duration, and `subagent-` prefix so both ingesters produce identical rows.
 
 **Output(s):**
-- `.claude/skills/introspect/scripts/introspect_sessions.py` (Python): mirrored schema + parsing changes; matching `SCHEMA_VERSION "14"`.
+- `.claude/skills/introspect/scripts/introspect_sessions.py` (Python): mirrored schema + parsing changes; matching the current `SCHEMA_VERSION` (bumped per schema-changing gap — `"15"` after G2).
 - `tests/` cross-check that the script and backend agree on a sample fixture.
 
 ## Tickets
