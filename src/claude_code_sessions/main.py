@@ -19,6 +19,7 @@ from claude_code_sessions.config import (
 )
 from claude_code_sessions.database.sqlite.kg.payload import (
     VALID_SEED_METRICS,
+    KGCacheStats,
     KGDataMissing,
     KGPayload,
     SeedMetric,
@@ -369,6 +370,47 @@ async def kg_er(
         raise HTTPException(status_code=422, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.get("/api/kg/cache-stats")
+async def kg_cache_stats() -> KGCacheStats:
+    """Per-stage backlog of the cache → knowledge-graph pipeline.
+
+    Powers the "KG Cache" page. Global by design — the counts reflect the
+    entire projects tree, not the dashboard's ``days`` / ``project``
+    filters, because the background indexer processes everything.
+
+    The ``indexer`` field carries the live background-indexer status
+    (phase / timestamps / error). When a wave crashes, ``phase`` is
+    ``failed`` and ``error`` holds the exception string — so this single
+    endpoint answers both "how far has the pipeline got?" and "why did it
+    stop?".
+    """
+    stats = get_db().get_kg_cache_stats()
+    stats.indexer = get_indexer().status()
+    return stats
+
+
+@app.post("/api/kg/reindex")
+async def kg_reindex() -> dict[str, Any]:
+    """Kick the background indexer to run a pass now.
+
+    Idempotent: ``IndexerService.start()`` is a no-op if a run is already
+    in flight, so double-clicking the button can't spawn overlapping
+    indexers. Returns the (possibly already-running) indexer status so the
+    caller can immediately reflect the new phase and begin polling
+    ``/api/kg/cache-stats``.
+
+    A pass runs the full lifecycle including the downstream catch-up, so
+    this is the button that drains any residual embed / KG / naming
+    backlog on a warm cache.
+    """
+    indexer = get_indexer()
+    already_running = indexer.is_running()
+    indexer.start()
+    status = indexer.status()
+    status["already_running"] = already_running
+    return status
 
 
 # Serve frontend static files in production

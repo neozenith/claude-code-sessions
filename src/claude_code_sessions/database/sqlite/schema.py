@@ -19,7 +19,10 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 # Must match the introspect script's version so both tools coexist.
 # v13: knowledge-graph layer (entities, relations, entity_clusters, nodes, edges,
 #      leiden_communities, entity_cluster_labels, community_labels).
-SCHEMA_VERSION = "13"
+# v14: response-level token accounting — events.request_id, events.stop_reason,
+#      events.is_response_head (one head per requestId; non-heads zeroed so
+#      every SUM() is deduped without query rewrites).
+SCHEMA_VERSION = "14"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -88,6 +91,9 @@ CREATE TABLE IF NOT EXISTS events (
     message_content TEXT,
     message_content_json TEXT,
     model_id TEXT,
+    request_id TEXT,
+    stop_reason TEXT,
+    is_response_head INTEGER DEFAULT 1,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0,
@@ -101,6 +107,7 @@ CREATE TABLE IF NOT EXISTS events (
     raw_json TEXT NOT NULL
 );
 CREATE INDEX IF NOT EXISTS idx_events_uuid ON events(uuid);
+CREATE INDEX IF NOT EXISTS idx_events_request_id ON events(request_id);
 CREATE INDEX IF NOT EXISTS idx_events_parent_uuid ON events(parent_uuid);
 CREATE INDEX IF NOT EXISTS idx_events_prompt_id ON events(prompt_id);
 CREATE INDEX IF NOT EXISTS idx_events_session ON events(session_id);

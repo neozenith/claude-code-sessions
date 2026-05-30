@@ -21,7 +21,7 @@ from __future__ import annotations
 import logging
 import sqlite3
 from collections import defaultdict, deque
-from typing import Literal
+from typing import Any, Literal
 
 from pydantic import BaseModel
 
@@ -108,6 +108,59 @@ class KGPayload(BaseModel):
     filtered_days: int | None = None
     filtered_project: str | None = None
     filtered_node_count: int | None = None  # nodes after time/project filter, before seed-expand
+
+
+class PipelineStage(BaseModel):
+    """Progress for one stage of the cache → knowledge-graph pipeline.
+
+    ``eligible`` is how many upstream items COULD be processed by this
+    stage; ``done`` is how many have been; ``pending`` is the backlog
+    (``eligible - done``, clamped at 0). ``percent`` drives a progress
+    bar. ``note`` carries a caveat for stages that rebuild wholesale
+    (entity resolution, communities) rather than tracking a true
+    per-row incremental backlog.
+    """
+
+    key: str
+    label: str
+    eligible: int
+    done: int
+    pending: int
+    percent: float
+    note: str | None = None
+
+
+class KGCacheStats(BaseModel):
+    """Pipeline backlog snapshot for the KG Cache page.
+
+    Deliberately UNFILTERED: the background indexer processes the entire
+    projects directory regardless of the dashboard's ``days`` / ``project``
+    filters, so a backlog scoped to a time window would misrepresent how
+    much work remains. The ``indexer`` field mirrors
+    ``IndexerService.status()`` so a crashed pipeline (phase=``failed``
+    with an ``error`` string) surfaces directly on this page.
+    """
+
+    generated_at: str
+    indexer: dict[str, Any]
+    # Headline totals (cumulative counts, not backlog).
+    files_on_disk: int
+    source_files: int
+    events_total: int
+    chunks_total: int
+    entities_total: int
+    relations_total: int
+    unique_entities: int
+    nodes_total: int
+    edges_total: int
+    # Community count is reported at a SINGLE Leiden resolution (the one the
+    # graph page displays), not summed across resolutions — summing would
+    # multi-count the same nodes. ``display_resolution`` is which one; None
+    # when no communities have been detected yet.
+    communities_total: int
+    display_resolution: float | None = None
+    # Per-stage backlog, ordered from ingest → community naming.
+    stages: list[PipelineStage]
 
 
 class KGDataMissing(RuntimeError):

@@ -7,6 +7,7 @@ JSONL session files and serves queries from pre-computed aggregates.
 
 from __future__ import annotations
 
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -30,7 +31,10 @@ from claude_code_sessions.database.sqlite.filters import (
     project_clause,
 )
 from claude_code_sessions.database.sqlite.kg.payload import (
+    DEFAULT_RESOLUTION,
+    KGCacheStats,
     KGPayload,
+    PipelineStage,
     SeedMetric,
     load_kg_er,
 )
@@ -99,6 +103,27 @@ class SQLiteDatabase:
             return []
         columns = [desc[0] for desc in cursor.description]
         return [dict(zip(columns, row, strict=False)) for row in rows]
+
+    def _scalar(self, sql: str, params: tuple[Any, ...] = ()) -> int:
+        """Execute SQL returning a single integer count (0 if NULL/empty)."""
+        row = self._cache.conn.execute(sql, params).fetchone()
+        return int(row[0]) if row and row[0] is not None else 0
+
+    def _table_exists(self, name: str) -> bool:
+        """Whether a table/view exists.
+
+        Used for runtime-created tables like ``chunks_vec_nodes`` (the
+        sqlite-muninn HNSW shadow table) which are absent until the
+        embedding phase has run at least once. A missing shadow table
+        legitimately means "0 processed" for that stage — it is not an
+        error, so the cache-stats query checks existence rather than
+        letting the count raise ``no such table``.
+        """
+        row = self._cache.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table', 'view') AND name = ?",
+            (name,),
+        ).fetchone()
+        return row is not None
 
     def _filters(
         self,
@@ -852,4 +877,194 @@ class SQLiteDatabase:
             min_degree=min_degree,
             days=days,
             project=project,
+        )
+
+    def get_kg_cache_stats(self) -> KGCacheStats:
+        """Per-stage backlog snapshot of the cache → knowledge-graph pipeline.
+
+        Global by design — the indexer walks the entire projects tree, so
+        these counts are NOT filtered by ``days`` / ``project``. Each
+        stage's "done" definition mirrors the pipeline's own incremental
+        skip query so the backlog numbers match what the next wave will
+        actually process:
+
+        * ingest      — ``*.jsonl`` files on disk vs rows in ``source_files``
+        * chunk       — human events with content not yet in ``event_message_chunks``
+                        (matches ``embeddings.sync_chunks``)
+        * embed       — chunks not yet in ``chunks_vec_nodes`` (matches
+                        ``embeddings.sync_embeddings``; shadow table may be absent)
+        * ner / re    — chunks not yet logged in ``ner_chunks_log`` / ``re_chunks_log``
+        * entity_embed— distinct entity names not yet in ``entity_vec_map``
+        * resolve     — ``entity_vec_map`` vs ``entity_clusters`` (rebuilt wholesale)
+        * communities — canonical nodes vs nodes assigned in ``leiden_communities``
+        * naming      — distinct (resolution, community) vs ``community_labels``
+
+        The ``indexer`` field is left empty here and populated by the API
+        route from ``IndexerService.status()`` — the database layer has no
+        handle on the background thread.
+        """
+        # --- Stage: ingest --------------------------------------------------
+        try:
+            files_on_disk = sum(1 for _ in self.projects_path.rglob("*.jsonl"))
+        except FileNotFoundError:
+            files_on_disk = 0
+        source_files = self._scalar("SELECT COUNT(*) FROM source_files")
+
+        # --- Stage: chunk ---------------------------------------------------
+        kinds = ",".join("?" * len(EMBEDDED_MSG_KINDS))
+        chunk_where = (
+            f"e.message_content IS NOT NULL AND e.message_content != '' AND e.msg_kind IN ({kinds})"
+        )
+        chunk_eligible = self._scalar(
+            f"SELECT COUNT(*) FROM events e WHERE {chunk_where}",
+            EMBEDDED_MSG_KINDS,
+        )
+        chunk_pending = self._scalar(
+            f"SELECT COUNT(*) FROM events e WHERE {chunk_where} "
+            f"AND e.id NOT IN (SELECT DISTINCT event_id FROM event_message_chunks)",
+            EMBEDDED_MSG_KINDS,
+        )
+        chunks_total = self._scalar("SELECT COUNT(*) FROM event_message_chunks")
+
+        # --- Stage: embed ---------------------------------------------------
+        # chunks_vec_nodes is created at runtime by sqlite-muninn; absent
+        # until the embedding phase runs once → legitimately 0 embedded.
+        embed_done = (
+            self._scalar("SELECT COUNT(*) FROM chunks_vec_nodes")
+            if self._table_exists("chunks_vec_nodes")
+            else 0
+        )
+
+        # --- Stages: NER / RE ----------------------------------------------
+        ner_done = self._scalar("SELECT COUNT(*) FROM ner_chunks_log")
+        re_done = self._scalar("SELECT COUNT(*) FROM re_chunks_log")
+
+        # --- Stage: entity embeddings --------------------------------------
+        unique_entities = self._scalar("SELECT COUNT(DISTINCT name) FROM entities")
+        entity_embed_done = self._scalar("SELECT COUNT(*) FROM entity_vec_map")
+
+        # --- Stage: entity resolution --------------------------------------
+        cluster_done = self._scalar("SELECT COUNT(*) FROM entity_clusters")
+        nodes_total = self._scalar("SELECT COUNT(*) FROM nodes")
+        edges_total = self._scalar("SELECT COUNT(*) FROM edges")
+
+        # --- Stage: communities / naming -----------------------------------
+        # Leiden runs at SEVERAL resolutions over the SAME nodes, so counting
+        # communities across all resolutions multi-counts them (e.g. 3 resolutions
+        # → ~3x the real number). Report against the single resolution the graph
+        # page actually displays — mirroring load_kg_er's choice: prefer
+        # DEFAULT_RESOLUTION, else the smallest available.
+        resolutions = [
+            row[0]
+            for row in self._cache.conn.execute(
+                "SELECT DISTINCT resolution FROM leiden_communities ORDER BY resolution"
+            ).fetchall()
+        ]
+        display_resolution: float | None = None
+        if resolutions:
+            display_resolution = (
+                DEFAULT_RESOLUTION if DEFAULT_RESOLUTION in resolutions else resolutions[0]
+            )
+            nodes_in_comm = self._scalar(
+                "SELECT COUNT(DISTINCT node) FROM leiden_communities WHERE resolution = ?",
+                (display_resolution,),
+            )
+            communities_total = self._scalar(
+                "SELECT COUNT(DISTINCT community_id) FROM leiden_communities WHERE resolution = ?",
+                (display_resolution,),
+            )
+            community_labels_done = self._scalar(
+                "SELECT COUNT(*) FROM community_labels WHERE resolution = ?",
+                (display_resolution,),
+            )
+        else:
+            nodes_in_comm = 0
+            communities_total = 0
+            community_labels_done = 0
+
+        events_total = self._scalar("SELECT COUNT(*) FROM events")
+        entities_total = self._scalar("SELECT COUNT(*) FROM entities")
+        relations_total = self._scalar("SELECT COUNT(*) FROM relations")
+
+        def _stage(
+            key: str, label: str, eligible: int, done: int, note: str | None = None
+        ) -> PipelineStage:
+            # Clamp: a stage can't be more than 100% covered. Re-ingests can
+            # leave orphaned downstream rows (e.g. vectors / log entries for
+            # chunks since deleted), so a raw ``done`` count may transiently
+            # exceed ``eligible`` — coverage is "of eligible, how many done".
+            done = min(done, eligible)
+            pending = max(0, eligible - done)
+            percent = round(100.0 * done / eligible, 1) if eligible > 0 else 0.0
+            return PipelineStage(
+                key=key,
+                label=label,
+                eligible=eligible,
+                done=done,
+                pending=pending,
+                percent=percent,
+                note=note,
+            )
+
+        stages = [
+            _stage(
+                "ingest",
+                "Ingest source files",
+                files_on_disk,
+                source_files,
+                note="*.jsonl files on disk vs rows in source_files.",
+            ),
+            _stage("chunk", "Chunk human messages", chunk_eligible, chunk_eligible - chunk_pending),
+            _stage("embed", "Embed chunks", chunks_total, embed_done),
+            _stage("ner", "Extract entities (NER)", chunks_total, ner_done),
+            _stage("re", "Extract relations (RE)", chunks_total, re_done),
+            _stage("entity_embed", "Embed entity names", unique_entities, entity_embed_done),
+            _stage(
+                "resolve",
+                "Resolve entities",
+                entity_embed_done,
+                cluster_done,
+                note="Rebuilt wholesale when new entity embeddings appear.",
+            ),
+            _stage(
+                # Leiden rebuilds the whole graph each run — it is NOT a
+                # per-node backlog. Scoring done/eligible against all nodes
+                # made isolated entities (most of the graph) look like a
+                # perpetual backlog. Score it as a wholesale stage: built
+                # (100%) once communities exist, with the real numbers in
+                # the note.
+                "communities",
+                "Detect communities (Leiden)",
+                nodes_in_comm,
+                nodes_in_comm,
+                note=(
+                    f"Wholesale rebuild each run: {communities_total} communities over "
+                    f"{nodes_in_comm} connected nodes (isolated entities are unassigned by design)."
+                ),
+            ),
+            _stage(
+                "naming",
+                f"Name communities (resolution {display_resolution})"
+                if display_resolution is not None
+                else "Name communities",
+                communities_total,
+                community_labels_done,
+            ),
+        ]
+
+        return KGCacheStats(
+            generated_at=datetime.now(UTC).isoformat(),
+            indexer={},
+            files_on_disk=files_on_disk,
+            source_files=source_files,
+            events_total=events_total,
+            chunks_total=chunks_total,
+            entities_total=entities_total,
+            relations_total=relations_total,
+            unique_entities=unique_entities,
+            nodes_total=nodes_total,
+            edges_total=edges_total,
+            communities_total=communities_total,
+            display_resolution=display_resolution,
+            stages=stages,
         )

@@ -17,6 +17,7 @@ import {
   PanelLeftOpen,
   Search as SearchIcon,
   Network,
+  Database,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -46,6 +47,9 @@ const navItems = [
   { path: '/timeline', label: 'Timeline', icon: Activity },
   { path: '/schema-timeline', label: 'Schema Timeline', icon: GitBranch },
   { path: '/kg', label: 'Knowledge Graph', icon: Network },
+  // Cache pipeline diagnostics — sub-page of Knowledge Graph. The sidebar
+  // is a flat list, so this sits directly beneath /kg as its companion.
+  { path: '/kg/cache', label: 'Cache', icon: Database },
 ]
 
 // Format project name for display

@@ -13,6 +13,7 @@ import Timeline from './pages/Timeline'
 import SchemaTimeline from './pages/SchemaTimeline'
 import SearchPage from './pages/SearchPage'
 import KnowledgeGraph from './pages/KnowledgeGraph'
+import KgCache from './pages/KgCache'
 
 export default function App() {
   return (
@@ -32,6 +33,7 @@ export default function App() {
         <Route path="/search" element={<SearchPage />} />
         <Route path="/kg" element={<KnowledgeGraph />} />
         <Route path="/kg/" element={<KnowledgeGraph />} />
+        <Route path="/kg/cache" element={<KgCache />} />
       </Routes>
     </Layout>
   )

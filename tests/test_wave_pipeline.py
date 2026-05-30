@@ -50,17 +50,19 @@ def _write_session(project_dir: Path, session_id: str, n_events: int) -> None:
     rows = []
     for i in range(n_events):
         ts = base + timedelta(seconds=i)
-        rows.append({
-            "uuid": f"{session_id}-{i}",
-            "parentUuid": f"{session_id}-{i - 1}" if i > 0 else None,
-            "type": "user" if i % 2 == 0 else "assistant",
-            "timestamp": ts.isoformat().replace("+00:00", "Z"),
-            "sessionId": session_id,
-            "message": {
-                "role": "user" if i % 2 == 0 else "assistant",
-                "content": f"event {i}",
-            },
-        })
+        rows.append(
+            {
+                "uuid": f"{session_id}-{i}",
+                "parentUuid": f"{session_id}-{i - 1}" if i > 0 else None,
+                "type": "user" if i % 2 == 0 else "assistant",
+                "timestamp": ts.isoformat().replace("+00:00", "Z"),
+                "sessionId": session_id,
+                "message": {
+                    "role": "user" if i % 2 == 0 else "assistant",
+                    "content": f"event {i}",
+                },
+            }
+        )
     (project_dir / f"{session_id}.jsonl").write_text(
         "\n".join(json.dumps(r) for r in rows), encoding="utf-8"
     )
@@ -99,15 +101,11 @@ class TestResolveWaveSize:
         monkeypatch.setenv("CLAUDE_SESSIONS_WAVE_SIZE", "13")
         assert resolve_wave_size() == 13
 
-    def test_invalid_falls_back_to_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_invalid_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_SESSIONS_WAVE_SIZE", "garbage")
         assert resolve_wave_size() == DEFAULT_WAVE_SIZE
 
-    def test_zero_falls_back_to_default(
-        self, monkeypatch: pytest.MonkeyPatch
-    ) -> None:
+    def test_zero_falls_back_to_default(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setenv("CLAUDE_SESSIONS_WAVE_SIZE", "0")
         assert resolve_wave_size() == DEFAULT_WAVE_SIZE
 
@@ -225,6 +223,59 @@ class TestWavePipelineStop:
 # ---------------------------------------------------------------------------
 # Logging — phase banners surface to the configured handler
 # ---------------------------------------------------------------------------
+
+
+class TestWavePipelineCatchUp:
+    """Regression for the bug where a residual downstream backlog (chunks/
+    embeddings/KG left behind by an interrupted or crashed wave) could
+    never drain on a warm cache, because ``run()`` returned early whenever
+    no files needed ingest. The catch-up pass must run the downstream
+    phases even with nothing new to ingest."""
+
+    def test_downstream_catchup_runs_when_no_files_need_update(
+        self,
+        fresh_cache: CacheManager,
+        projects_with_n_files: tuple[Path, int],
+    ) -> None:
+        proj_root, _ = projects_with_n_files
+        pipeline = WavePipeline(fresh_cache, wave_size=1000)
+        pipeline.run(proj_root)
+
+        chunks_before = fresh_cache.conn.execute(
+            "SELECT COUNT(*) FROM event_message_chunks"
+        ).fetchone()[0]
+        assert chunks_before > 0, "expected human-message chunks after first run"
+
+        # Simulate a wave that committed its ingest but crashed before/while
+        # chunking: wipe chunks while leaving source_files (so no file needs
+        # re-ingest). The OLD code returned at "nothing to do" here.
+        fresh_cache.conn.execute("DELETE FROM event_message_chunks")
+        fresh_cache.conn.commit()
+
+        result = pipeline.run(proj_root)
+
+        # Nothing was re-ingested ...
+        assert result["files_processed"] == 0
+        assert result["waves_completed"] == 0
+        # ... but the catch-up re-chunked the stranded backlog.
+        chunks_after = fresh_cache.conn.execute(
+            "SELECT COUNT(*) FROM event_message_chunks"
+        ).fetchone()[0]
+        assert chunks_after == chunks_before
+        assert result["chunks_added"] == chunks_after
+
+
+class TestConnectionPragmas:
+    """The cache connection must use WAL + a busy timeout so the background
+    indexer can write while request handlers read the same file. Without
+    these, concurrent access surfaced as ``disk I/O error`` mid-commit."""
+
+    def test_wal_and_busy_timeout_configured(self, tmp_path: Path) -> None:
+        cache = CacheManager(tmp_path / "cache.db")
+        conn = cache.conn
+        assert conn.execute("PRAGMA journal_mode").fetchone()[0].lower() == "wal"
+        assert conn.execute("PRAGMA busy_timeout").fetchone()[0] == 30000
+        assert conn.execute("PRAGMA foreign_keys").fetchone()[0] == 1
 
 
 class TestWavePipelineLogging:

@@ -9,7 +9,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any, Protocol, runtime_checkable
 
-from claude_code_sessions.database.sqlite.kg.payload import KGPayload, SeedMetric
+from claude_code_sessions.database.sqlite.kg.payload import (
+    KGCacheStats,
+    KGPayload,
+    SeedMetric,
+)
 
 
 @runtime_checkable
@@ -172,6 +176,17 @@ class Database(Protocol):
 
         Raises ``KGDataMissing`` if the KG pipeline has not yet populated
         ``nodes`` / ``edges`` / ``leiden_communities``.
+        """
+        ...
+
+    def get_kg_cache_stats(self) -> KGCacheStats:
+        """Per-stage backlog snapshot of the cache → knowledge-graph pipeline.
+
+        Global by design (not filtered by ``days`` / ``project``): the
+        background indexer processes the entire projects tree, so a
+        time-scoped backlog would misrepresent the remaining work. The
+        ``indexer`` field is populated by the API route from the live
+        ``IndexerService.status()``.
         """
         ...
 

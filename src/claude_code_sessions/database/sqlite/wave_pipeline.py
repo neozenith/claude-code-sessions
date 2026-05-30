@@ -142,7 +142,15 @@ class WavePipeline:
         }
 
         if not files_to_update:
-            log.info("wave pipeline: nothing to do")
+            # No new/changed files to ingest — but a previous run may have
+            # been interrupted or crashed *after* chunking and *before*
+            # embedding / KG, leaving a residual downstream backlog. Those
+            # phases are global-incremental and are otherwise gated behind
+            # file ingest, so without this catch-up they would NEVER drain
+            # on a warm cache — coverage would stall permanently. Run them
+            # once so the backlog can complete.
+            log.info("wave pipeline: no files need ingest — running downstream catch-up")
+            result["chunks_added"] += self._run_downstream_syncs()
             return result
 
         # Slice the to-do list into waves. The slice is materialised
@@ -230,31 +238,11 @@ class WavePipeline:
                 if window is not None:
                     self.cache.refresh_aggregates_for_range(window[0], window[1])
 
-        # Phase 5: chunk human-prompt events from this wave. sync_chunks
-        # is global-incremental — it picks up any event_id without
-        # corresponding chunks, which after phase 3 above is exactly
-        # this wave's events.
-        if self.stop_event.is_set():
-            chunks_added = 0
-        else:
-            chunks_added = sync_chunks(self.cache.conn)
-
-        # Phase 6 (embeddings) and Phase 7 (KG) are skipped here unless
-        # the env flags are clear. The CacheManager already wraps these
-        # behind its sync_embeddings / _spawn_kg helpers, so the wave
-        # loop stays simple and gates on the same env vars users
-        # already set.
-        if not self.stop_event.is_set():
-            self.cache.sync_embeddings()
-
-        # KG runs inline per-wave so we don't pile up overlapping
-        # background runs. Skipping it via env in tests/CI keeps the
-        # wave-loop unit tests fast.
-        kg_flag = os.environ.get("CLAUDE_SESSIONS_DISABLE_KG", "").strip().lower()
-        if kg_flag not in {"1", "true", "yes", "on"} and not self.stop_event.is_set():
-            from claude_code_sessions.database.sqlite.kg import sync_kg
-
-            sync_kg(self.cache.conn)
+        # Phases 5-7 (chunk → embed → KG) are global-incremental and
+        # shared with the warm-cache catch-up path, so they live in one
+        # helper. After phase 3 above, the chunk phase picks up exactly
+        # this wave's new events.
+        chunks_added = self._run_downstream_syncs()
 
         elapsed = time.monotonic() - t_wave
         summary = {
@@ -272,3 +260,53 @@ class WavePipeline:
             elapsed,
         )
         return summary
+
+    def _run_downstream_syncs(self) -> int:
+        """Run the global-incremental downstream phases: chunk → embed → KG.
+
+        Each phase keys off a per-phase log table (events without chunks,
+        chunks without vectors, chunks without NER/RE entries…), so calling
+        them when nothing is pending is cheap — a ``COUNT(*)`` that returns
+        0. Running them unconditionally is what lets a backlog stranded by
+        an interrupted or crashed wave finally drain; see the catch-up call
+        in ``run()``.
+
+        Honours the cancellation event between phases and the same
+        ``CLAUDE_SESSIONS_DISABLE_{EMBEDDINGS,KG}`` test-isolation flags a
+        normal wave does. Returns the number of chunks added this pass.
+        """
+        if self.stop_event.is_set():
+            return 0
+
+        chunks_added = sync_chunks(self.cache.conn)
+
+        # Phase 6 (embeddings) — gated inside CacheManager.sync_embeddings
+        # on CLAUDE_SESSIONS_DISABLE_EMBEDDINGS. This is also what loads the
+        # sqlite-muninn extension + embedding model onto the connection.
+        def _flag(name: str) -> bool:
+            return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+
+        embeddings_disabled = _flag("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS")
+
+        if not embeddings_disabled and not self.stop_event.is_set():
+            self.cache.sync_embeddings()
+
+        # Phase 7 (KG) depends on the muninn runtime AND embedding model that
+        # sync_embeddings loads — entity embeddings call muninn_embed(), and
+        # community detection / resolution query the muninn ``graph_leiden`` /
+        # ``muninn_extract_er`` modules. So KG CANNOT run without embeddings:
+        # if embeddings are disabled we must skip KG too, otherwise it crashes
+        # with "no such table: graph_leiden". Honour the explicit KG flag as
+        # well. Runs inline so we don't pile up overlapping background runs.
+        if (
+            not embeddings_disabled
+            and not _flag("CLAUDE_SESSIONS_DISABLE_KG")
+            and not self.stop_event.is_set()
+        ):
+            from claude_code_sessions.database.sqlite.kg import sync_kg
+
+            sync_kg(self.cache.conn)
+        elif embeddings_disabled:
+            log.info("downstream: embeddings disabled — skipping embed + KG (KG depends on them)")
+
+        return chunks_added

@@ -295,6 +295,65 @@ export class ApiClient {
   }): Promise<ApiResult<SearchResultRow[]>> {
     return this.get('/search', params)
   }
+
+  /** Per-stage backlog of the cache → knowledge-graph pipeline.
+   *
+   * Global by design — the response is NOT scoped to the dashboard's
+   * days/project filters, because the indexer processes the whole
+   * projects tree. The `indexer` field carries the live background-indexer
+   * status (phase / error), so a crashed pipeline surfaces here.
+   */
+  async getKgCacheStats(): Promise<ApiResult<KGCacheStats>> {
+    return this.get('/kg/cache-stats')
+  }
+}
+
+/** Background-indexer phase — mirrors the PHASE_* constants in indexer.py. */
+export type IndexerPhase = 'idle' | 'running' | 'completed' | 'cancelled' | 'failed'
+
+/** Live status of the background indexer thread (from /api/health and
+ * /api/kg/cache-stats). When `phase` is `failed`, `error` holds the
+ * exception string that stopped the pipeline. */
+export interface IndexerStatus {
+  phase: IndexerPhase
+  started_at: string | null
+  finished_at: string | null
+  error: string | null
+}
+
+/** One stage of the cache → KG pipeline (GET /api/kg/cache-stats).
+ *
+ * `eligible` is the upstream work available to this stage, `done` is how
+ * much has been processed, `pending` is the backlog. `note` flags stages
+ * that rebuild wholesale rather than tracking a true per-row backlog. */
+export interface PipelineStage {
+  key: string
+  label: string
+  eligible: number
+  done: number
+  pending: number
+  percent: number
+  note: string | null
+}
+
+/** Response from GET /api/kg/cache-stats — pipeline progress snapshot. */
+export interface KGCacheStats {
+  generated_at: string
+  indexer: IndexerStatus
+  files_on_disk: number
+  source_files: number
+  events_total: number
+  chunks_total: number
+  entities_total: number
+  relations_total: number
+  unique_entities: number
+  nodes_total: number
+  edges_total: number
+  /** Communities at a single Leiden resolution (`display_resolution`), NOT
+   * summed across resolutions — summing multi-counts the same nodes. */
+  communities_total: number
+  display_resolution: number | null
+  stages: PipelineStage[]
 }
 
 /** Response shape from GET /api/sessions/{p}/{s}/events/{uuid}/raw */

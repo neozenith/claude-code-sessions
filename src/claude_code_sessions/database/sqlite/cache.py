@@ -83,13 +83,32 @@ class CacheManager:
         # is stable across the upcoming changes.
         self._stop_event = threading.Event()
 
+    @staticmethod
+    def _apply_connection_pragmas(conn: sqlite3.Connection) -> None:
+        """Configure a freshly-opened connection for this app's
+        single-writer / many-reader access pattern.
+
+        The background indexer writes to the cache while FastAPI request
+        handlers — and the separate KG worker connection — read it
+        concurrently. Under the SQLite default ``journal_mode=delete`` a
+        writer and a reader lock each other out, and with ``busy_timeout=0``
+        that surfaces *immediately* as ``sqlite3.OperationalError: disk I/O
+        error`` mid-commit (observed crashing the long community-naming
+        phase). WAL lets readers run alongside the writer; the busy timeout
+        makes the rare genuine conflict wait rather than crash.
+        """
+        conn.execute("PRAGMA journal_mode = WAL")
+        conn.execute("PRAGMA busy_timeout = 30000")  # 30s: wait on a lock, don't crash
+        conn.execute("PRAGMA synchronous = NORMAL")  # safe under WAL, far fewer fsyncs
+        conn.execute("PRAGMA foreign_keys = ON")
+
     @property
     def conn(self) -> sqlite3.Connection:
         if self._conn is None:
             self.db_path.parent.mkdir(parents=True, exist_ok=True)
             self._conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
             self._conn.row_factory = sqlite3.Row
-            self._conn.execute("PRAGMA foreign_keys = ON")
+            self._apply_connection_pragmas(self._conn)
         return self._conn
 
     def close(self) -> None:
@@ -269,6 +288,8 @@ class CacheManager:
             log.warning("Could not read %s: %s", filepath, e)
             return None
 
+        self._annotate_responses(events_data)
+
         return {
             "file_info": file_info,
             "events_data": events_data,
@@ -344,11 +365,12 @@ class CacheManager:
                     timestamp, timestamp_local, session_id, project_id,
                     is_sidechain, agent_id, agent_slug,
                     message_role, message_content, message_content_json, model_id,
+                    request_id, stop_reason, is_response_head,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
                     token_rate, billable_tokens, total_cost_usd,
                     source_file_id, line_number, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
@@ -366,6 +388,9 @@ class CacheManager:
                     event["message_content"],
                     event["message_content_json"],
                     event["model_id"],
+                    event["request_id"],
+                    event["stop_reason"],
+                    event["is_response_head"],
                     event["input_tokens"],
                     event["output_tokens"],
                     event["cache_read_tokens"],
@@ -423,6 +448,51 @@ class CacheManager:
 
         return len(events_data)
 
+    # Additive per-event usage measures that downstream SUM()s read. A
+    # multi-block response repeats these on every content block, so the
+    # post-pass keeps them on the head and zeroes them on the non-heads.
+    _USAGE_COLS: tuple[str, ...] = (
+        "input_tokens",
+        "output_tokens",
+        "cache_read_tokens",
+        "cache_creation_tokens",
+        "cache_5m_tokens",
+        "billable_tokens",
+        "total_cost_usd",
+    )
+
+    def _annotate_responses(self, events: list[dict[str, Any]]) -> None:
+        """Mark one head event per ``requestId`` and zero duplicated usage.
+
+        A single model response is logged as N content-block events that
+        each repeat the same request-level usage. Summing per event would
+        over-count N-fold. We keep the usage on exactly one **head** — the
+        last block, which carries the final ``stop_reason`` and timestamp —
+        and zero it on the continuation blocks, so every downstream
+        ``SUM()`` is correct with no query rewrites.
+
+        Operates in place on the already-ordered per-file event list.
+        """
+        groups: dict[str, list[int]] = {}
+        order: list[str] = []
+        for i, e in enumerate(events):
+            rid = e.get("request_id")
+            if e["event_type"] != "assistant" or rid is None:
+                e["is_response_head"] = 1  # its own head (synthetic / non-assistant)
+                continue
+            if rid not in groups:
+                groups[rid] = []
+                order.append(rid)
+            groups[rid].append(i)
+        for rid in order:
+            idxs = groups[rid]
+            head = idxs[-1]  # last block carries stop_reason + final timestamp
+            for j in idxs:
+                events[j]["is_response_head"] = 1 if j == head else 0
+                if j != head:
+                    for c in self._USAGE_COLS:
+                        events[j][c] = 0
+
     def _parse_event(self, raw: dict[str, Any], line_number: int) -> dict[str, Any] | None:
         """Parse a raw JSON event dict for cache insertion."""
         event_type = raw.get("type", "")
@@ -437,9 +507,11 @@ class CacheManager:
         agent_id = raw.get("agentId")
         agent_slug = raw.get("slug")
         is_meta = raw.get("isMeta", False)
+        request_id = raw.get("requestId")
 
         message = raw.get("message", {}) or {}
         message_role = message.get("role") if isinstance(message, dict) else None
+        stop_reason = message.get("stop_reason") if isinstance(message, dict) else None
         content_raw = message.get("content") if isinstance(message, dict) else None
         model_id = message.get("model") if isinstance(message, dict) else None
 
@@ -492,6 +564,12 @@ class CacheManager:
             "message_content": text,
             "message_content_json": json.dumps(content_raw) if content_raw else None,
             "model_id": model_id,
+            "request_id": request_id,
+            "stop_reason": stop_reason,
+            # Default to its own head; _annotate_responses (a per-file
+            # post-pass) demotes the duplicated continuation blocks of a
+            # multi-block response to is_response_head=0 and zeroes their usage.
+            "is_response_head": 1,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
@@ -824,8 +902,7 @@ class CacheManager:
         events_after = cursor.execute("SELECT COUNT(*) FROM events").fetchone()[0]
 
         log.info(
-            "  pruned: events %d → %d (-%d), edges -%d, source_files -%d, "
-            "ner_log -%d, re_log -%d",
+            "  pruned: events %d → %d (-%d), edges -%d, source_files -%d, ner_log -%d, re_log -%d",
             events_before,
             events_after,
             events_deleted,
@@ -840,8 +917,7 @@ class CacheManager:
         self.refresh_aggregates_for_range()
 
         log.info(
-            "  dedupe migration complete in %.1f s "
-            "(run VACUUM separately to reclaim disk space)",
+            "  dedupe migration complete in %.1f s (run VACUUM separately to reclaim disk space)",
             time.monotonic() - t0,
         )
 
@@ -932,7 +1008,7 @@ class CacheManager:
             try:
                 conn = sqlite3.connect(str(db_path), check_same_thread=False)
                 conn.row_factory = sqlite3.Row
-                conn.execute("PRAGMA foreign_keys = ON")
+                self._apply_connection_pragmas(conn)
                 # Load sqlite-muninn (HNSW + graph_* primitives).
                 conn.enable_load_extension(True)
                 sqlite_muninn.load(conn)
