@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T3.2 »](./tokenometrics-G3-T3.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `message_kind("user", False, "hi", is_subagent=True) == "subagent-human"`; with `is_subagent=False` it stays `"human"`. (Tracer bullet for the prefix rule.)
 - **Test outline:**

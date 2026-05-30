@@ -104,8 +104,21 @@ def first_content_block_type(content: Any) -> str | None:
     return None
 
 
-def message_kind(event_type: str, is_meta: bool, content: Any) -> str:
-    """Classify an event into one of 9 fine-grained message kinds."""
+def message_kind(
+    event_type: str, is_meta: bool, content: Any, is_subagent: bool = False
+) -> str:
+    """Classify an event into one of 9 fine-grained message kinds.
+
+    When ``is_subagent`` is true (the event belongs to a subagent context),
+    the base kind is prefixed with ``subagent-`` so subagent activity is
+    distinguishable from main-thread activity.
+    """
+    base = _base_message_kind(event_type, is_meta, content)
+    return f"subagent-{base}" if is_subagent else base
+
+
+def _base_message_kind(event_type: str, is_meta: bool, content: Any) -> str:
+    """The bare (non-subagent) message kind — one of 9 fine-grained kinds."""
     fct = first_content_block_type(content)
     if event_type == "user":
         if is_meta:
