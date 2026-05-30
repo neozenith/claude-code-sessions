@@ -69,11 +69,11 @@ loop can resume.
 | [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
 | [G2](./tokenometrics-G2.md) | 6 | 6 | 0 | — _(done)_ | — |
 | [G3](./tokenometrics-G3.md) | 3 | 3 | 0 | — _(done)_ | — |
-| [G4](./tokenometrics-G4.md) | 2 | 0 | 2 | [T4.1](./tokenometrics-G4-T4.1.md) | — |
+| [G4](./tokenometrics-G4.md) | 2 | 1 | 1 | [T4.2](./tokenometrics-G4-T4.2.md) | — |
 | [G5](./tokenometrics-G5.md) | 4 | 0 | 4 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
 | [G6](./tokenometrics-G6.md) | 3 | 0 | 3 | — | [T5.1](./tokenometrics-G5-T5.1.md) |
 | [G7](./tokenometrics-G7.md) | 4 | 1 | 3 | — | [T3.1](./tokenometrics-G3-T3.1.md), [T6.1](./tokenometrics-G6-T6.1.md), [T6.2](./tokenometrics-G6-T6.2.md) |
-| [G8](./tokenometrics-G8.md) | 1 | 0 | 1 | — | [T4.1](./tokenometrics-G4-T4.1.md) |
+| [G8](./tokenometrics-G8.md) | 1 | 0 | 1 | [T8.1](./tokenometrics-G8-T8.1.md) | — _(also mirrors G5; runs last by numbering)_ |
 
 **Dropped tickets** (counted as `[x]`, no work required): **T2.5** — the smart/caution/danger zone classifier and its absolute-token override were removed per the G2 ADR "Quantitative ratio only"; **T7.1** — the frontend zone classifier is likewise unnecessary. Context utilization is exposed as the raw `context_ratio` everywhere.
 

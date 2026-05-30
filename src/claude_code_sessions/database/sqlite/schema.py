@@ -28,7 +28,10 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 # v15 (G2): context-window utilization — events.context_tokens (live
 #           occupancy), events.context_window (per-model budget),
 #           events.context_ratio (raw fraction; no zone labeling).
-SCHEMA_VERSION = "15"
+# v16 (G4): response performance — events.response_duration_ms (stamped on
+#           each response head: triggering-event ts → head ts); TPS derived
+#           in the query layer.
+SCHEMA_VERSION = "16"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -103,6 +106,7 @@ CREATE TABLE IF NOT EXISTS events (
     context_tokens INTEGER DEFAULT 0,
     context_window INTEGER,
     context_ratio REAL,
+    response_duration_ms INTEGER,
     input_tokens INTEGER DEFAULT 0,
     output_tokens INTEGER DEFAULT 0,
     cache_read_tokens INTEGER DEFAULT 0,

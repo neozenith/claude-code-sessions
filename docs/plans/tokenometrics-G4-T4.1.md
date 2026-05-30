@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T4.2 »](./tokenometrics-G4-T4.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN → REFACTOR
 - **Behavior:** After ingesting a response whose blocks span a 2-second window from its triggering event, producing `output_tokens=200`, `get_session_events()` reports the head with `response_duration_ms≈2000` and `tps≈100`. (Tracer bullet for duration + derived TPS.)
 - **Test outline:**

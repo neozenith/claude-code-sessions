@@ -506,6 +506,12 @@ class SQLiteDatabase:
                 e.model_id, e.msg_kind AS message_kind,
                 e.is_response_head,
                 e.context_tokens, e.context_window, e.context_ratio,
+                e.response_duration_ms,
+                -- Tokens/sec on a response head: model throughput over its own
+                -- generation window. NULL when duration is unknown/zero.
+                CASE WHEN e.response_duration_ms > 0
+                     THEN ROUND(e.output_tokens * 1000.0 / e.response_duration_ms, 2)
+                     ELSE NULL END AS tps,
                 CASE WHEN e.is_sidechain = 1 THEN 1 ELSE 0 END AS is_meta,
                 e.input_tokens, e.output_tokens,
                 e.cache_read_tokens, e.cache_creation_tokens,

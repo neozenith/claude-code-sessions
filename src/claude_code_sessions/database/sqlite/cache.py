@@ -37,6 +37,21 @@ from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQ
 log = logging.getLogger(__name__)
 
 
+def _delta_ms(start_iso: str | None, end_iso: str | None) -> int | None:
+    """Milliseconds between two ISO-8601 timestamps, or None if either is
+    missing/unparseable or the span is negative (clock skew). Shared by the
+    response-duration (G4) and turn-timing (G5) passes."""
+    if not start_iso or not end_iso:
+        return None
+    try:
+        start = datetime.fromisoformat(start_iso.replace("Z", "+00:00"))
+        end = datetime.fromisoformat(end_iso.replace("Z", "+00:00"))
+    except (ValueError, TypeError):
+        return None
+    delta = (end - start).total_seconds() * 1000
+    return int(delta) if delta >= 0 else None
+
+
 # ---------------------------------------------------------------------------
 # Phase banner helpers
 # ---------------------------------------------------------------------------
@@ -372,11 +387,12 @@ class CacheManager:
                     message_role, message_content, message_content_json, model_id,
                     request_id, stop_reason, is_response_head,
                     context_tokens, context_window, context_ratio,
+                    response_duration_ms,
                     input_tokens, output_tokens, cache_read_tokens,
                     cache_creation_tokens, cache_5m_tokens,
                     token_rate, billable_tokens, total_cost_usd,
                     source_file_id, line_number, raw_json)
-                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
+                   VALUES (?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?,?)""",
                 (
                     event["uuid"],
                     event["parent_uuid"],
@@ -400,6 +416,7 @@ class CacheManager:
                     event["context_tokens"],
                     event["context_window"],
                     event["context_ratio"],
+                    event["response_duration_ms"],
                     event["input_tokens"],
                     event["output_tokens"],
                     event["cache_read_tokens"],
@@ -501,6 +518,12 @@ class CacheManager:
                 if j != head:
                     for c in self._USAGE_COLS:
                         events[j][c] = 0
+            # Response duration = triggering (preceding) event → head timestamp,
+            # falling back to the first block's ts when there is no preceding
+            # event. The JSONL has no per-assistant durationMs, so we derive it.
+            first = idxs[0]
+            start_ts = events[first - 1]["timestamp"] if first > 0 else events[first]["timestamp"]
+            events[head]["response_duration_ms"] = _delta_ms(start_ts, events[head]["timestamp"])
 
     def _parse_event(
         self, raw: dict[str, Any], line_number: int, file_type: str = "main_session"
@@ -598,6 +621,8 @@ class CacheManager:
             "context_tokens": ctx_tokens,
             "context_window": ctx_window,
             "context_ratio": ctx_ratio,
+            # Stamped on the response head by _annotate_responses; None elsewhere.
+            "response_duration_ms": None,
             "input_tokens": input_tokens,
             "output_tokens": output_tokens,
             "cache_read_tokens": cache_read_tokens,
