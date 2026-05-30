@@ -15,6 +15,30 @@ PRICING: dict[str, dict[str, float]] = {
 }
 
 
+# Curated model_id → advertised context-window size (tokens). Matched by
+# substring like model_family(), since model ids carry date suffixes. 1M is
+# GA (not beta) on opus-4-6/4-7/4-8 and sonnet-4-6, so the window is a pure
+# function of model_id. Unknown / synthetic ids resolve to None (ratio
+# undefined). See G2 ADR for the researched, vendor-doc-sourced values.
+CONTEXT_WINDOWS: dict[str, int] = {
+    "opus-4-6": 1_000_000,
+    "opus-4-7": 1_000_000,
+    "opus-4-8": 1_000_000,
+    "sonnet-4-6": 1_000_000,
+}
+
+
+def context_window(model_id: str | None) -> int | None:
+    """Resolve a model id to its context-window size, or None if unknown."""
+    if not model_id:
+        return None
+    low = model_id.lower()
+    for key, window in CONTEXT_WINDOWS.items():
+        if key in low:
+            return window
+    return None
+
+
 def model_family(model_id: str | None) -> str:
     """Extract model family (opus/sonnet/haiku) from a full model ID string."""
     if model_id is None:

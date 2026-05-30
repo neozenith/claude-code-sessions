@@ -5,7 +5,7 @@
 > **Nav:** « _(first)_  ·  [T2.2 »](./tokenometrics-G2-T2.2.md)
 
 
-- [ ] **Done**
+- [x] **Done**
 - **Cycle:** RED → GREEN
 - **Behavior:** `context_window("claude-opus-4-7")` returns `1_000_000`. (Tracer bullet for the mapping.)
 - **Test outline:**

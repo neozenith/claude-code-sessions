@@ -1,0 +1,27 @@
+"""Tests for the context-window utilization map (G2).
+
+``context_window(model_id)`` resolves a model id to its advertised
+context-window size via a curated substring map, returning ``None`` for
+unknown / synthetic models. These are pure-function unit tests — no cache,
+no fixtures.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from claude_code_sessions.database.sqlite.pricing import context_window
+
+
+@pytest.mark.parametrize(
+    "model_id",
+    [
+        "claude-opus-4-7-20260115",
+        "claude-opus-4-6-20251101",
+        "claude-opus-4-8",
+        "claude-sonnet-4-6-20251201",
+    ],
+)
+def test_window_1m_models(model_id: str) -> None:
+    """The 1M-window models (opus 4.6/4.7/4.8, sonnet 4.6) resolve to 1_000_000."""
+    assert context_window(model_id) == 1_000_000
