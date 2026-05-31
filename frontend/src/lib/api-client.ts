@@ -281,6 +281,15 @@ export class ApiClient {
     return this.get('/summaries/scope', params)
   }
 
+  /** Immediate child scopes of a scope_path (next trie level) (G7). */
+  async listScopeChildren(params: {
+    path: string
+    days?: number
+    project?: string
+  }): Promise<ApiResult<ScopeChild[]>> {
+    return this.get('/summaries/scope/children', params)
+  }
+
   /** Per-turn idle/active/tps/too_fast + a session summary. */
   async getSessionMetrics(
     projectId: string,

@@ -5,7 +5,7 @@
 > - **Prev:** [T8.2](./summariser-G8-T8.2.md)
 > - **Next:** [T8.4](./summariser-G8-T8.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Clicking a child-scope link appends its segment to `?path=`; clicking an ancestor crumb truncates `?path=` to that segment — both via `useSearchParams` (page-local).
 
