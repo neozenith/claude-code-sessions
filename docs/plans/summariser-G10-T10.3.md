@@ -5,7 +5,7 @@
 > - **Prev:** [T10.2](./summariser-G10-T10.2.md)
 > - **Next:** [T10.4](./summariser-G10-T10.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `manifest --missing` prints exactly the permutations whose result file is absent, cheapest-first by `sort_key`; `--commands` emits one runnable `run --id <perm>` line each.
 

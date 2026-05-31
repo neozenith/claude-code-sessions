@@ -44,3 +44,32 @@ def test_registry_enumerates_and_marks_status(tmp_path: Path) -> None:
     # Each cell carries the manifest-required fields.
     sample = by_id[done_id]
     assert {"permutation_id", "sort_key", "label", "done"} <= set(sample)
+
+
+def test_manifest_missing_lists_incomplete(tmp_path: Path, capsys) -> None:
+    """`manifest --missing --commands` emits only the absent cells as
+    `run --id …` lines, cheapest-first by size."""
+    results = tmp_path / "results"
+    results.mkdir()
+    done_ids = [
+        summary_bench.permutation_id("strict", "gemma", "2b"),
+        summary_bench.permutation_id("flat", "qwen", "4b"),
+    ]
+    for pid in done_ids:
+        (results / f"{pid}.json").write_text("{}", encoding="utf-8")
+
+    summary_bench.main(["manifest", "--missing", "--commands", "--results-dir", str(results)])
+    lines = [ln for ln in capsys.readouterr().out.splitlines() if ln.strip()]
+
+    assert lines  # something was emitted
+    assert all(ln.startswith("uv run scripts/summary_bench.py run --id ") for ln in lines)
+    printed_ids = [ln.rsplit(" ", 1)[1] for ln in lines]
+
+    # The two completed cells are excluded; 27 - 2 = 25 remain.
+    assert len(printed_ids) == 25
+    for pid in done_ids:
+        assert pid not in printed_ids
+
+    # Cheapest-first: parameter sizes are non-decreasing down the list.
+    sizes = [int(pid.rsplit("_", 1)[1].rstrip("b")) for pid in printed_ids]
+    assert sizes == sorted(sizes)
