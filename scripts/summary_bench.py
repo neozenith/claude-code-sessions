@@ -20,11 +20,14 @@ from __future__ import annotations
 
 import argparse
 import json
+import logging
 import time
 from pathlib import Path
 from typing import Any
 
 from claude_code_sessions.database.sqlite.summaries import score_summary
+
+log = logging.getLogger("summary_bench")
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RESULTS_DIR = PROJECT_ROOT / "tmp" / "summary_bench"
@@ -49,12 +52,29 @@ def check_status(results_dir: Path, perm_id: str) -> bool:
     return (results_dir / f"{perm_id}.json").exists()
 
 
-def all_permutations(results_dir: Path) -> list[dict[str, Any]]:
-    """The full strategy×family×size cross-product with completion status.
+def _gguf_available(family: str, size: str) -> bool:
+    """GGUF-availability seam (ADR10.2). The real sweep checks for a registered
+    build of ``family``×``size``; tests stub it. Defaults optimistic (True) so the
+    registry is the full grid unless a build is known-missing — a missing build is
+    logged and excluded from runnable cells, never silently dropped."""
+    return True
 
-    Each cell carries the manifest-required fields: ``permutation_id``,
-    ``sort_key`` (size-ascending = cheapest first), ``label``, and ``done``.
+
+def available_gguf_cells() -> set[tuple[str, str]]:
+    """The ``(family, size)`` cells that have a registered GGUF build."""
+    return {(f, s) for f in FAMILIES for s, _b in SIZES if _gguf_available(f, s)}
+
+
+def all_permutations(results_dir: Path) -> list[dict[str, Any]]:
+    """The full strategy×family×size cross-product with completion + availability.
+
+    Every cell is enumerated (never dropped). Each carries the manifest-required
+    fields — ``permutation_id``, ``sort_key`` (size-ascending = cheapest first),
+    ``label``, ``done`` — plus ``available`` (its GGUF build exists). Cells whose
+    build is missing are flagged unavailable and logged once per family×size
+    (no silent caps, ADR10.2); the runnable set excludes them.
     """
+    available = available_gguf_cells()
     perms: list[dict[str, Any]] = []
     for strategy in STRATEGIES:
         for family in FAMILIES:
@@ -71,8 +91,11 @@ def all_permutations(results_dir: Path) -> list[dict[str, Any]]:
                         "label": f"{strategy} / {family} / {size}",
                         "category": strategy,
                         "done": check_status(results_dir, pid),
+                        "available": (family, size) in available,
                     }
                 )
+    for family, size in sorted({(f, s) for f in FAMILIES for s, _b in SIZES} - available):
+        log.warning("skipping %s %s: no registered GGUF build", family, size)
     return perms
 
 
@@ -96,7 +119,9 @@ def cmd_manifest(args: argparse.Namespace) -> None:
     total_done = sum(1 for p in perms if p["done"])
 
     if args.missing:
-        perms = [p for p in perms if not p["done"]]
+        # Runnable-missing: not done AND has a GGUF build (skipped cells are logged
+        # by all_permutations, never silently included as runnable).
+        perms = [p for p in perms if not p["done"] and p["available"]]
     if args.done:
         perms = [p for p in perms if p["done"]]
     perms = _sorted(perms, args.sort)

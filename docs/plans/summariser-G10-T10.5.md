@@ -5,7 +5,7 @@
 > - **Prev:** [T10.4](./summariser-G10-T10.4.md)
 > - **Next:** [T10.6](./summariser-G10-T10.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 When a {family × size} cell has no registered GGUF, the registry omits it from runnable cells but emits an explicit log line naming each skipped cell (no silent caps).
 

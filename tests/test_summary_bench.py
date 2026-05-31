@@ -114,3 +114,28 @@ def test_run_writes_result_row(tmp_path: Path, monkeypatch) -> None:
     assert record["permutation_id"] == pid
     assert {"rouge_l", "bleu", "f1"} <= set(record)
     assert summary_bench.check_status(results, pid) is True
+
+
+def test_no_gguf_cells_are_logged_not_dropped(tmp_path: Path, monkeypatch, capsys, caplog) -> None:
+    """A family×size with no GGUF build is logged and excluded from the runnable
+    set, but still enumerated by the registry (no silent caps)."""
+    import logging
+
+    results = tmp_path / "results"
+    results.mkdir()
+    # Stub the GGUF-availability seam: kimi 9b has no build.
+    monkeypatch.setattr(
+        summary_bench, "_gguf_available", lambda family, size: not (family == "kimi" and size == "9b")
+    )
+
+    with caplog.at_level(logging.WARNING, logger="summary_bench"):
+        summary_bench.main(["manifest", "--missing", "--commands", "--results-dir", str(results)])
+
+    # Skip log names the skipped cell...
+    assert "kimi" in caplog.text and "9b" in caplog.text
+    # ...the runnable --missing commands exclude it...
+    assert "kimi_9b" not in capsys.readouterr().out
+    # ...but the registry still lists the cells, flagged unavailable (not dropped).
+    kimi9b = [p for p in summary_bench.all_permutations(results) if p["family"] == "kimi" and p["size"] == "9b"]
+    assert len(kimi9b) == 3
+    assert all(p["available"] is False for p in kimi9b)
