@@ -5,7 +5,7 @@
 > - **Prev:** [T7.2](./summariser-G7-T7.2.md)
 > - **Next:** [T7.4](./summariser-G7-T7.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/scope?...&strategy=&model=` returns the row matching the requested `strategy`+`model` when multiple variants coexist for the same scope/grain/bucket (ADR7.2).
 

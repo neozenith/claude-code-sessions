@@ -101,3 +101,26 @@ def test_scope_summary_returns_rollup_for_grain_and_bucket(
     assert data["strategy"] == "stub"
     assert data["lenses"]["task_summary"] == "RT"
     assert data["child_count"] == 3
+
+
+def test_scope_summary_selects_matching_strategy_model_variant(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """When variants coexist for one scope/grain/bucket, the requested
+    strategy+model selects the right row (ADR7.2)."""
+    db = _fixture_db(tmp_path)
+    _seed_rollup(db, "play/foo", strategy="strict", model="model-a")
+    _seed_rollup(db, "play/foo", strategy="reground", model="model-b")
+    monkeypatch.setattr(app.state, "db", db)
+    client = TestClient(app)
+
+    for strat, mdl in [("strict", "model-a"), ("reground", "model-b")]:
+        resp = client.get(
+            "/api/summaries/scope",
+            params={"path": "play/foo", "grain": "day", "bucket": "2026-01-01", "strategy": strat, "model": mdl},
+        )
+        assert resp.status_code == 200
+        data = resp.json()
+        assert data["status"] == "summarised"
+        assert data["strategy"] == strat
+        assert data["model"] == mdl
