@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T3.6](./summariser-G3-T3.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `roll_up_scopes(..., level='leaf')` writes rollups only for project-leaf scopes and leaves shallower scopes untouched; `level='root'` writes only the all-domains row — so a cadence trigger can run one tier without recomputing the others (ADR3.4).
 

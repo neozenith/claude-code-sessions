@@ -26,6 +26,7 @@ from claude_code_sessions.database.sqlite.kg.runtime import ensure_chat_model_do
 from claude_code_sessions.database.sqlite.summaries import (
     MuninnSummaryEngine,
     SummaryEngine,
+    roll_up_scopes,
     summarise_session,
 )
 from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes
@@ -131,6 +132,32 @@ def cmd_sessions(args: argparse.Namespace) -> None:
         conn.close()
 
 
+def cmd_rollup(args: argparse.Namespace) -> None:
+    conn = _open_chat_connection(args.model)
+    try:
+        engine = MuninnSummaryEngine(conn)
+        resolver = ProjectResolver(PROJECTS_PATH)
+        written = roll_up_scopes(
+            conn,
+            engine,
+            args.strategy,
+            args.model,
+            args.grain,
+            level=args.level,
+            resolver=resolver,
+        )
+        log.info(
+            "rollup: wrote %d row(s) for strategy=%s model=%s level=%s grain=%s",
+            written,
+            args.strategy,
+            args.model,
+            args.level,
+            args.grain,
+        )
+    finally:
+        conn.close()
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="summarise_cli",
@@ -147,6 +174,19 @@ def build_parser() -> argparse.ArgumentParser:
         "--scope", default=None, help="Restrict to a scope_path subtree, e.g. 'clients/acme'"
     )
     sessions_p.set_defaults(func=cmd_sessions)
+
+    rollup_p = sub.add_parser(
+        "rollup", help="Roll up one level band at one grain off existing session_summaries"
+    )
+    rollup_p.add_argument("--strategy", required=True, help="Merge strategy flag (registry key)")
+    rollup_p.add_argument("--model", required=True, help="Summariser model name (provenance + scope)")
+    rollup_p.add_argument(
+        "--level", default=None, help="Level band to roll up: 'leaf' or 'root' (default: all tiers)"
+    )
+    rollup_p.add_argument(
+        "--grain", default="day", choices=["day", "week", "month"], help="Time granularity"
+    )
+    rollup_p.set_defaults(func=cmd_rollup)
     return parser
 
 

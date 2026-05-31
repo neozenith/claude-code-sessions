@@ -599,3 +599,40 @@ def test_root_scope_merges_all_domains(tmp_path: Path) -> None:
     assert len(root) == 1
     assert root[0]["scope_depth"] == 0
     assert root[0]["child_count"] == 2  # two top-level domains: play, clients
+
+
+def test_rollup_runs_only_requested_level_band(tmp_path: Path) -> None:
+    """`level='leaf'` writes only project-leaf scopes; `level='root'` writes only
+    the root — so a cadence trigger runs one tier without disturbing the others."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    alpha = "-Users-dev-alpha"  # scope 'alpha' (depth-1 leaf)
+    deep = "-Users-dev-beta-sub"  # scope 'beta/sub' (depth-2 leaf); 'beta' is intermediate
+    _write_project_index(projects, alpha, "/Users/dev/alpha")
+    _write_project_index(projects, deep, "/Users/dev/beta/sub")
+    resolver = ProjectResolver(projects)
+
+    for pid, sid in [(alpha, "al1"), (deep, "de1")]:
+        sf = _seed_source_file(conn, pid, sid)
+        _seed_event(conn, pid, sid, "human", f"t {sid}", 1, sf)
+        _seed_session_summary(conn, pid, sid, "model-a", f"{sid}-h")
+    conn.commit()
+
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        # Leaf band: only project-leaf scopes, no intermediate 'beta', no root.
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", level="leaf", resolver=resolver)
+        after_leaf = {r["scope_path"] for r in conn.execute("SELECT scope_path FROM rollup_summaries").fetchall()}
+        assert after_leaf == {"alpha", "beta/sub"}
+
+        # Root band: only the root row added; intermediate 'beta' still absent.
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", level="root", resolver=resolver)
+        after_root = {r["scope_path"] for r in conn.execute("SELECT scope_path FROM rollup_summaries").fetchall()}
+        assert after_root == {"alpha", "beta/sub", ""}
+
+        # Root merged only the depth-1 child rollups that exist ('alpha'); 'beta' never ran.
+        root = conn.execute("SELECT * FROM rollup_summaries WHERE scope_path = ''").fetchone()
+        assert root["child_count"] == 1
+    finally:
+        MERGER_REGISTRY.pop("stub", None)

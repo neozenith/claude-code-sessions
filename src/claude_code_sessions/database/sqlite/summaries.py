@@ -203,6 +203,20 @@ def _parent_scope(scope: str) -> str:
     return scope.rsplit("/", 1)[0] if "/" in scope else ""
 
 
+def _scope_in_band(scope: str, level: str, leaf_scopes: set[str]) -> bool:
+    """Whether ``scope`` belongs to the requested ``level`` band (ADR3.4).
+
+    ``'leaf'`` = a project-leaf scope (a project sits exactly there); ``'root'``
+    = the all-domains node. An unknown band fails loud rather than silently
+    rolling up the wrong tier.
+    """
+    if level == "leaf":
+        return scope in leaf_scopes
+    if level == "root":
+        return scope == ""
+    raise ValueError(f"Unknown level band {level!r}. Known bands: 'leaf', 'root'.")
+
+
 def roll_up_scopes(
     conn: sqlite3.Connection,
     engine: SummaryEngine,
@@ -262,8 +276,16 @@ def roll_up_scopes(
         leaf = scope_path_of(resolver, project_id)
         own_sessions[(leaf, str(row["bucket"]))].append(row)
 
+    # Scopes a project sits exactly at — the 'leaf' band (ADR3.4).
+    leaf_scopes = {sc for (sc, _bucket) in own_sessions}
+
     written = 0
     for scope in sorted(all_scopes, key=_scope_depth, reverse=True):
+        # One level band per invocation (ADR3.4): a cadence trigger rolls up one
+        # tier off whatever the tier below has produced to date, leaving the
+        # other tiers untouched. level=None walks every tier.
+        if level is not None and not _scope_in_band(scope, level, leaf_scopes):
+            continue
         child_scopes = [c for c in all_scopes if c != "" and _parent_scope(c) == scope]
 
         # Child-scope rollups were written on earlier (deeper) iterations.
