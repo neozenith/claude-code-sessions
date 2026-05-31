@@ -5,7 +5,7 @@
 > - **Prev:** [T10.1](./summariser-G10-T10.1.md)
 > - **Next:** [T10.3](./summariser-G10-T10.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `all_permutations(results_dir)` returns one dict per strategy×family×size cell with `permutation_id`, `sort_key`, `label`, and a `done` flag set by file-existence in `results_dir`.
 
