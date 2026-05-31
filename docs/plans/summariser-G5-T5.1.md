@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T5.2](./summariser-G5-T5.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `SummaryMergerReGround.merge(engine, model, children, excerpts)` with `wants_excerpts=True` folds the provided `SourceExcerpts` text into the engine prompt alongside the child summaries. _(tracer bullet)_
 

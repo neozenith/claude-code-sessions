@@ -27,6 +27,7 @@ __all__ = [
     "SourceExcerpts",
     "Summary",
     "SummaryMerger",
+    "SummaryMergerReGround",
     "SummaryMergerStrict",
     "get_merger",
     "register_merger",
@@ -153,3 +154,38 @@ class SummaryMergerStrict:
 
 
 register_merger(SummaryMergerStrict())
+
+
+def _format_excerpts(excerpts: SourceExcerpts | None) -> str:
+    if excerpts is None or not excerpts.excerpts:
+        return ""
+    block = "\n".join(f"- {e}" for e in excerpts.excerpts)
+    return "\n\nGround your summary in these raw source excerpts:\n" + block
+
+
+class SummaryMergerReGround:
+    """Bottom-up merger that re-grounds in a bounded sample of source excerpts.
+
+    Identical in shape to :class:`SummaryMergerStrict` but folds the driver-
+    supplied ``excerpts`` into the prompt so higher tiers stay faithful to the
+    underlying prompts rather than drifting across summary-of-summary layers
+    (Ou & Lapata, ACL 2025). The most token-heavy strategy — the cost the G10
+    benchmark weighs against its fidelity.
+    """
+
+    name = "reground"
+    child_mode: ChildMode = "child_rollups"
+    wants_excerpts = True
+
+    def merge(
+        self,
+        engine: SummaryEngine,
+        model: str,
+        children: list[Summary],
+        excerpts: SourceExcerpts | None,
+    ) -> Summary:
+        prompt = _MERGE_PROMPT_HEADER + "\n" + _format_children(children) + _format_excerpts(excerpts)
+        return _parse_summary(engine.summarise(model, prompt))
+
+
+register_merger(SummaryMergerReGround())
