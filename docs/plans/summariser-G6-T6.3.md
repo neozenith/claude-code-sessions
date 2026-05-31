@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T6.2](./summariser-G6-T6.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 With the feature flag `flat`, `get_merger('flat')` returns `SummaryMergerFlat` and the driver, reading `merger.child_mode == 'raw_sessions'`, takes the raw-session gathering path and writes `strategy='flat'` rows.
 

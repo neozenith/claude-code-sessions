@@ -12,6 +12,7 @@ import json
 import sqlite3
 from pathlib import Path
 
+from claude_code_sessions.database.sqlite.merge import SummaryMergerFlat, get_merger
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import roll_up_scopes
 from claude_code_sessions.project_resolver import ProjectResolver
@@ -137,3 +138,30 @@ def test_flat_child_count_is_descendant_sessions(tmp_path: Path) -> None:
 
     clients = conn.execute("SELECT * FROM rollup_summaries WHERE scope_path = 'clients'").fetchone()
     assert clients["child_count"] == 3  # a1 + a2 + b1, not the 2 child scopes
+
+
+def test_flat_flag_drives_raw_session_path(tmp_path: Path) -> None:
+    """`get_merger('flat')` is SummaryMergerFlat; the driver writes strategy='flat'
+    rows via the raw-session path (an intermediate scope with one child scope
+    still counts its 2 descendant sessions, proving raw-session gathering)."""
+    assert isinstance(get_merger("flat"), SummaryMergerFlat)
+
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    resolver = _seed_depth3_two_sessions(conn, tmp_path)  # clients/acme/app with s1, s2
+
+    engine = RecordingEngine(
+        json.dumps({"task_summary": "m", "patterns": "m", "decisions_values": "m"})
+    )
+    roll_up_scopes(conn, engine, "flat", "model-a", "day", resolver=resolver)
+
+    rows = conn.execute("SELECT scope_path, strategy, child_count FROM rollup_summaries").fetchall()
+    assert rows
+    assert all(r["strategy"] == "flat" for r in rows)
+    # clients/acme has exactly one child scope (clients/acme/app) but 2 descendant
+    # sessions — child_count=2 proves the raw-session path, not child-rollup gathering.
+    mid = conn.execute(
+        "SELECT child_count FROM rollup_summaries WHERE scope_path = 'clients/acme'"
+    ).fetchone()
+    assert mid["child_count"] == 2
