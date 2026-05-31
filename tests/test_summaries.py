@@ -569,3 +569,33 @@ def test_source_hash_freshness_scoped_by_model_strategy(tmp_path: Path) -> None:
         )
     finally:
         MERGER_REGISTRY.pop("stub", None)
+
+
+def test_root_scope_merges_all_domains(tmp_path: Path) -> None:
+    """The driver writes a root (scope_path='', depth 0) row merging every
+    top-level domain's rollup — the all-domains summary."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    foo = "-Users-dev-play-foo"
+    acme = "-Users-dev-clients-acme-app"
+    _write_project_index(projects, foo, "/Users/dev/play/foo")
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    resolver = ProjectResolver(projects)
+
+    for pid, sid in [(foo, "f1"), (acme, "a1")]:
+        sf = _seed_source_file(conn, pid, sid)
+        _seed_event(conn, pid, sid, "human", f"t {sid}", 1, sf)
+        _seed_session_summary(conn, pid, sid, "model-a", f"{sid}-h")
+    conn.commit()
+
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+    finally:
+        MERGER_REGISTRY.pop("stub", None)
+
+    root = conn.execute("SELECT * FROM rollup_summaries WHERE scope_path = ''").fetchall()
+    assert len(root) == 1
+    assert root[0]["scope_depth"] == 0
+    assert root[0]["child_count"] == 2  # two top-level domains: play, clients

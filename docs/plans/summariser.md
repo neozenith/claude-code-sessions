@@ -66,7 +66,7 @@ The user must re-enter Phase 2 refinement to resolve the ADR before the loop can
 |-----|---------------|-----------|-----------|---------------|------------|
 | [G1](./summariser-G1.md) | 4 | 4 | 0 | — | — |
 | [G2](./summariser-G2.md) | 7 | 7 | 0 | — | — |
-| [G3](./summariser-G3.md) | 7 | 5 | 2 | [T3.6](./summariser-G3-T3.6.md) | — |
+| [G3](./summariser-G3.md) | 7 | 6 | 1 | [T3.7](./summariser-G3-T3.7.md) | — |
 | [G4](./summariser-G4.md) | 3 | 0 | 3 | [T4.1](./summariser-G4-T4.1.md) | — |
 | [G5](./summariser-G5.md) | 3 | 0 | 3 | [T5.1](./summariser-G5-T5.1.md) | — |
 | [G6](./summariser-G6.md) | 3 | 0 | 3 | [T6.1](./summariser-G6-T6.1.md) | — |

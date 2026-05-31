@@ -5,7 +5,7 @@
 > - **Prev:** [T3.5](./summariser-G3-T3.5.md)
 > - **Next:** [T3.7](./summariser-G3-T3.7.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The driver produces a `rollup_summaries` row at `scope_path=''` (`scope_depth=0`) that merges every top-level domain's rollup for the given `(strategy, model, grain, bucket)` — the all-domains summary at the top of the trie.
 
