@@ -5,7 +5,7 @@
 > - **Prev:** [T9.2](./summariser-G9-T9.2.md)
 > - **Next:** [T9.4](./summariser-G9-T9.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Filtering is an exact `message_kind === value` predicate over full kind values; the `Scope`/`matchesKindFilter`/`isSubagentKind` composition no longer exists (ADR9.1, supersedes T10.2).
 

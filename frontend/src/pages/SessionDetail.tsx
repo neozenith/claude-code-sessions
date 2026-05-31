@@ -12,7 +12,7 @@ import type {
   SessionMetrics,
   SessionMetricsTurn,
 } from '@/lib/api-client'
-import { MSG_KIND_OPTIONS, baseKind } from '@/lib/message-kinds'
+import { MSG_KIND_OPTIONS, baseKind, matchesKind } from '@/lib/message-kinds'
 import {
   ChevronLeft,
   ChevronDown,
@@ -534,8 +534,8 @@ export default function SessionDetail() {
   // Client-side message kind filter (applied on top of the server-side event_uuid filter)
   const visibleEvents = useMemo(() => {
     if (!events) return []
-    if (!msgKindFilter) return events
-    return events.filter((e) => e.message_kind === msgKindFilter)
+    // Exact full-kind match (ADR9.1) — `subagent-*` is distinct from its base.
+    return events.filter((e) => matchesKind(e.message_kind ?? '', msgKindFilter))
   }, [events, msgKindFilter])
 
   // Build event lookup map for parent references (always from full event set)

@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { matchesKindFilter, MSG_KIND_OPTIONS } from './message-kinds'
+import { matchesKind, MSG_KIND_OPTIONS } from './message-kinds'
 
 describe('MSG_KIND_OPTIONS', () => {
   const BASE = [
@@ -27,35 +27,18 @@ describe('MSG_KIND_OPTIONS', () => {
   })
 })
 
-describe('subagent scope composes with kind filter', () => {
-  // A small mix of main-thread and subagent kinds.
+describe('matchesKind (exact full-kind value, no scope composition)', () => {
   const kinds = ['human', 'tool_use', 'subagent-human', 'subagent-tool_use']
 
-  it('msg=tool_use matches both main and subagent tool calls (prefix-agnostic)', () => {
-    expect(kinds.filter((k) => matchesKindFilter(k, 'tool_use', 'all'))).toEqual([
-      'tool_use',
-      'subagent-tool_use',
-    ])
+  it('matches only the exact kind, never the base-equivalent subagent kind', () => {
+    expect(kinds.filter((k) => matchesKind(k, 'tool_use'))).toEqual(['tool_use'])
   })
 
-  it('scope=subagent narrows to subagent-prefixed kinds only', () => {
-    expect(kinds.filter((k) => matchesKindFilter(k, '', 'subagent'))).toEqual([
-      'subagent-human',
-      'subagent-tool_use',
-    ])
+  it('matches the full subagent kind exactly', () => {
+    expect(kinds.filter((k) => matchesKind(k, 'subagent-tool_use'))).toEqual(['subagent-tool_use'])
   })
 
-  it('scope=main excludes subagent kinds', () => {
-    expect(kinds.filter((k) => matchesKindFilter(k, '', 'main'))).toEqual(['human', 'tool_use'])
-  })
-
-  it('msg and scope compose (subagent tool calls only)', () => {
-    expect(kinds.filter((k) => matchesKindFilter(k, 'tool_use', 'subagent'))).toEqual([
-      'subagent-tool_use',
-    ])
-  })
-
-  it('no filter (msg="" scope="all") matches everything', () => {
-    expect(kinds.filter((k) => matchesKindFilter(k, '', 'all'))).toEqual(kinds)
+  it('an empty filter matches everything', () => {
+    expect(kinds.filter((k) => matchesKind(k, ''))).toEqual(kinds)
   })
 })

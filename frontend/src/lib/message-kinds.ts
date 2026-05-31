@@ -45,31 +45,22 @@ export const MSG_KIND_OPTIONS: MsgKindOption[] = [
   ),
 ]
 
-/**
- * Subagent dimension (G3 ADR): a `?scope=` param orthogonal to `?msg=`.
- * Subagent events carry a `subagent-<base>` kind; the base kind is recovered
- * by stripping the prefix when matching, so `?msg=tool_use` matches both
- * `tool_use` and `subagent-tool_use` unless `?scope=` narrows it.
- */
+/** Prefix marking a subagent-context kind (`subagent-<base>`). */
 export const SUBAGENT_PREFIX = 'subagent-'
 
-/** Subagent scope filter: all kinds, main-thread only, or subagent only. */
-export type Scope = 'all' | 'main' | 'subagent'
-
-/** The base kind with any `subagent-` prefix stripped. */
+/**
+ * The base kind with any `subagent-` prefix stripped. Used only for shared
+ * *styling* (a subagent event reuses its base kind's colour/icon); filtering is
+ * exact on the full kind value (see `matchesKind`).
+ */
 export const baseKind = (kind: string): string =>
   kind.startsWith(SUBAGENT_PREFIX) ? kind.slice(SUBAGENT_PREFIX.length) : kind
 
-export const isSubagentKind = (kind: string): boolean => kind.startsWith(SUBAGENT_PREFIX)
-
 /**
- * Whether an event of `kind` passes the composed `{msg, scope}` filter.
- * `msg` is a base kind ('' = any). `scope` narrows by subagent-ness.
- * The two compose: e.g. msg='tool_use' + scope='subagent' → subagent tool calls.
+ * Whether an event of `kind` passes the `?msg=` filter (ADR9.1): an exact match
+ * on the full kind value, with `''` meaning "no filter". No prefix stripping —
+ * `subagent-tool_use` matches only `subagent-tool_use`, never `tool_use`. This
+ * supersedes the retired `Scope`/`matchesKindFilter` scope composition.
  */
-export const matchesKindFilter = (kind: string, msg: string, scope: Scope = 'all'): boolean => {
-  if (scope === 'subagent' && !isSubagentKind(kind)) return false
-  if (scope === 'main' && isSubagentKind(kind)) return false
-  if (msg && baseKind(kind) !== baseKind(msg)) return false
-  return true
-}
+export const matchesKind = (kind: string, filter: MessageKind | ''): boolean =>
+  filter === '' || kind === filter
