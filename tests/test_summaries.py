@@ -238,3 +238,26 @@ def test_changed_human_text_resummarises() -> None:
     assert rows[0]["patterns"] == "SECOND_pat"
     assert rows[0]["decisions_values"] == "SECOND_dec"
     assert rows[0]["human_event_count"] == 3
+
+
+def test_session_without_human_events_writes_no_row() -> None:
+    """A session of only non-human events yields no engine call and no row."""
+    conn = _make_cache()
+    project_id = "-Users-dev-play-foo"
+    session_id = "sess-nohuman"
+    sf = _seed_source_file(conn, project_id, session_id)
+    _seed_event(conn, project_id, session_id, "assistant", "assistant text", 1, sf)
+    _seed_event(conn, project_id, session_id, "tool", "tool result", 2, sf)
+    _seed_event(conn, project_id, session_id, "user_text", "pasted log", 3, sf)
+    conn.commit()
+
+    engine = FakeEngine(
+        json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
+    )
+    summarise_session(conn, project_id, session_id, engine, "model-a")
+
+    assert len(engine.calls) == 0
+    count = conn.execute(
+        "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (session_id,)
+    ).fetchone()[0]
+    assert count == 0

@@ -5,7 +5,7 @@
 > - **Prev:** [T2.4](./summariser-G2-T2.4.md)
 > - **Next:** [T2.6](./summariser-G2-T2.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 A session containing only non-`human` events yields no engine call and no `session_summaries` row.
 

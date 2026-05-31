@@ -88,6 +88,12 @@ def summarise_session(
     session_id, model)``.
     """
     human_texts = _gather_human_text(conn, project_id, session_id)
+
+    # A session with no typed prompts has nothing to summarise (T2.5):
+    # no engine call, no row. There is no human intent to extract.
+    if not human_texts:
+        return
+
     content_hash = _content_hash(human_texts)
 
     # Content-hash freshness guard (ADR2.3): an unchanged session under the
