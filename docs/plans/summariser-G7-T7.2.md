@@ -5,7 +5,7 @@
 > - **Prev:** [T7.1](./summariser-G7-T7.1.md)
 > - **Next:** [T7.3](./summariser-G7-T7.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/scope?path=&grain=&bucket=&strategy=&model=` returns `200` with the `rollup_summaries` row matching `scope_path` + `time_granularity` + `time_bucket`.
 

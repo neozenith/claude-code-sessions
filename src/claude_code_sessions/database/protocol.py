@@ -123,6 +123,24 @@ class Database(Protocol):
         — never a fabricated summary (ADR7.1)."""
         ...
 
+    def get_rollup_summary(
+        self,
+        scope_path: str,
+        time_granularity: str,
+        time_bucket: str,
+        *,
+        strategy: str | None = None,
+        model: str | None = None,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> dict[str, Any]:
+        """The roll-up summary for a ``scope_path`` at a grain+bucket (G7).
+
+        Optional ``strategy``/``model`` select a benchmark variant. Returns the
+        ADR7.1 discriminated payload (``summarised`` with lenses, or
+        ``not_summarised``)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

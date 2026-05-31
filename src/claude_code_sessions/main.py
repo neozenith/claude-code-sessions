@@ -256,6 +256,25 @@ async def get_session_summary(project_id: str, session_id: str, model: str) -> d
     return get_db().get_session_summary(project_id, session_id, model=model)
 
 
+@app.get("/api/summaries/scope")
+async def get_scope_summary(
+    path: str,
+    grain: str,
+    bucket: str,
+    strategy: str | None = None,
+    model: str | None = None,
+    days: int | None = None,
+    project: str | None = None,
+) -> dict[str, Any]:
+    """The roll-up summary for a ``scope_path`` at a grain+bucket (G7).
+
+    Optional ``strategy``/``model`` select a benchmark variant; returns the
+    ADR7.1 discriminated payload."""
+    return get_db().get_rollup_summary(
+        path, grain, bucket, strategy=strategy, model=model, days=days, project=project
+    )
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

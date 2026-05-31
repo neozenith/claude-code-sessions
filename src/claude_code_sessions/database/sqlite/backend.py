@@ -557,6 +557,53 @@ class SQLiteDatabase:
             },
         }
 
+    def get_rollup_summary(
+        self,
+        scope_path: str,
+        time_granularity: str,
+        time_bucket: str,
+        *,
+        strategy: str | None = None,
+        model: str | None = None,
+        days: int | None = None,
+        project: str | None = None,
+    ) -> dict[str, Any]:
+        """The roll-up summary for a ``scope_path`` at a grain+bucket (G7, ADR7.1).
+
+        ``strategy``/``model`` narrow to a specific benchmark variant when given.
+        Returns ``{"status": "summarised", ...}`` or ``{"status": "not_summarised"}``.
+        """
+        clauses = ["scope_path = ?", "time_granularity = ?", "time_bucket = ?"]
+        params: list[Any] = [scope_path, time_granularity, time_bucket]
+        if strategy is not None:
+            clauses.append("strategy = ?")
+            params.append(strategy)
+        if model is not None:
+            clauses.append("model = ?")
+            params.append(model)
+        rows = self._q(
+            f"SELECT * FROM rollup_summaries WHERE {' AND '.join(clauses)}",
+            tuple(params),
+        )
+        if not rows:
+            return {"status": "not_summarised"}
+        row = rows[0]
+        return {
+            "status": "summarised",
+            "scope_path": row["scope_path"],
+            "scope_depth": row["scope_depth"],
+            "time_granularity": row["time_granularity"],
+            "time_bucket": row["time_bucket"],
+            "strategy": row["strategy"],
+            "model": row["model"],
+            "child_count": row["child_count"],
+            "lenses": {
+                "task_summary": row["task_summary"],
+                "patterns": row["patterns"],
+                "decisions_values": row["decisions_values"],
+            },
+        }
+
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.
 
