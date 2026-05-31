@@ -5,7 +5,7 @@
 > - **Prev:** [T2.3](./summariser-G2-T2.3.md)
 > - **Next:** [T2.5](./summariser-G2-T2.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 When the human text changes (new/edited `msg_kind='human'` events), the `content_hash` differs and `summarise_session` re-invokes the engine and upserts the refreshed lenses.
 

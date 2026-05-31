@@ -201,3 +201,40 @@ def test_unchanged_human_text_skips_engine_per_model() -> None:
     assert len(engine.calls) == 2
     rows = conn.execute("SELECT model FROM session_summaries ORDER BY model").fetchall()
     assert [r["model"] for r in rows] == ["model-a", "model-b"]
+
+
+def test_changed_human_text_resummarises() -> None:
+    """When the human text changes, the hash differs and the engine re-runs,
+    upserting the refreshed lenses (T2.4)."""
+    conn = _make_cache()
+    project_id = "-Users-dev-play-foo"
+    session_id = "sess-edit"
+    sf = _seed_source_file(conn, project_id, session_id)
+    _seed_event(conn, project_id, session_id, "human", "Original prompt one.", 1, sf)
+    _seed_event(conn, project_id, session_id, "human", "Original prompt two.", 2, sf)
+    conn.commit()
+
+    first = FakeEngine(
+        json.dumps({"task_summary": "FIRST_task", "patterns": "FIRST_pat", "decisions_values": "FIRST_dec"})
+    )
+    summarise_session(conn, project_id, session_id, first, "model-a")
+    row = conn.execute("SELECT * FROM session_summaries").fetchone()
+    assert row["task_summary"] == "FIRST_task"
+    assert row["human_event_count"] == 2
+
+    # A new human event changes the concatenated text → new content_hash.
+    _seed_event(conn, project_id, session_id, "human", "A third, edited prompt.", 3, sf)
+    conn.commit()
+
+    second = FakeEngine(
+        json.dumps({"task_summary": "SECOND_task", "patterns": "SECOND_pat", "decisions_values": "SECOND_dec"})
+    )
+    summarise_session(conn, project_id, session_id, second, "model-a")
+
+    assert len(second.calls) == 1  # the changed text was a cache miss, not a hit
+    rows = conn.execute("SELECT * FROM session_summaries").fetchall()
+    assert len(rows) == 1  # still one row for (session, model) — replaced, not duplicated
+    assert rows[0]["task_summary"] == "SECOND_task"
+    assert rows[0]["patterns"] == "SECOND_pat"
+    assert rows[0]["decisions_values"] == "SECOND_dec"
+    assert rows[0]["human_event_count"] == 3
