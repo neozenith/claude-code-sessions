@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T9.2](./summariser-G9-T9.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `MSG_KIND_OPTIONS` lists "All messages" plus the 18 canonical `msg_kind` values (9 base × {main, `subagent-`}), each a valid `MessageKind | ''`. _(tracer bullet)_
 

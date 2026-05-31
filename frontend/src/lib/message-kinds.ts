@@ -6,7 +6,7 @@
  * across the two so the filter feels coherent. Keeping a single source
  * here is cheaper than cross-referencing two arrays.
  */
-import type { MessageKind } from '@/lib/api-client'
+import type { BaseMessageKind, MessageKind } from '@/lib/api-client'
 
 export interface MsgKindOption {
   /** '' means "no filter — show all kinds". */
@@ -15,8 +15,8 @@ export interface MsgKindOption {
   description: string
 }
 
-export const MSG_KIND_OPTIONS: MsgKindOption[] = [
-  { value: '', label: 'All messages', description: 'Show everything' },
+/** The 9 base kinds with their human-facing label + description. */
+const BASE_KIND_OPTIONS: { value: BaseMessageKind; label: string; description: string }[] = [
   { value: 'human', label: 'Human prompt', description: 'Actual typed user input' },
   { value: 'task_notification', label: 'Task notification', description: 'Async task completion callbacks' },
   { value: 'assistant_text', label: 'Assistant text', description: 'Model text responses' },
@@ -26,6 +26,23 @@ export const MSG_KIND_OPTIONS: MsgKindOption[] = [
   { value: 'user_text', label: 'User text', description: 'User messages with text blocks' },
   { value: 'meta', label: 'Meta / injected', description: 'System-injected context (isMeta=true)' },
   { value: 'other', label: 'System / progress', description: 'Progress, system, queue-operation events' },
+]
+
+/**
+ * The flat 19-option catalog (ADR9.1): "All messages" + the 18 canonical
+ * `msg_kind` values (9 base × {main, `subagent-`}). Every kind — including
+ * each `subagent-*` variant — is directly selectable from one control.
+ */
+export const MSG_KIND_OPTIONS: MsgKindOption[] = [
+  { value: '', label: 'All messages', description: 'Show everything' },
+  ...BASE_KIND_OPTIONS,
+  ...BASE_KIND_OPTIONS.map(
+    (b): MsgKindOption => ({
+      value: `subagent-${b.value}`,
+      label: `Subagent: ${b.label}`,
+      description: `${b.description} (subagent context)`,
+    }),
+  ),
 ]
 
 /**

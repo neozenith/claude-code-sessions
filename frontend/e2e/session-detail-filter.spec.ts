@@ -72,12 +72,13 @@ test.describe('Session Detail - Message Kind Filter', () => {
     })
   })
 
-  test('dropdown has all 10 options (All + 9 kinds)', async ({ page }) => {
+  test('dropdown has all 19 options (All + 18 kinds)', async ({ page }) => {
     await navigateToSession(page, TEST_SESSION_ID)
 
     const dropdown = page.getByTestId('msg-kind-filter')
     const options = dropdown.locator('option')
-    await expect(options).toHaveCount(10)
+    // ADR9.1: All + 9 base × {main, subagent-} = 19. (T9.4 expands the rest.)
+    await expect(options).toHaveCount(19)
 
     // Verify the first option is "All messages"
     await expect(options.first()).toHaveText('All messages')
