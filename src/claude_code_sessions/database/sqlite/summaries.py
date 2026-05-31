@@ -22,6 +22,7 @@ from typing import Protocol
 from claude_code_sessions.database.sqlite.merge import (
     ExcerptCandidate,
     Summary,
+    SummaryMerger,
     get_merger,
     select_excerpts,
 )
@@ -255,6 +256,79 @@ def _scope_in_band(scope: str, level: str, leaf_scopes: set[str]) -> bool:
     raise ValueError(f"Unknown level band {level!r}. Known bands: 'leaf', 'root'.")
 
 
+def _write_scope_bucket(
+    conn: sqlite3.Connection,
+    merger: SummaryMerger,
+    engine: SummaryEngine,
+    strategy: str,
+    model: str,
+    granularity: str,
+    scope: str,
+    bucket: str,
+    children: list[Summary],
+    child_keys: list[tuple[str, str]],
+    resolver: ProjectResolver,
+) -> bool:
+    """Merge one ``(scope, bucket)`` group and upsert its rollup row.
+
+    Shared by both child-gathering modes. Applies the ADR3.3 freshness guard
+    (skip when the source_hash is unchanged) and supplies excerpts only to
+    re-grounding mergers. Returns True if a row was written.
+    """
+    if not children:
+        return False
+    source_hash = _rollup_source_hash(strategy, model, child_keys)
+
+    # Freshness guard (ADR3.3): a matching source_hash means nothing this
+    # (strategy, model) depends on changed — skip the merge, leaving the row
+    # (and its generated_at) intact. Deepest-first, a re-merged child below
+    # already carries a new source_hash so its parent's hash flips too — the
+    # re-computation cascades up only as far as a change reaches.
+    existing = conn.execute(
+        """SELECT source_hash FROM rollup_summaries
+           WHERE strategy = ? AND model = ? AND scope_path = ?
+             AND time_granularity = ? AND time_bucket = ?""",
+        (strategy, model, scope, granularity, bucket),
+    ).fetchone()
+    if existing is not None and existing["source_hash"] == source_hash:
+        return False
+
+    # Re-grounding mergers (wants_excerpts) get a bounded source sample for this
+    # scope+bucket; summary-only mergers get None.
+    excerpts = (
+        select_excerpts(
+            _gather_excerpt_candidates(conn, resolver, scope, granularity, bucket),
+            _EXCERPT_K,
+        )
+        if merger.wants_excerpts
+        else None
+    )
+    merged = merger.merge(engine, model, children, excerpts)
+    conn.execute(
+        """INSERT OR REPLACE INTO rollup_summaries
+               (strategy, model, scope_path, scope_depth,
+                time_granularity, time_bucket,
+                task_summary, patterns, decisions_values,
+                child_count, source_hash, generated_at)
+           VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+        (
+            strategy,
+            model,
+            scope,
+            _scope_depth(scope),
+            granularity,
+            bucket,
+            merged.task_summary,
+            merged.patterns,
+            merged.decisions_values,
+            len(children),
+            source_hash,
+            datetime.now(UTC).isoformat(),
+        ),
+    )
+    return True
+
+
 def roll_up_scopes(
     conn: sqlite3.Connection,
     engine: SummaryEngine,
@@ -266,23 +340,24 @@ def roll_up_scopes(
 ) -> int:
     """Walk the variable-depth scope trie deepest-first for one ``(strategy, model)``.
 
-    A **leaf** scope merges its projects' ``session_summaries`` (for ``model``),
-    bucketed by each session's *activity* timestamp from ``events``. An
-    **ancestor** scope merges its direct child scopes' rollups at the same bucket
-    — children are written first because the walk is deepest-first, so an
-    ancestor's ``child_count`` counts its direct child scopes (and any sessions
-    sitting exactly at that scope), not transitive sessions. The root ``''`` is
-    the all-domains node. Returns the number of rollup rows written.
+    Two child-gathering modes (set by the merger):
+
+    * ``child_rollups`` (strict/reground) — a **leaf** scope merges its projects'
+      ``session_summaries``; an **ancestor** merges its direct child scopes'
+      rollups (written first by the deepest-first order), so ``child_count``
+      counts direct child scopes plus any sessions sitting exactly at the scope.
+    * ``raw_sessions`` (flat) — every scope merges *all* descendant
+      ``session_summaries`` under its prefix directly, no child-rollup tier, so
+      ``child_count`` counts descendant sessions.
+
+    Buckets are anchored to each session's *activity* timestamp from ``events``.
+    The root ``''`` is the all-domains node. Returns the number of rows written.
     """
     merger = get_merger(strategy)
     if resolver is None:
         # A scope is the project's resolved path; without a resolver we cannot
         # place a session in the trie. Fail loud rather than fabricate a scope.
         raise ValueError("roll_up_scopes requires a ProjectResolver")
-    if merger.child_mode == "raw_sessions":
-        # The flat strategy (G6) re-summarises raw descendant sessions per scope
-        # rather than merging child rollups — implemented with the flat merger.
-        raise NotImplementedError("child_mode='raw_sessions' is implemented by the flat merger (G6)")
 
     grain_expr = bucket_expr(granularity, "e.timestamp")
     session_rows = conn.execute(
@@ -304,104 +379,70 @@ def roll_up_scopes(
     ).fetchall()
 
     # The scope trie is the union of every project's ancestor chain (root
-    # included). Sessions sitting exactly at a scope are its leaf contribution.
+    # included). Precompute each session's ancestor set + bucket once.
     all_scopes: set[str] = {""}
     own_sessions: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
+    session_entries: list[tuple[sqlite3.Row, set[str], str]] = []
     for row in session_rows:
-        project_id = row["project_id"]
-        for ancestor in ancestor_scopes(resolver, project_id):
-            all_scopes.add(ancestor)
-        leaf = scope_path_of(resolver, project_id)
-        own_sessions[(leaf, str(row["bucket"]))].append(row)
+        ancestors = set(ancestor_scopes(resolver, row["project_id"]))
+        all_scopes |= ancestors
+        bucket = str(row["bucket"])
+        own_sessions[(scope_path_of(resolver, row["project_id"]), bucket)].append(row)
+        session_entries.append((row, ancestors, bucket))
 
     # Scopes a project sits exactly at — the 'leaf' band (ADR3.4).
     leaf_scopes = {sc for (sc, _bucket) in own_sessions}
 
+    def _sessions_to_children(rows: list[sqlite3.Row]) -> tuple[list[Summary], list[tuple[str, str]]]:
+        children = [Summary(m["task_summary"], m["patterns"], m["decisions_values"]) for m in rows]
+        return children, [(m["session_id"], m["content_hash"]) for m in rows]
+
     written = 0
     for scope in sorted(all_scopes, key=_scope_depth, reverse=True):
-        # One level band per invocation (ADR3.4): a cadence trigger rolls up one
-        # tier off whatever the tier below has produced to date, leaving the
-        # other tiers untouched. level=None walks every tier.
+        # One level band per invocation (ADR3.4): level=None walks every tier.
         if level is not None and not _scope_in_band(scope, level, leaf_scopes):
             continue
-        child_scopes = [c for c in all_scopes if c != "" and _parent_scope(c) == scope]
 
-        # Child-scope rollups were written on earlier (deeper) iterations.
-        child_rollups: dict[str, list[sqlite3.Row]] = defaultdict(list)
-        if child_scopes:
-            placeholders = ",".join("?" * len(child_scopes))
-            for r in conn.execute(
-                f"""SELECT scope_path, time_bucket, task_summary, patterns,
-                           decisions_values, source_hash
-                    FROM rollup_summaries
-                    WHERE strategy = ? AND model = ? AND time_granularity = ?
-                      AND scope_path IN ({placeholders})""",
-                (strategy, model, granularity, *child_scopes),
-            ).fetchall():
-                child_rollups[str(r["time_bucket"])].append(r)
+        # Build {bucket: (children, child_keys)} for this scope per the mode.
+        payload: dict[str, tuple[list[Summary], list[tuple[str, str]]]] = {}
+        if merger.child_mode == "raw_sessions":
+            # Flat: all descendant sessions under this scope, no child rollups.
+            descendants: dict[str, list[sqlite3.Row]] = defaultdict(list)
+            for row, ancestors, bucket in session_entries:
+                if scope in ancestors:
+                    descendants[bucket].append(row)
+            for bucket, rows in descendants.items():
+                payload[bucket] = _sessions_to_children(rows)
+        else:
+            # child_rollups: own sessions here + direct child-scope rollups
+            # (written earlier by the deepest-first walk).
+            child_scopes = [c for c in all_scopes if c != "" and _parent_scope(c) == scope]
+            child_rollups: dict[str, list[sqlite3.Row]] = defaultdict(list)
+            if child_scopes:
+                placeholders = ",".join("?" * len(child_scopes))
+                for r in conn.execute(
+                    f"""SELECT scope_path, time_bucket, task_summary, patterns,
+                               decisions_values, source_hash
+                        FROM rollup_summaries
+                        WHERE strategy = ? AND model = ? AND time_granularity = ?
+                          AND scope_path IN ({placeholders})""",
+                    (strategy, model, granularity, *child_scopes),
+                ).fetchall():
+                    child_rollups[str(r["time_bucket"])].append(r)
+            buckets = {b for (sc, b) in own_sessions if sc == scope} | set(child_rollups)
+            for bucket in buckets:
+                children, child_keys = _sessions_to_children(own_sessions.get((scope, bucket), []))
+                rollups = child_rollups.get(bucket, [])
+                children += [
+                    Summary(r["task_summary"], r["patterns"], r["decisions_values"]) for r in rollups
+                ]
+                child_keys += [(r["scope_path"], r["source_hash"]) for r in rollups]
+                payload[bucket] = (children, child_keys)
 
-        buckets = {b for (sc, b) in own_sessions if sc == scope} | set(child_rollups)
-        for bucket in buckets:
-            sessions = own_sessions.get((scope, bucket), [])
-            rollups = child_rollups.get(bucket, [])
-            children = [
-                Summary(m["task_summary"], m["patterns"], m["decisions_values"]) for m in sessions
-            ] + [Summary(r["task_summary"], r["patterns"], r["decisions_values"]) for r in rollups]
-            if not children:
-                continue
-            child_keys = [(m["session_id"], m["content_hash"]) for m in sessions] + [
-                (r["scope_path"], r["source_hash"]) for r in rollups
-            ]
-            source_hash = _rollup_source_hash(strategy, model, child_keys)
-
-            # Freshness guard (ADR3.3): a row with the same source_hash means
-            # nothing this (strategy, model) depends on changed — skip the merge
-            # entirely, leaving the existing row (and its generated_at) intact.
-            # Because the walk is deepest-first, a re-merged child below already
-            # carries a new source_hash, so its parent's hash flips too — the
-            # re-computation cascades up only as far as a change reaches.
-            existing = conn.execute(
-                """SELECT source_hash FROM rollup_summaries
-                   WHERE strategy = ? AND model = ? AND scope_path = ?
-                     AND time_granularity = ? AND time_bucket = ?""",
-                (strategy, model, scope, granularity, bucket),
-            ).fetchone()
-            if existing is not None and existing["source_hash"] == source_hash:
-                continue
-
-            # Re-grounding mergers (wants_excerpts) get a bounded source sample
-            # for this scope+bucket; summary-only mergers get None.
-            excerpts = (
-                select_excerpts(
-                    _gather_excerpt_candidates(conn, resolver, scope, granularity, bucket),
-                    _EXCERPT_K,
-                )
-                if merger.wants_excerpts
-                else None
-            )
-            merged = merger.merge(engine, model, children, excerpts)
-            conn.execute(
-                """INSERT OR REPLACE INTO rollup_summaries
-                       (strategy, model, scope_path, scope_depth,
-                        time_granularity, time_bucket,
-                        task_summary, patterns, decisions_values,
-                        child_count, source_hash, generated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    strategy,
-                    model,
-                    scope,
-                    _scope_depth(scope),
-                    granularity,
-                    bucket,
-                    merged.task_summary,
-                    merged.patterns,
-                    merged.decisions_values,
-                    len(children),
-                    source_hash,
-                    datetime.now(UTC).isoformat(),
-                ),
-            )
-            written += 1
+        for bucket, (children, child_keys) in payload.items():
+            if _write_scope_bucket(
+                conn, merger, engine, strategy, model, granularity, scope, bucket, children, child_keys, resolver
+            ):
+                written += 1
     conn.commit()
     return written

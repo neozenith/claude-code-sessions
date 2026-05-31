@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T6.2](./summariser-G6-T6.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 With the `flat` strategy, `roll_up_scopes` gathers every `session_summaries` row under a scope's `scope_path` prefix (for that model) and `SummaryMergerFlat.merge` synthesises them directly — no child `rollup_summaries` are read. _(tracer bullet)_
 

@@ -28,6 +28,7 @@ __all__ = [
     "SourceExcerpts",
     "Summary",
     "SummaryMerger",
+    "SummaryMergerFlat",
     "SummaryMergerReGround",
     "SummaryMergerStrict",
     "get_merger",
@@ -215,3 +216,32 @@ class SummaryMergerReGround:
 
 
 register_merger(SummaryMergerReGround())
+
+
+class SummaryMergerFlat:
+    """Re-summarises a scope's raw descendant session summaries directly, with no
+    intermediate child-rollup tier.
+
+    The merge mechanism matches strict (synthesise children, no excerpts); the
+    distinction is entirely in the driver: ``child_mode='raw_sessions'`` makes
+    it gather every descendant ``session_summaries`` row under the scope rather
+    than the child scopes' rollups. Simplest dependency graph, largest top-tier
+    prompts — the trade the G10 benchmark quantifies.
+    """
+
+    name = "flat"
+    child_mode: ChildMode = "raw_sessions"
+    wants_excerpts = False
+
+    def merge(
+        self,
+        engine: SummaryEngine,
+        model: str,
+        children: list[Summary],
+        excerpts: SourceExcerpts | None,
+    ) -> Summary:
+        prompt = _MERGE_PROMPT_HEADER + "\n" + _format_children(children)
+        return _parse_summary(engine.summarise(model, prompt))
+
+
+register_merger(SummaryMergerFlat())
