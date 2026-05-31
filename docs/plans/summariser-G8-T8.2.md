@@ -5,7 +5,7 @@
 > - **Prev:** [T8.1](./summariser-G8-T8.1.md)
 > - **Next:** [T8.3](./summariser-G8-T8.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Given a `scope_path`, `ScopeBreadcrumb` renders one crumb per ancestor segment in order, root first, leaf last.
 
