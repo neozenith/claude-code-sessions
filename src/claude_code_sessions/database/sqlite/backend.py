@@ -44,6 +44,7 @@ from claude_code_sessions.database.sqlite.pricing import (
     TOO_FAST_MIN_TOKENS,
 )
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH
+from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes
 
 
 class SQLiteDatabase:
@@ -557,6 +558,27 @@ class SQLiteDatabase:
             },
         }
 
+    def _valid_scopes(self) -> set[str]:
+        """Every scope_path that exists in the G1 hierarchy (from ingested
+        projects) or already carries a rollup row.
+
+        Used to tell an unknown scope (404) from a valid-but-unsummarised one
+        (``not_summarised``). The root ``''`` is always valid. A scope with a
+        rollup is valid even if its project can't be resolved on this machine
+        (e.g. a fixture or a benchmark-seeded row)."""
+        scopes: set[str] = {""}
+        try:
+            resolver = ProjectResolver(self.projects_path)
+        except (FileNotFoundError, ValueError):
+            resolver = None
+        if resolver is not None:
+            for info in resolver.resolve_all():
+                if info.project_path is not None:
+                    scopes.update(ancestor_scopes(resolver, info.project_id))
+        for row in self._q("SELECT DISTINCT scope_path FROM rollup_summaries"):
+            scopes.add(row["scope_path"])
+        return scopes
+
     def get_rollup_summary(
         self,
         scope_path: str,
@@ -573,6 +595,11 @@ class SQLiteDatabase:
         ``strategy``/``model`` narrow to a specific benchmark variant when given.
         Returns ``{"status": "summarised", ...}`` or ``{"status": "not_summarised"}``.
         """
+        if scope_path not in self._valid_scopes():
+            # Unknown scope — distinct from "valid but not yet summarised"
+            # (ADR7.1). Raised as LookupError → 404 by the global handler.
+            raise LookupError(f"Unknown scope: {scope_path!r}")
+
         clauses = ["scope_path = ?", "time_granularity = ?", "time_bucket = ?"]
         params: list[Any] = [scope_path, time_granularity, time_bucket]
         if strategy is not None:

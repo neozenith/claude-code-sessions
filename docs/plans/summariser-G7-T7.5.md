@@ -5,7 +5,7 @@
 > - **Prev:** [T7.4](./summariser-G7-T7.4.md)
 > - **Next:** [T7.6](./summariser-G7-T7.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/scope?...` returns `404` when `scope_path` does not exist in the G1 scope hierarchy at all (ADR7.1) — distinguishing "missing" from "not yet computed".
 

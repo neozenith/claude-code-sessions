@@ -158,3 +158,23 @@ def test_unsummarised_scope_returns_not_summarised_status(
     )
     assert resp.status_code == 200
     assert resp.json() == {"status": "not_summarised"}
+
+
+def test_unknown_scope_returns_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """A scope_path absent from the G1 hierarchy (and with no rollup) returns 404
+    — distinguishing 'missing' from 'not yet computed' (ADR7.1)."""
+    db = _fixture_db(tmp_path)  # an unresolvable project dir, no rollups
+    monkeypatch.setattr(app.state, "db", db)
+    client = TestClient(app)
+
+    resp = client.get(
+        "/api/summaries/scope",
+        params={
+            "path": "no-such-domain/nope",
+            "grain": "day",
+            "bucket": "2026-01-01",
+            "strategy": "strict",
+            "model": "model-a",
+        },
+    )
+    assert resp.status_code == 404
