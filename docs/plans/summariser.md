@@ -41,7 +41,7 @@
 ```
 /loop Read the gap analysis spec index at docs/plans/summariser.md.
 
-1. Read `.claude/skills/plan-gap/resources/tdd/tdd.md` and apply its red-green-refactor workflow.
+1. Read `/Users/joshpeak/play/claude-code-sessions/.claude/skills/plan-gap/resources/tdd/tdd.md` and apply its red-green-refactor workflow.
 2. In the index Progress table, find the lowest-numbered "Next eligible" ticket whose `Depends on`
    are all `[x]`. Open that ticket file. If none is eligible, write "spec complete" and exit the loop.
 3. RED — write the test named in the ticket's `Test` row. Run the suite. Confirm the new test fails.
@@ -64,7 +64,7 @@ The user must re-enter Phase 2 refinement to resolve the ADR before the loop can
 
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
-| [G1](./summariser-G1.md) | 4 | 0 | 4 | [T1.1](./summariser-G1-T1.1.md) | — |
+| [G1](./summariser-G1.md) | 4 | 1 | 3 | [T1.2](./summariser-G1-T1.2.md) | — |
 | [G2](./summariser-G2.md) | 7 | 0 | 7 | [T2.1](./summariser-G2-T2.1.md) | — |
 | [G3](./summariser-G3.md) | 7 | 0 | 7 | — | [T1.2](./summariser-G1-T1.2.md), [T2.1](./summariser-G2-T2.1.md) |
 | [G4](./summariser-G4.md) | 3 | 0 | 3 | — | [T3.1](./summariser-G3-T3.1.md), [T3.3](./summariser-G3-T3.3.md) |

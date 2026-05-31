@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T1.2](./summariser-G1-T1.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `scope_path_of(resolver, "-Users-testuser-play-foo")` returns `"play/foo"` — the `/`-joined home-relative path drawn from the project's authoritative `ProjectInfo.project_path` (`/Users/testuser/play/foo`), home being `/Users/testuser`. _(tracer bullet)_
 

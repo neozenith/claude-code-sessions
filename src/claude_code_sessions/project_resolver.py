@@ -297,3 +297,22 @@ def encode_path_to_project_id(path: Path | str) -> str:
     """
     path_str = str(Path(path).resolve())
     return path_str.replace("/", "-")
+
+
+def scope_path_of(resolver: ProjectResolver, project_id: str) -> str:
+    """Home-relative '/'-joined project path, e.g. 'clients/acme/app'.
+
+    Derived from the authoritative ``ProjectInfo.project_path`` (sourced from
+    ``sessions-index.json``), never from splitting the lossy dash-encoded id —
+    segment names legitimately contain dashes, so splitting would mis-bucket them.
+
+    Raises ``KeyError`` if the project cannot be resolved to a real path; a scope
+    is never fabricated from an unresolved id.
+    """
+    info = resolver.resolve(project_id)
+    if info.project_path is None:
+        raise KeyError(f"Cannot resolve scope path for unresolved project: {project_id!r}")
+    segments = [part for part in info.project_path.parts if part != "/"]
+    if len(segments) >= 2 and segments[0] in {"Users", "home"}:
+        segments = segments[2:]
+    return "/".join(segments)
