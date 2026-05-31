@@ -3,9 +3,12 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Type:** Change Request (midflight discovery)
 > - **Discovered in:** [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) — the decision gate could never be reached because the benchmark harness shipped unrunnable.
-> - **Status:** in progress — real source-grounded sweep running (2026-06-01). The earlier
->   "done" (2 models, hand-authored gold) was **rejected**: scoring a model against gold *I*
->   invented is circular and not real evidence. See [Correction](#correction-2026-06-01).
+> - **Status:** blocked on [CR2](./summariser-CR2.md) (2026-06-01). The real source-grounded sweep
+>   is built and smoke-proven, then **paused**: the summariser drives `muninn_chat` unbounded
+>   (2-arg, no grammar / `max_tokens`), so a thinking model runs away on large real sessions —
+>   CR2 dials in the base call, then CR1 resumes from its durable `session_summaries` checkpoint.
+>   The earlier "done" (2 models, hand-authored gold) was **rejected**: scoring a model against
+>   gold *I* invented is circular and not real evidence. See [Correction](#correction-2026-06-01).
 
 ## Why this CR exists
 
