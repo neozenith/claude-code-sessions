@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T2.6](./summariser-G2-T2.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `summarise_sessions(conn, engine, model, scope=None)` — the manual runner behind the CLI — iterates every session ingested to date (optionally filtered to a `scope_path` subtree via G1) and calls `summarise_session`, so a cron-triggered run summarises only the not-yet-current sessions for that model and requires no fresh ingest (ADR2.4 decoupling, ADR2.3 idempotency).
 

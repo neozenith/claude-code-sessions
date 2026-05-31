@@ -11,12 +11,15 @@ from __future__ import annotations
 
 import json
 import sqlite3
+from pathlib import Path
 
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import (
     MuninnSummaryEngine,
     summarise_session,
 )
+from claude_code_sessions.project_resolver import ProjectResolver
+from claude_code_sessions.summarise_cli import summarise_sessions
 
 
 class FakeEngine:
@@ -287,3 +290,54 @@ def test_muninn_engine_passes_model_name_to_chat() -> None:
 
     assert recorded == [("qwen2.5-3b-instruct", "THE_PROMPT_BODY")]
     assert "task_summary" in out
+
+
+def _write_project_index(projects_dir: Path, project_id: str, project_path: str) -> None:
+    d = projects_dir / project_id
+    d.mkdir(parents=True, exist_ok=True)
+    (d / "sessions-index.json").write_text(
+        json.dumps({"version": 1, "entries": [{"projectPath": project_path}]}),
+        encoding="utf-8",
+    )
+
+
+def _canned() -> FakeEngine:
+    return FakeEngine(
+        json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
+    )
+
+
+def test_summarise_sessions_runner_is_incremental_and_scope_filtered(tmp_path: Path) -> None:
+    """The manual runner summarises only not-yet-current sessions (ADR2.3) and,
+    given a scope, restricts work to that scope_path subtree (G1)."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme-app"
+    foo = "-Users-dev-play-foo"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    _write_project_index(projects, foo, "/Users/dev/play/foo")
+    resolver = ProjectResolver(projects)
+
+    for pid, sid in [(acme, "a1"), (acme, "a2"), (foo, "b1")]:
+        sf = _seed_source_file(conn, pid, sid)
+        _seed_event(conn, pid, sid, "human", f"work in {sid}", 1, sf)
+    conn.commit()
+
+    # Pre-summarise a1 so it is already current for model-a.
+    summarise_session(conn, acme, "a1", _canned(), "model-a")
+
+    # Incremental: the runner re-summarises only the not-yet-current sessions.
+    runner_engine = _canned()
+    summarise_sessions(conn, runner_engine, "model-a", resolver=resolver)
+    assert len(runner_engine.calls) == 2  # a2 and b1, not the already-current a1
+    assert conn.execute("SELECT COUNT(*) FROM session_summaries").fetchone()[0] == 3
+
+    # Scope-filtered: a fresh model under scope='clients' touches only that
+    # subtree — acme's two sessions, never foo's.
+    scoped_engine = _canned()
+    summarise_sessions(conn, scoped_engine, "model-b", scope="clients", resolver=resolver)
+    assert len(scoped_engine.calls) == 2
+    scoped_projects = conn.execute(
+        "SELECT DISTINCT project_id FROM session_summaries WHERE model = 'model-b'"
+    ).fetchall()
+    assert [r["project_id"] for r in scoped_projects] == [acme]
