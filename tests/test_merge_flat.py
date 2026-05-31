@@ -83,3 +83,57 @@ def test_flat_builds_from_raw_descendant_sessions(tmp_path: Path) -> None:
     assert clients["strategy"] == "flat"
     assert clients["child_count"] == 2  # two descendant sessions, not one child scope
     assert clients["task_summary"] == "FLAT_task"  # synthesised by the flat merger
+
+
+def _seed_project_sessions(
+    conn: sqlite3.Connection, projects_dir: Path, pid: str, project_path: str, session_ids: list[str]
+) -> None:
+    pdir = projects_dir / pid
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "sessions-index.json").write_text(
+        json.dumps({"version": 1, "entries": [{"projectPath": project_path}]}),
+        encoding="utf-8",
+    )
+    cur = conn.execute(
+        """INSERT INTO source_files
+               (filepath, mtime, size_bytes, line_count, last_ingested_at, project_id, session_id, file_type)
+           VALUES (?, 0, 0, 0, '2026-01-01T00:00:00Z', ?, ?, 'main_session')""",
+        (f"f-{pid}", pid, session_ids[0]),
+    )
+    sf = cur.lastrowid
+    for sid in session_ids:
+        conn.execute(
+            """INSERT INTO events
+                   (event_type, msg_kind, message_content, timestamp, session_id, project_id,
+                    source_file_id, line_number, raw_json)
+               VALUES ('user', 'human', ?, '2026-01-01T00:01:00Z', ?, ?, ?, 1, '')""",
+            (f"text {sid}", sid, pid, sf),
+        )
+        conn.execute(
+            """INSERT INTO session_summaries
+                   (project_id, session_id, model, content_hash, task_summary, patterns,
+                    decisions_values, generated_at, human_event_count)
+               VALUES (?, ?, 'model-a', ?, 'CT', 'CP', 'CD', '2026-01-01T00:00:00Z', 1)""",
+            (pid, sid, f"{pid}-{sid}"),
+        )
+
+
+def test_flat_child_count_is_descendant_sessions(tmp_path: Path) -> None:
+    """A flat ancestor's child_count is the total descendant sessions (3 here),
+    not the number of direct child scopes (2)."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    projects = tmp_path / "projects"
+    _seed_project_sessions(conn, projects, "-Users-dev-clients-acme", "/Users/dev/clients/acme", ["a1", "a2"])
+    _seed_project_sessions(conn, projects, "-Users-dev-clients-beta", "/Users/dev/clients/beta", ["b1"])
+    conn.commit()
+    resolver = ProjectResolver(projects)
+
+    engine = RecordingEngine(
+        json.dumps({"task_summary": "m", "patterns": "m", "decisions_values": "m"})
+    )
+    roll_up_scopes(conn, engine, "flat", "model-a", "day", resolver=resolver)
+
+    clients = conn.execute("SELECT * FROM rollup_summaries WHERE scope_path = 'clients'").fetchone()
+    assert clients["child_count"] == 3  # a1 + a2 + b1, not the 2 child scopes
