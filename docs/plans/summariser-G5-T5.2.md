@@ -5,7 +5,7 @@
 > - **Prev:** [T5.1](./summariser-G5-T5.1.md)
 > - **Next:** [T5.3](./summariser-G5-T5.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The excerpt selector returns at most K excerpts, chosen by a fixed key (recency then length), and the same inputs always yield the same selection (ADR5.1).
 

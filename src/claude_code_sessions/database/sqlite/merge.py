@@ -24,6 +24,7 @@ if TYPE_CHECKING:
 __all__ = [
     "MERGER_REGISTRY",
     "ChildMode",
+    "ExcerptCandidate",
     "SourceExcerpts",
     "Summary",
     "SummaryMerger",
@@ -31,6 +32,7 @@ __all__ = [
     "SummaryMergerStrict",
     "get_merger",
     "register_merger",
+    "select_excerpts",
 ]
 
 # How a merger sources the children of a scope:
@@ -53,6 +55,30 @@ class SourceExcerpts:
     """A bounded, deterministic sample of raw source text for re-grounding (G5)."""
 
     excerpts: list[str]
+
+
+@dataclass(frozen=True)
+class ExcerptCandidate:
+    """A raw source excerpt with its activity timestamp, before bounded selection."""
+
+    timestamp: str
+    text: str
+
+
+def select_excerpts(candidates: list[ExcerptCandidate], k: int) -> SourceExcerpts:
+    """The top-``k`` excerpts by a fixed total order: recency, then length, then
+    text (ADR5.1).
+
+    The fixed order makes selection deterministic — the same candidates always
+    yield the same sample — which is what keeps the G10 benchmark reproducible.
+    The ``k`` cap bounds prompt size at the largest top-tier scopes.
+    """
+    ordered = sorted(
+        candidates,
+        key=lambda c: (c.timestamp, len(c.text), c.text),
+        reverse=True,
+    )
+    return SourceExcerpts([c.text for c in ordered[:k]])
 
 
 class SummaryMerger(Protocol):

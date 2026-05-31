@@ -19,7 +19,12 @@ from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Protocol
 
-from claude_code_sessions.database.sqlite.merge import Summary, get_merger
+from claude_code_sessions.database.sqlite.merge import (
+    ExcerptCandidate,
+    Summary,
+    get_merger,
+    select_excerpts,
+)
 from claude_code_sessions.database.sqlite.time_buckets import bucket_expr
 from claude_code_sessions.project_resolver import (
     ProjectResolver,
@@ -203,6 +208,39 @@ def _parent_scope(scope: str) -> str:
     return scope.rsplit("/", 1)[0] if "/" in scope else ""
 
 
+# Cap on re-grounding source excerpts per merge (ADR5.1) — bounds prompt size
+# at the largest top-tier scopes.
+_EXCERPT_K = 20
+
+
+def _gather_excerpt_candidates(
+    conn: sqlite3.Connection,
+    resolver: ProjectResolver,
+    scope: str,
+    granularity: str,
+    bucket: str,
+) -> list[ExcerptCandidate]:
+    """Human-prompt excerpts under ``scope``'s subtree within ``bucket``.
+
+    A project belongs to ``scope`` when ``scope`` is in its ancestor chain
+    (so the root ``''`` sees every prompt). Used only by ``wants_excerpts``
+    mergers (re-grounding); ``select_excerpts`` then bounds the sample.
+    """
+    grain_expr = bucket_expr(granularity, "timestamp")
+    rows = conn.execute(
+        f"""SELECT project_id, timestamp, message_content
+            FROM events
+            WHERE msg_kind = 'human' AND message_content IS NOT NULL
+              AND timestamp IS NOT NULL AND {grain_expr} = ?""",
+        (bucket,),
+    ).fetchall()
+    candidates: list[ExcerptCandidate] = []
+    for row in rows:
+        if scope in ancestor_scopes(resolver, row["project_id"]):
+            candidates.append(ExcerptCandidate(str(row["timestamp"]), str(row["message_content"])))
+    return candidates
+
+
 def _scope_in_band(scope: str, level: str, leaf_scopes: set[str]) -> bool:
     """Whether ``scope`` belongs to the requested ``level`` band (ADR3.4).
 
@@ -331,7 +369,17 @@ def roll_up_scopes(
             if existing is not None and existing["source_hash"] == source_hash:
                 continue
 
-            merged = merger.merge(engine, model, children, None)
+            # Re-grounding mergers (wants_excerpts) get a bounded source sample
+            # for this scope+bucket; summary-only mergers get None.
+            excerpts = (
+                select_excerpts(
+                    _gather_excerpt_candidates(conn, resolver, scope, granularity, bucket),
+                    _EXCERPT_K,
+                )
+                if merger.wants_excerpts
+                else None
+            )
+            merged = merger.merge(engine, model, children, excerpts)
             conn.execute(
                 """INSERT OR REPLACE INTO rollup_summaries
                        (strategy, model, scope_path, scope_depth,
