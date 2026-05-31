@@ -303,9 +303,13 @@ class WavePipeline:
             and not _flag("CLAUDE_SESSIONS_DISABLE_KG")
             and not self.stop_event.is_set()
         ):
-            from claude_code_sessions.database.sqlite.kg import sync_kg
-
-            sync_kg(self.cache.conn)
+            # Runs on a DEDICATED connection (see CacheManager.run_kg_pipeline):
+            # KG issues schema-mutating DDL (DROP temp.entities, rebuild
+            # nodes/edges) that would raise SQLITE_LOCKED if it shared
+            # ``self.cache.conn`` with the request threads polling
+            # /api/kg/cache-stats. Chunks + embeddings were already committed
+            # above, so the separate connection sees them under WAL.
+            self.cache.run_kg_pipeline()
         elif embeddings_disabled:
             log.info("downstream: embeddings disabled — skipping embed + KG (KG depends on them)")
 

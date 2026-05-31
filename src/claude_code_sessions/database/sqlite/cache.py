@@ -26,6 +26,7 @@ from claude_code_sessions.database.sqlite.embeddings import (
     sync_embeddings,
 )
 from claude_code_sessions.database.sqlite.kg import sync_kg
+from claude_code_sessions.database.sqlite.kg.pipeline import KGSyncResult
 from claude_code_sessions.database.sqlite.pricing import (
     compute_event_costs,
     context_ratio,
@@ -94,6 +95,12 @@ class CacheManager:
     def __init__(self, db_path: Path = CACHE_DB_PATH) -> None:
         self.db_path = db_path
         self._conn: sqlite3.Connection | None = None
+        # Dedicated connection for the knowledge-graph pipeline. KG runs in
+        # the indexer thread and issues schema-mutating DDL (DROP temp tables,
+        # rebuild nodes/edges); keeping it off ``self._conn`` stops those
+        # DROPs from colliding with reader cursors on the shared connection
+        # (SQLITE_LOCKED). Lazily created in ``run_kg_pipeline``.
+        self._kg_conn: sqlite3.Connection | None = None
         # Cooperative cancellation. ``IndexerService`` calls
         # ``request_stop()`` to flip this; the wave loop (Phase C)
         # checks ``is_stop_requested()`` between waves and at file
@@ -135,6 +142,9 @@ class CacheManager:
         if self._conn:
             self._conn.close()
             self._conn = None
+        if self._kg_conn:
+            self._kg_conn.close()
+            self._kg_conn = None
 
     # ------------------------------------------------------------------
     # Cooperative cancellation
@@ -1100,6 +1110,58 @@ class CacheManager:
             "kg": {},
         }
 
+    def _open_kg_connection(self) -> sqlite3.Connection:
+        """Open a dedicated connection for the knowledge-graph pipeline.
+
+        KG work — entity resolution in particular — issues schema-mutating
+        statements: ``DROP TABLE temp.entities``, ``DROP TABLE _match_edges``,
+        and wholesale rebuilds of ``nodes``/``edges``. SQLite refuses a schema
+        change while *any* statement on the **same** connection still holds a
+        read cursor and raises ``SQLITE_LOCKED`` ("database table is locked")
+        *immediately* — ``busy_timeout`` does not cover this case (it only
+        retries cross-connection ``SQLITE_BUSY``).
+
+        Because the web app polls ``/api/kg/cache-stats`` ~1×/s and those
+        ``COUNT(*)`` reads run on ``self.conn``, running KG on ``self.conn``
+        too means a reader cursor open at the wrong instant turns the next
+        ``DROP`` into a hard crash of the indexer thread. A separate
+        connection removes the shared-connection collision entirely; WAL plus
+        ``busy_timeout`` then coordinate the two connections safely.
+
+        The returned connection has the sqlite-muninn extension loaded and the
+        embedding GGUF registered in its (per-connection) ``temp.muninn_models``
+        — ``entity_embeddings`` calls ``muninn_embed()`` and that state is
+        per-connection.
+        """
+        conn = sqlite3.connect(str(self.db_path), check_same_thread=False)
+        conn.row_factory = sqlite3.Row
+        self._apply_connection_pragmas(conn)
+        # Load sqlite-muninn (HNSW + graph_* primitives).
+        conn.enable_load_extension(True)
+        sqlite_muninn.load(conn)
+        conn.enable_load_extension(False)
+        # Register the embedding model on this connection (per-connection state).
+        setup_embedding_runtime(conn, ensure_model_downloaded())
+        return conn
+
+    def run_kg_pipeline(self) -> KGSyncResult:
+        """Run the full KG pipeline on a dedicated connection, inline.
+
+        Called by the wave pipeline (in the indexer thread) once chunks and
+        embeddings have been committed on ``self.conn``. The KG connection is
+        lazily created and **reused** across waves so the GGUF model is loaded
+        once rather than per wave. Reuse is safe because only the indexer
+        thread ever touches it.
+
+        Keeping KG off ``self.conn`` is what prevents the ``SQLITE_LOCKED``
+        crash described in ``_open_kg_connection``: reader threads serving
+        ``/api/kg/cache-stats`` keep using ``self.conn`` while KG mutates its
+        own connection.
+        """
+        if self._kg_conn is None:
+            self._kg_conn = self._open_kg_connection()
+        return sync_kg(self._kg_conn)
+
     def _spawn_kg_thread(self) -> None:
         """Run sync_kg() in a background daemon thread.
 
@@ -1122,25 +1184,10 @@ class CacheManager:
             return
         self._kg_thread_started = True
 
-        db_path = self.db_path
-
         def _runner() -> None:
             conn: sqlite3.Connection | None = None
             try:
-                conn = sqlite3.connect(str(db_path), check_same_thread=False)
-                conn.row_factory = sqlite3.Row
-                self._apply_connection_pragmas(conn)
-                # Load sqlite-muninn (HNSW + graph_* primitives).
-                conn.enable_load_extension(True)
-                sqlite_muninn.load(conn)
-                conn.enable_load_extension(False)
-
-                # Register the embedding model on this connection too —
-                # entity_embeddings calls muninn_embed() and that lives in
-                # ``temp.muninn_models`` per-connection.
-                model_path = ensure_model_downloaded()
-                setup_embedding_runtime(conn, model_path)
-
+                conn = self._open_kg_connection()
                 t0 = time.monotonic()
                 result = sync_kg(conn)
                 log.info(
