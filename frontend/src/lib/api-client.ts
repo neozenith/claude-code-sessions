@@ -290,6 +290,23 @@ export class ApiClient {
     return this.get('/summaries/scope/children', params)
   }
 
+  /** The 3-lens summary for a session under a model (G7). */
+  async getSessionSummary(
+    projectId: string,
+    sessionId: string,
+    params: { model: string },
+  ): Promise<ApiResult<SummaryResponse>> {
+    return this.get(
+      `/summaries/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}`,
+      params,
+    )
+  }
+
+  /** Distinct (strategy, model) variants present in the roll-up table (G7). */
+  async listSummaryVariants(): Promise<ApiResult<SummaryVariant[]>> {
+    return this.get('/summaries/variants')
+  }
+
   /** Per-turn idle/active/tps/too_fast + a session summary. */
   async getSessionMetrics(
     projectId: string,

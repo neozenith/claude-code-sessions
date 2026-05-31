@@ -5,7 +5,7 @@
 > - **Prev:** [T9.4](./summariser-G9-T9.4.md)
 > - **Next:** [T9.6](./summariser-G9-T9.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 SessionDetail renders a summary card showing the session's three summary lenses, sourced from the G7 session-summary API — so the evaluator reads the summary next to the prompts that produced it.
 

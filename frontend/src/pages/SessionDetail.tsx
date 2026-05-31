@@ -11,6 +11,9 @@ import type {
   BaseMessageKind,
   SessionMetrics,
   SessionMetricsTurn,
+  SummaryLenses,
+  SummaryResponse,
+  SummaryVariant,
 } from '@/lib/api-client'
 import { MSG_KIND_OPTIONS, baseKind, matchesKind } from '@/lib/message-kinds'
 import {
@@ -558,6 +561,22 @@ export default function SessionDetail() {
     return `/sessions/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/metrics`
   }, [projectId, sessionId])
   const { data: metrics } = useApi<SessionMetrics>(metricsUrl)
+
+  // Session 3-lens summary (G7/G9). The eval picker (G8) settles the model; until
+  // then we read the first available variant's model so the evaluator can see the
+  // summary next to the prompts. With no summaries yet, the card shows an empty state.
+  const { data: summaryVariants } = useApi<SummaryVariant[]>('/summaries/variants')
+  const summaryModel = summaryVariants?.[0]?.model
+  const sessionSummaryUrl = useMemo(() => {
+    if (!projectId || !sessionId || !summaryModel) return null
+    return (
+      `/summaries/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}` +
+      `?model=${encodeURIComponent(summaryModel)}`
+    )
+  }, [projectId, sessionId, summaryModel])
+  const { data: sessionSummary } = useApi<SummaryResponse>(sessionSummaryUrl)
+  const summaryLenses: SummaryLenses | null =
+    sessionSummary?.status === 'summarised' ? sessionSummary.lenses : null
   const turnsByUuid = useMemo(() => {
     const map = new Map<string, SessionMetricsTurn>()
     metrics?.turns.forEach((t) => {
@@ -669,6 +688,29 @@ export default function SessionDetail() {
           <span className="font-mono text-sm">{sessionId}</span>
         </p>
       </div>
+
+      {/* Session 3-lens summary (G9 / ADR9.2) — read the summary next to the prompts. */}
+      <Card data-testid="session-summary-card">
+        <CardHeader>
+          <CardTitle className="text-base">Session summary</CardTitle>
+        </CardHeader>
+        <CardContent className="grid gap-4 md:grid-cols-3">
+          {(
+            [
+              { label: 'Task & ubiquitous language', key: 'task_summary', testid: 'session-lens-task' },
+              { label: 'Architectural patterns', key: 'patterns', testid: 'session-lens-patterns' },
+              { label: 'Decisions & values', key: 'decisions_values', testid: 'session-lens-decisions' },
+            ] as { label: string; key: keyof SummaryLenses; testid: string }[]
+          ).map((lens) => (
+            <div key={lens.key} data-testid={lens.testid}>
+              <p className="text-xs font-semibold uppercase text-muted-foreground">{lens.label}</p>
+              <p className="mt-1 whitespace-pre-wrap text-sm">
+                {summaryLenses ? summaryLenses[lens.key] : 'Not yet summarised for this session.'}
+              </p>
+            </div>
+          ))}
+        </CardContent>
+      </Card>
 
       {/* Summary Stats */}
       {summaryStats && (

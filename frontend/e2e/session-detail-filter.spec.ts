@@ -84,6 +84,16 @@ test.describe('Session Detail - Message Kind Filter', () => {
     await expect(options.first()).toHaveText('All messages')
   })
 
+  test('session detail shows the 3-lens summary card', async ({ page }) => {
+    await navigateToSession(page, TEST_SESSION_ID)
+
+    await expect(page.getByTestId('session-summary-card')).toBeVisible()
+    // All three lens sections render (content or empty-state placeholder).
+    await expect(page.getByTestId('session-lens-task')).toBeVisible()
+    await expect(page.getByTestId('session-lens-patterns')).toBeVisible()
+    await expect(page.getByTestId('session-lens-decisions')).toBeVisible()
+  })
+
   test('selecting subagent-thinking filters and round-trips through ?msg=', async ({ page }) => {
     await navigateToSession(page, TEST_SESSION_ID)
 
