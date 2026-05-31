@@ -84,6 +84,23 @@ test.describe('Session Detail - Message Kind Filter', () => {
     await expect(options.first()).toHaveText('All messages')
   })
 
+  test('selecting subagent-thinking filters and round-trips through ?msg=', async ({ page }) => {
+    await navigateToSession(page, TEST_SESSION_ID)
+
+    const dropdown = page.getByTestId('msg-kind-filter')
+    await dropdown.selectOption('subagent-thinking')
+    await page.waitForTimeout(300)
+
+    // The full kind value (no prefix stripping) lands in the URL...
+    expect(page.url()).toContain('msg=subagent-thinking')
+    const header = page.locator('h3').filter({ hasText: 'Event Timeline' })
+    expect(await header.textContent()).toContain('events filtered')
+
+    // ...and reloading with that param re-reflects it in the dropdown.
+    await navigateToSession(page, TEST_SESSION_ID, '?msg=subagent-thinking')
+    await expect(page.getByTestId('msg-kind-filter')).toHaveValue('subagent-thinking')
+  })
+
   test('selecting "human" updates URL to ?msg=human and filters events', async ({ page }) => {
     await navigateToSession(page, TEST_SESSION_ID)
 

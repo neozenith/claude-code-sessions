@@ -5,7 +5,7 @@
 > - **Prev:** [T9.1](./summariser-G9-T9.1.md)
 > - **Next:** [T9.3](./summariser-G9-T9.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Choosing a `subagent-*` option sets `?msg=<full-kind>` and the timeline keeps only events whose `message_kind` equals that full value (no prefix stripping).
 
