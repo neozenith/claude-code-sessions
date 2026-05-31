@@ -631,6 +631,33 @@ class SQLiteDatabase:
             },
         }
 
+    def list_scope_children(
+        self, scope_path: str, *, days: int | None = None, project: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Immediate child scopes of ``scope_path`` (next trie level), derived from
+        the ingested projects' G1 ancestor chains and honoring days/project (G7).
+        """
+        rows = self._q(
+            f"""SELECT DISTINCT project_id FROM events e
+                WHERE 1=1 {days_clause(days)} {project_clause(project)}
+                  {domain_clause(self.projects_path)}"""
+        )
+        try:
+            resolver = ProjectResolver(self.projects_path)
+        except (FileNotFoundError, ValueError):
+            return []
+        children: set[str] = set()
+        for row in rows:
+            try:
+                chain = ancestor_scopes(resolver, row["project_id"])
+            except KeyError:
+                continue  # unresolved project — can't place it in the trie
+            for sc in chain:
+                parent = sc.rsplit("/", 1)[0] if "/" in sc else ""
+                if sc and parent == scope_path:
+                    children.add(sc)
+        return [{"scope_path": c, "scope_depth": len(c.split("/"))} for c in sorted(children)]
+
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.
 

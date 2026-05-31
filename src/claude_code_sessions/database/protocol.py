@@ -141,6 +141,14 @@ class Database(Protocol):
         ``not_summarised``)."""
         ...
 
+    def list_scope_children(
+        self, scope_path: str, *, days: int | None = None, project: str | None = None
+    ) -> list[dict[str, Any]]:
+        """The immediate child scopes of ``scope_path`` (next trie level only),
+        derived from ingested projects and honoring the global days/project
+        filters (G7)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

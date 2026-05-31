@@ -275,6 +275,16 @@ async def get_scope_summary(
     )
 
 
+@app.get("/api/summaries/scope/children")
+async def list_scope_children(
+    path: str,
+    days: int | None = None,
+    project: str | None = None,
+) -> list[dict[str, Any]]:
+    """Immediate child scopes of ``path`` (next trie level), honoring days/project."""
+    return get_db().list_scope_children(path, days=days, project=project)
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

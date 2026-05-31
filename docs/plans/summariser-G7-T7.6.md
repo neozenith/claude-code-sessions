@@ -5,7 +5,7 @@
 > - **Prev:** [T7.5](./summariser-G7-T7.5.md)
 > - **Next:** [T7.7](./summariser-G7-T7.7.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/scope/children?path=&days=&project=` returns `200` with the immediate child scopes of `scope_path` (next trie level only), honoring global `days`/`project` filters.
 

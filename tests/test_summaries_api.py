@@ -178,3 +178,56 @@ def test_unknown_scope_returns_404(tmp_path: Path, monkeypatch: pytest.MonkeyPat
         },
     )
     assert resp.status_code == 404
+
+
+def _add_project_with_event(db: SQLiteDatabase, tmp_path: Path, pid: str, project_path: str) -> None:
+    pdir = tmp_path / "projects" / pid
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "sessions-index.json").write_text(
+        json.dumps({"version": 1, "entries": [{"projectPath": project_path}]}),
+        encoding="utf-8",
+    )
+    conn = db.cache.conn
+    cur = conn.execute(
+        """INSERT INTO source_files
+               (filepath, mtime, size_bytes, line_count, last_ingested_at, project_id, session_id, file_type)
+           VALUES (?, 0, 0, 0, '2026-01-01T00:00:00Z', ?, 's', 'main_session')""",
+        (f"f-{pid}", pid),
+    )
+    sf = cur.lastrowid
+    conn.execute(
+        """INSERT INTO events
+               (event_type, msg_kind, message_content, timestamp, session_id, project_id,
+                source_file_id, line_number, raw_json)
+           VALUES ('user', 'human', 't', '2026-01-01T00:01:00Z', 's', ?, ?, 1, '')""",
+        (pid, sf),
+    )
+    conn.commit()
+
+
+def test_scope_children_returns_next_trie_level(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    """Children listing returns only the immediate next trie level, and a project
+    filter narrows the set."""
+    projects = tmp_path / "projects"
+    projects.mkdir(parents=True, exist_ok=True)
+    db = SQLiteDatabase(
+        local_projects_path=projects, home_projects_path=projects, db_path=tmp_path / "cache.db"
+    )
+    _add_project_with_event(db, tmp_path, "-Users-dev-clients-acme-app", "/Users/dev/clients/acme/app")
+    _add_project_with_event(db, tmp_path, "-Users-dev-clients-beta", "/Users/dev/clients/beta")
+    _add_project_with_event(db, tmp_path, "-Users-dev-play-foo", "/Users/dev/play/foo")
+    monkeypatch.setattr(app.state, "db", db)
+    client = TestClient(app)
+
+    # Immediate children of 'clients' — not the depth-3 grandchild clients/acme/app.
+    resp = client.get("/api/summaries/scope/children", params={"path": "clients"})
+    assert resp.status_code == 200
+    assert {c["scope_path"] for c in resp.json()} == {"clients/acme", "clients/beta"}
+
+    # Project filter narrows the root's children to just that project's domain.
+    resp2 = client.get(
+        "/api/summaries/scope/children",
+        params={"path": "", "project": "-Users-dev-play-foo"},
+    )
+    assert resp2.status_code == 200
+    assert {c["scope_path"] for c in resp2.json()} == {"play"}
