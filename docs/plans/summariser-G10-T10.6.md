@@ -5,7 +5,7 @@
 > - **Prev:** [T10.5](./summariser-G10-T10.5.md)
 > - **Next:** [T10.7](./summariser-G10-T10.7.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `report` reads all result rows in `tmp/summary_bench/` and writes `docs/plans/summariser-G10-REPORT.md` listing permutations ranked by ROUGE-L/BLEU/F1, with the top survivors marked for the human gate and a PROCEED/ABANDON recommendation stub.
 

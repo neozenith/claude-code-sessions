@@ -32,6 +32,7 @@ log = logging.getLogger("summary_bench")
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RESULTS_DIR = PROJECT_ROOT / "tmp" / "summary_bench"
 DEFAULT_REFERENCES_DIR = PROJECT_ROOT / "data" / "summary_bench" / "references"
+DEFAULT_REPORT_PATH = PROJECT_ROOT / "docs" / "plans" / "summariser-G10-REPORT.md"
 
 # The three merge strategies (G4/G5/G6), each a registry flag.
 STRATEGIES: tuple[str, ...] = ("strict", "reground", "flat")
@@ -199,6 +200,63 @@ def cmd_run(args: argparse.Namespace) -> None:
     save_result(args.results_dir, args.id, record)
 
 
+# ---------------------------------------------------------------------------
+# Report (rank permutations by score)
+# ---------------------------------------------------------------------------
+
+
+def _combined_score(record: dict[str, Any]) -> float:
+    """Mean of the three reference metrics — the coarse rank key (ADR10.1)."""
+    return (float(record.get("rouge_l", 0.0)) + float(record.get("bleu", 0.0)) + float(record.get("f1", 0.0))) / 3
+
+
+def rank_results(results_dir: Path) -> list[dict[str, Any]]:
+    """All result rows, ranked highest-combined-score first (ties by id)."""
+    rows: list[dict[str, Any]] = []
+    for result_file in sorted(results_dir.glob("*.json")):
+        record = json.loads(result_file.read_text(encoding="utf-8"))
+        record["combined"] = _combined_score(record)
+        rows.append(record)
+    rows.sort(key=lambda r: (-r["combined"], r["permutation_id"]))
+    return rows
+
+
+def cmd_report(args: argparse.Namespace) -> None:
+    """Write the ranked benchmark report — the input to the T10.7 human gate."""
+    ranked = rank_results(args.results_dir)
+    lines = [
+        "# G10 Benchmark Report",
+        "",
+        "Permutations ranked by the automated screen — mean(ROUGE-L, BLEU, F1). These",
+        "metrics *rank and screen* only; the binding verdict is the human taste review",
+        "of the top survivors through the G8 explorer / G9 SessionDetail UI (ADR10.1).",
+        "",
+        "| Rank | Permutation | ROUGE-L | BLEU | F1 | Combined |",
+        "|------|-------------|--------:|-----:|---:|---------:|",
+    ]
+    for i, r in enumerate(ranked, start=1):
+        marker = "  — review candidate" if i == 1 else ""
+        lines.append(
+            f"| {i} | `{r['permutation_id']}`{marker} | "
+            f"{float(r.get('rouge_l', 0.0)):.3f} | {float(r.get('bleu', 0.0)):.3f} | "
+            f"{float(r.get('f1', 0.0)):.3f} | {r['combined']:.3f} |"
+        )
+    top = ranked[0]["permutation_id"] if ranked else "(no results yet)"
+    lines += [
+        "",
+        "## Recommendation",
+        "",
+        f"Top automated candidate: `{top}`.",
+        "",
+        "<!-- PROCEED/ABANDON pending the binding human taste review (T10.7) of the top "
+        "survivors via the G8/G9 UI. The reference metrics above do not decide. -->",
+        "",
+    ]
+    args.output.parent.mkdir(parents=True, exist_ok=True)
+    args.output.write_text("\n".join(lines), encoding="utf-8")
+    log.info("wrote benchmark report: %s (%d permutations)", args.output, len(ranked))
+
+
 def _help(parser: argparse.ArgumentParser):  # type: ignore[no-untyped-def]
     def _print_help(_: argparse.Namespace) -> None:
         parser.print_help()
@@ -229,6 +287,11 @@ def build_parser() -> argparse.ArgumentParser:
     run.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     run.add_argument("--references-dir", type=Path, default=DEFAULT_REFERENCES_DIR)
     run.set_defaults(func=cmd_run)
+
+    report = sub.add_parser("report", help="Rank result rows and write the benchmark report")
+    report.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    report.add_argument("--output", type=Path, default=DEFAULT_REPORT_PATH)
+    report.set_defaults(func=cmd_report)
     return parser
 
 

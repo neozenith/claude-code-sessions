@@ -139,3 +139,33 @@ def test_no_gguf_cells_are_logged_not_dropped(tmp_path: Path, monkeypatch, capsy
     kimi9b = [p for p in summary_bench.all_permutations(results) if p["family"] == "kimi" and p["size"] == "9b"]
     assert len(kimi9b) == 3
     assert all(p["available"] is False for p in kimi9b)
+
+
+def test_report_ranks_by_score(tmp_path: Path) -> None:
+    """`report` orders permutations highest-combined-score first and marks the
+    top cell as the human-review candidate."""
+    import json
+
+    results = tmp_path / "results"
+    results.mkdir()
+
+    def _write(pid: str, r: float, b: float, f: float) -> None:
+        (results / f"{pid}.json").write_text(
+            json.dumps({"permutation_id": pid, "rouge_l": r, "bleu": b, "f1": f}),
+            encoding="utf-8",
+        )
+
+    _write("strict_gemma_2b", 0.9, 0.9, 0.9)  # highest
+    _write("flat_qwen_4b", 0.5, 0.5, 0.5)
+    _write("reground_kimi_9b", 0.1, 0.1, 0.1)  # lowest
+
+    out = tmp_path / "report.md"
+    summary_bench.main(["report", "--results-dir", str(results), "--output", str(out)])
+    text = out.read_text(encoding="utf-8")
+
+    # Ranked highest-first.
+    assert text.index("strict_gemma_2b") < text.index("flat_qwen_4b") < text.index("reground_kimi_9b")
+
+    # Top cell is named as the review candidate.
+    candidate_line = next(ln for ln in text.splitlines() if "review candidate" in ln)
+    assert "strict_gemma_2b" in candidate_line
