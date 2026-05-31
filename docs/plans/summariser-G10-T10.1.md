@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T10.2](./summariser-G10-T10.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `score_summary(candidate, reference)` returns a dict of deterministic `rouge_l`, `bleu`, and `f1` floats in [0,1] for a fixed candidate/reference pair. _(tracer bullet)_
 

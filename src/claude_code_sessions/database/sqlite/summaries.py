@@ -14,9 +14,11 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import sqlite3
-from collections import defaultdict
+from collections import Counter, defaultdict
 from datetime import UTC, datetime
+from math import exp, log
 from typing import Protocol
 
 from claude_code_sessions.database.sqlite.merge import (
@@ -37,6 +39,7 @@ __all__ = [
     "MuninnSummaryEngine",
     "SummaryEngine",
     "roll_up_scopes",
+    "score_summary",
     "summarise_session",
 ]
 
@@ -446,3 +449,83 @@ def roll_up_scopes(
                 written += 1
     conn.commit()
     return written
+
+
+# ---------------------------------------------------------------------------
+# Benchmark reference scorer (G10) — deterministic, fully-local ROUGE-L/BLEU/F1
+# ---------------------------------------------------------------------------
+
+
+def _tokenize(text: str) -> list[str]:
+    """Lower-case word tokens — the unit all three metrics score over."""
+    return re.findall(r"\w+", text.lower())
+
+
+def _lcs_length(a: list[str], b: list[str]) -> int:
+    """Length of the longest common subsequence of two token lists."""
+    prev = [0] * (len(b) + 1)
+    for token_a in a:
+        curr = [0] * (len(b) + 1)
+        for j, token_b in enumerate(b, start=1):
+            curr[j] = prev[j - 1] + 1 if token_a == token_b else max(prev[j], curr[j - 1])
+        prev = curr
+    return prev[len(b)]
+
+
+def _f_measure(precision: float, recall: float) -> float:
+    return 2 * precision * recall / (precision + recall) if (precision + recall) > 0 else 0.0
+
+
+def _rouge_l(cand: list[str], ref: list[str]) -> float:
+    if not cand or not ref:
+        return 0.0
+    lcs = _lcs_length(cand, ref)
+    return _f_measure(lcs / len(cand), lcs / len(ref))
+
+
+def _token_f1(cand: list[str], ref: list[str]) -> float:
+    if not cand or not ref:
+        return 0.0
+    cand_counts, ref_counts = Counter(cand), Counter(ref)
+    overlap = sum((cand_counts & ref_counts).values())
+    return _f_measure(overlap / len(cand), overlap / len(ref))
+
+
+def _ngram_counts(tokens: list[str], n: int) -> Counter[tuple[str, ...]]:
+    return Counter(tuple(tokens[i : i + n]) for i in range(len(tokens) - n + 1))
+
+
+def _bleu(cand: list[str], ref: list[str], max_n: int = 4) -> float:
+    """BLEU with the geometric mean of modified n-gram precisions + brevity
+    penalty. No smoothing: a zero at any order yields 0 (so disjoint → 0)."""
+    if not cand or not ref:
+        return 0.0
+    orders = min(max_n, len(cand))
+    log_precisions: list[float] = []
+    for n in range(1, orders + 1):
+        cand_ngrams = _ngram_counts(cand, n)
+        ref_ngrams = _ngram_counts(ref, n)
+        total = sum(cand_ngrams.values())
+        overlap = sum((cand_ngrams & ref_ngrams).values())
+        if overlap == 0 or total == 0:
+            return 0.0
+        log_precisions.append(log(overlap / total))
+    geo_mean = exp(sum(log_precisions) / len(log_precisions))
+    brevity = 1.0 if len(cand) >= len(ref) else exp(1 - len(ref) / len(cand))
+    return brevity * geo_mean
+
+
+def score_summary(candidate: str, reference: str) -> dict[str, float]:
+    """Deterministic ROUGE-L / BLEU / F1 of ``candidate`` against ``reference``.
+
+    All three are token-overlap measures in [0, 1] — identical text scores 1.0,
+    fully disjoint text scores 0.0. The G10 sweep's automated screen (ADR10.1):
+    reproducible and fully local, never a pass/fail verdict (the human gate is).
+    """
+    cand_tokens = _tokenize(candidate)
+    ref_tokens = _tokenize(reference)
+    return {
+        "rouge_l": _rouge_l(cand_tokens, ref_tokens),
+        "bleu": _bleu(cand_tokens, ref_tokens),
+        "f1": _token_f1(cand_tokens, ref_tokens),
+    }
