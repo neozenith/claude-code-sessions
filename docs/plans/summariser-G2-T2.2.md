@@ -5,7 +5,7 @@
 > - **Prev:** [T2.1](./summariser-G2-T2.1.md)
 > - **Next:** [T2.3](./summariser-G2-T2.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The text handed to the engine is exactly the concatenation of `msg_kind='human'` events, excluding `subagent-*`, `assistant`, `tool`, `meta`, and `user_text` (ADR2.2).
 

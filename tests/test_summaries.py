@@ -66,6 +66,36 @@ def _seed_human_events(
     conn.commit()
 
 
+def _seed_event(
+    conn: sqlite3.Connection,
+    project_id: str,
+    session_id: str,
+    msg_kind: str,
+    content: str,
+    line_number: int,
+    source_file_id: int,
+) -> None:
+    conn.execute(
+        """INSERT INTO events
+               (event_type, msg_kind, message_content, timestamp,
+                session_id, project_id, source_file_id, line_number, raw_json)
+           VALUES ('user', ?, ?, ?, ?, ?, ?, ?, '')""",
+        (msg_kind, content, f"2026-01-01T00:0{line_number}:00Z", session_id,
+         project_id, source_file_id, line_number),
+    )
+
+
+def _seed_source_file(conn: sqlite3.Connection, project_id: str, session_id: str) -> int:
+    cur = conn.execute(
+        """INSERT INTO source_files
+               (filepath, mtime, size_bytes, line_count, last_ingested_at,
+                project_id, session_id, file_type)
+           VALUES (?, 0, 0, 0, '2026-01-01T00:00:00Z', ?, ?, 'main_session')""",
+        (f"/fixture/{session_id}.jsonl", project_id, session_id),
+    )
+    return int(cur.lastrowid or 0)
+
+
 def test_summarise_session_writes_one_three_lens_row() -> None:
     """A developer's typed prompts become one stored 3-lens session summary."""
     conn = _make_cache()
@@ -99,3 +129,45 @@ def test_summarise_session_writes_one_three_lens_row() -> None:
     assert row["model"] == "test-model"
     assert row["human_event_count"] == 2
     assert len(engine.calls) == 1
+
+
+def test_only_human_kind_text_is_summarised() -> None:
+    """Only ``msg_kind='human'`` text reaches the engine (ADR2.2).
+
+    A session mixes human prompts with the excluded kinds (``user_text``,
+    ``assistant``, ``tool``, ``subagent-*``). The prompt the engine receives
+    must carry the human markers and none of the excluded-kind markers.
+    """
+    conn = _make_cache()
+    project_id = "-Users-dev-play-foo"
+    session_id = "sess-mixed"
+    sf = _seed_source_file(conn, project_id, session_id)
+    _seed_event(conn, project_id, session_id, "human", "HUMAN_ONE wants a summariser", 1, sf)
+    _seed_event(conn, project_id, session_id, "user_text", "USERTEXT_pasted_log_noise", 2, sf)
+    _seed_event(conn, project_id, session_id, "assistant", "ASSISTANT_reply_text", 3, sf)
+    _seed_event(conn, project_id, session_id, "tool", "TOOL_result_blob", 4, sf)
+    _seed_event(conn, project_id, session_id, "subagent-human", "SUBAGENT_sidechain_text", 5, sf)
+    _seed_event(conn, project_id, session_id, "human", "HUMAN_TWO refine the engine", 6, sf)
+    conn.commit()
+
+    engine = FakeEngine(
+        json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
+    )
+
+    summarise_session(conn, project_id, session_id, engine, "test-model")
+
+    assert len(engine.calls) == 1
+    prompt = engine.calls[0][1]
+    assert "HUMAN_ONE" in prompt
+    assert "HUMAN_TWO" in prompt
+    excluded_markers = (
+        "USERTEXT_pasted_log_noise",
+        "ASSISTANT_reply_text",
+        "TOOL_result_blob",
+        "SUBAGENT_sidechain_text",
+    )
+    for excluded in excluded_markers:
+        assert excluded not in prompt
+
+    row = conn.execute("SELECT human_event_count FROM session_summaries").fetchone()
+    assert row["human_event_count"] == 2
