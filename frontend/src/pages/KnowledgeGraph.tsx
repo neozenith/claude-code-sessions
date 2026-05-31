@@ -128,7 +128,9 @@ const buildElements = (
   // below the threshold, so iterate until the surviving set is stable.
   let keptNodeIds = new Set(allNodeIds)
   if (minDegree > 0) {
-    while (true) {
+    // Intentional fixpoint loop (breaks when the surviving set stabilises);
+    // `for (;;)` is the no-constant-condition-clean form of `while (true)`.
+    for (;;) {
       const degree = new Map<string, number>()
       for (const e of survivingEdges) {
         degree.set(e.source, (degree.get(e.source) ?? 0) + 1)

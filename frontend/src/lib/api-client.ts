@@ -24,6 +24,38 @@ export interface ApiError {
 /** Result type for API operations - either success with data or failure with error */
 export type ApiResult<T> = { ok: true; data: T } | { ok: false; error: ApiError }
 
+/** The three lenses of a summary (G7). */
+export interface SummaryLenses {
+  task_summary: string
+  patterns: string
+  decisions_values: string
+}
+
+/** Discriminated summary payload — never a fabricated summary (G7, ADR7.1). */
+export type SummaryResponse =
+  | {
+      status: 'summarised'
+      lenses: SummaryLenses
+      scope_path?: string
+      scope_depth?: number
+      strategy?: string
+      model?: string
+      child_count?: number
+    }
+  | { status: 'not_summarised' }
+
+/** A (strategy, model) variant present in the roll-up table (eval picker). */
+export interface SummaryVariant {
+  strategy: string
+  model: string
+}
+
+/** An immediate child scope in the trie. */
+export interface ScopeChild {
+  scope_path: string
+  scope_depth: number
+}
+
 /**
  * Creates an ApiError from a failed Response
  */
@@ -234,6 +266,19 @@ export class ApiClient {
     project?: string
   }): Promise<ApiResult<PerformanceSummary>> {
     return this.get('/performance', params)
+  }
+
+  /** The roll-up summary for a scope at a grain+bucket (G7). */
+  async getScopeSummary(params: {
+    path: string
+    grain?: string
+    bucket?: string
+    strategy?: string
+    model?: string
+    days?: number
+    project?: string
+  }): Promise<ApiResult<SummaryResponse>> {
+    return this.get('/summaries/scope', params)
   }
 
   /** Per-turn idle/active/tps/too_fast + a session summary. */

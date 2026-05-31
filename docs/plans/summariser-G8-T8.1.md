@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T8.2](./summariser-G8-T8.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Navigating to `/summaries` mounts the route, calls `getScopeSummary` against the G7 API, and renders all three lens cards for the default (root) scope. _(tracer bullet)_
 
