@@ -316,3 +316,17 @@ def scope_path_of(resolver: ProjectResolver, project_id: str) -> str:
     if len(segments) >= 2 and segments[0] in {"Users", "home"}:
         segments = segments[2:]
     return "/".join(segments)
+
+
+def ancestor_scopes(resolver: ProjectResolver, project_id: str) -> list[str]:
+    """Root-first inclusive prefix chain of aggregation scopes for a project.
+
+    e.g. ``'clients/acme/app'`` yields
+    ``['', 'clients', 'clients/acme', 'clients/acme/app']`` — the empty string is
+    the root (all-domains) scope, every successive prefix is an aggregation
+    ``scope_path``, and the project's own scope is last. Built from the resolved
+    ``scope_path_of`` so it inherits the authoritative-path guarantee.
+    """
+    scope = scope_path_of(resolver, project_id)
+    segments = [seg for seg in scope.split("/") if seg]
+    return [""] + ["/".join(segments[: i + 1]) for i in range(len(segments))]

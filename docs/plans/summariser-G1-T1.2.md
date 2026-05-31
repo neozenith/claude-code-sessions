@@ -5,7 +5,7 @@
 > - **Prev:** [T1.1](./summariser-G1-T1.1.md)
 > - **Next:** [T1.3](./summariser-G1-T1.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `ancestor_scopes(resolver, "-Users-testuser-play-foo")` returns `["", "play", "play/foo"]` — every successive home-relative prefix, root (`""`) first, project last, inclusive.
 
