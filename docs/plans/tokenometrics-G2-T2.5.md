@@ -1,8 +1,8 @@
 # T2.5: ~~The absolute-token override supersedes percentage on 1M windows~~ — DROPPED
 
-> **[« G2: Context-window utilization annotations](./tokenometrics-G2.md)**  ·  [Tokenometrics index](./tokenometrics.md)  ·  Ticket 5 of 6 in G2
+
 >
-> **Nav:** [« T2.4](./tokenometrics-G2-T2.4.md)  ·  [T2.6 »](./tokenometrics-G2-T2.6.md)
+> **Nav:** [« T2.4](./tokenometrics-G2-T2.4.md)  |  [T2.6 »](./tokenometrics-G2-T2.6.md)
 
 
 - [x] **Done** — _Dropped, no work required._

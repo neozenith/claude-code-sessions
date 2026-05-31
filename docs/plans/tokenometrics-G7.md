@@ -1,26 +1,33 @@
 # G7: Frontend surfacing
 
-> **[« Tokenometrics index](./tokenometrics.md)**  ·  Gap 7 of 8
->
-> **Depends on:** [G6](./tokenometrics-G6.md)  ·  **Blocks:** none
->
-> **Nav:** [« G6](./tokenometrics-G6.md)  ·  [G8 »](./tokenometrics-G8.md)
+> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Depends on:** [G6](./tokenometrics-G6.md)
+> - **Blocks:** none
+> - **Prev:** [G6](./tokenometrics-G6.md)
+> - **Next:** [G8](./tokenometrics-G8.md)
 
-**Current:** Costs render inflated; no TPS/idle/context views; `MessageKind` is subagent-blind; per-event display shows only In/Out tokens (`SessionDetail.tsx:350`).
+Surface the new metrics and the subagent dimension in the React app: per-event occupancy/TPS/idle on SessionDetail, a Performance page, and sessions-list columns.
 
-**Gap:** Surface the new metrics and the subagent dimension.
+## Context
 
-**Output(s):**
-- `frontend/src/lib/api-client.ts` (TS): extend `SessionEvent`; `MessageKind` allows `subagent-${base}`; add `getSessionMetrics`/`getPerformanceSummary` + interfaces.
-- `frontend/src/lib/message-kinds.ts` (TS): subagent dimension; `?msg=` handling.
-- `frontend/src/pages/SessionDetail.tsx` (TS/React): per-event context-occupancy bar (width ∝ raw `context_ratio`, no zone colors), TPS on heads, idle markers + too-fast badge, subagent badge in `MESSAGE_KIND_CONFIG`.
-- `frontend/src/pages/Performance.tsx` (TS/React) + route in `App.tsx` + nav in `Layout.tsx`.
-- `frontend/src/pages/ProjectSessions.tsx` / `SessionsList.tsx` (TS/React): new columns.
-- E2E: `frontend/e2e/session-detail-metrics.spec.ts`, `frontend/e2e/performance.spec.ts`.
+Costs render inflated, with no TPS/idle/context views;
+`MessageKind` is subagent-blind;
+per-event display shows only In/Out tokens (`SessionDetail.tsx:350`).
+
+## Outputs
+
+| File | Change |
+|------|--------|
+| `frontend/src/lib/api-client.ts` | extend `SessionEvent`; `MessageKind` allows `subagent-${base}`; add `getSessionMetrics`/`getPerformanceSummary` |
+| `frontend/src/lib/message-kinds.ts` | subagent scope dimension; `?msg=` handling |
+| `frontend/src/pages/SessionDetail.tsx` | occupancy bar (width ∝ raw `context_ratio`, no zone colors), TPS on heads, idle markers + too-fast badge, subagent badge |
+| `frontend/src/pages/Performance.tsx` | new page + route in `App.tsx` + nav in `Layout.tsx` |
+| `frontend/src/pages/ProjectSessions.tsx` / `SessionsList.tsx` | new columns |
+| `frontend/e2e/session-detail-metrics.spec.ts`, `performance.spec.ts` | e2e |
 
 ## Tickets
 
-Each ticket is a standalone TDD vertical slice (one test → one implementation); the full Test/Implementation outlines live in the per-ticket files linked below.
+Each ticket is a standalone TDD vertical slice (one test → one implementation); full outlines live in the linked files.
 
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
@@ -28,4 +35,3 @@ Each ticket is a standalone TDD vertical slice (one test → one implementation)
 | [T7.2](./tokenometrics-G7-T7.2.md) | A user can compose the subagent scope toggle with a kind filter | [T3.1](./tokenometrics-G3-T3.1.md) |
 | [T7.3](./tokenometrics-G7-T7.3.md) | A user sees occupancy, TPS and idle markers on the session detail page | [T6.1](./tokenometrics-G6-T6.1.md) |
 | [T7.4](./tokenometrics-G7-T7.4.md) | A user sees the Performance page charts | [T6.2](./tokenometrics-G6-T6.2.md) |
-

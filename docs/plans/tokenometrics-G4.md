@@ -1,41 +1,48 @@
 # G4: Response performance (TPS)
 
-> **[« Tokenometrics index](./tokenometrics.md)**  ·  Gap 4 of 8
->
-> **Depends on:** [G1](./tokenometrics-G1.md)  ·  **Blocks:** [G5](./tokenometrics-G5.md), [G8](./tokenometrics-G8.md)
->
-> **Nav:** [« G3](./tokenometrics-G3.md)  ·  [G5 »](./tokenometrics-G5.md)
+> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Depends on:** [G1](./tokenometrics-G1.md)
+> - **Blocks:** [G5](./tokenometrics-G5.md), [G8](./tokenometrics-G8.md)
+> - **Prev:** [G3](./tokenometrics-G3.md)
+> - **Next:** [G5](./tokenometrics-G5.md)
 
-**Current:** No response duration or throughput metric. No `durationMs` on assistant events.
+Expose per-response throughput: TPS = head `output_tokens` ÷ `response_duration_ms`.
 
-**Gap:** Stamp `response_duration_ms` on each response head (G1 post-pass) and expose TPS = head `output_tokens` ÷ (`response_duration_ms`/1000).
+## Context
 
-**Output(s):**
-- `schema.py`: `events.response_duration_ms INTEGER`.
-- `cache.py:_annotate_responses`: duration computation (see G1 reference).
-- `backend.py`: derive `tps` per response head in `get_session_events`.
-- `tests/test_session_timing.py` (shared with G5).
+No response duration or throughput metric exists,
+and the JSONL carries no per-assistant `durationMs` (only hook/system events) —
+so duration is derived from event timestamps in the G1 post-pass.
 
-**References:**
+## Outputs
+
+| File | Change |
+|------|--------|
+| `schema.py` | add `events.response_duration_ms INTEGER` |
+| `cache.py:_annotate_responses` | duration = last-block ts − triggering-event ts (see G1) |
+| `backend.py` | derive `tps` per head in `get_session_events` |
+| `tests/test_session_timing.py` | duration + TPS (shared with G5) |
+
+## Key logic
+
 ```python
 def _delta_ms(start_iso: str | None, end_iso: str | None) -> int | None:
     if not start_iso or not end_iso: return None
-    from datetime import datetime
     d = (datetime.fromisoformat(end_iso) - datetime.fromisoformat(start_iso)).total_seconds() * 1000
     return int(d) if d >= 0 else None
-# tps = output_tokens / (response_duration_ms/1000) when duration_ms > 0 else None
+# tps = output_tokens / (response_duration_ms / 1000) when duration_ms > 0 else None
 ```
 
-## ADR: TPS definition
-**Decision:** TPS = deduped response `output_tokens` ÷ response duration (model performance), per response head; session `avg_tps` = Σ output over heads ÷ Σ duration over heads.
-**Rationale:** User confirmed TPS should measure model performance over the assistant's own response duration, not wall-clock including idle.
+## ADR4.1: TPS is output ÷ response duration
+
+- **Decision:** TPS = deduped response `output_tokens` ÷ response duration, per head; session `avg_tps` = Σ output ÷ Σ duration over heads.
+- **Why:** measures model performance over the assistant's own response time, not wall-clock including idle.
 
 ## Tickets
 
-Each ticket is a standalone TDD vertical slice (one test → one implementation); the full Test/Implementation outlines live in the per-ticket files linked below.
+Each ticket is a standalone TDD vertical slice (one test → one implementation); full outlines live in the linked files.
 
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
 | [T4.1](./tokenometrics-G4-T4.1.md) | An operator sees a response's tokens/sec | [T1.1](./tokenometrics-G1-T1.1.md) |
 | [T4.2](./tokenometrics-G4-T4.2.md) | TPS is absent when duration is unknown | [T4.1](./tokenometrics-G4-T4.1.md) |
-

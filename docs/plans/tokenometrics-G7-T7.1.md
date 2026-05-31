@@ -1,8 +1,8 @@
 # T7.1: ~~The frontend zone classifier matches the backend bands~~ — DROPPED
 
-> **[« G7: Frontend surfacing](./tokenometrics-G7.md)**  ·  [Tokenometrics index](./tokenometrics.md)  ·  Ticket 1 of 4 in G7
+
 >
-> **Nav:** « _(first)_  ·  [T7.2 »](./tokenometrics-G7-T7.2.md)
+> **Nav:** « _(first)_  |  [T7.2 »](./tokenometrics-G7-T7.2.md)
 
 
 - [x] **Done** — _Dropped, no work required._

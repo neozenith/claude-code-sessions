@@ -1,38 +1,40 @@
 # G6: Query layer & API endpoints
 
-> **[« Tokenometrics index](./tokenometrics.md)**  ·  Gap 6 of 8
->
-> **Depends on:** [G1](./tokenometrics-G1.md), [G2](./tokenometrics-G2.md), [G3](./tokenometrics-G3.md), [G5](./tokenometrics-G5.md)  ·  **Blocks:** [G7](./tokenometrics-G7.md)
->
-> **Nav:** [« G5](./tokenometrics-G5.md)  ·  [G7 »](./tokenometrics-G7.md)
+> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Depends on:** [G1](./tokenometrics-G1.md), [G2](./tokenometrics-G2.md), [G3](./tokenometrics-G3.md), [G5](./tokenometrics-G5.md)
+> - **Blocks:** [G7](./tokenometrics-G7.md)
+> - **Prev:** [G5](./tokenometrics-G5.md)
+> - **Next:** [G7](./tokenometrics-G7.md)
 
-**Current:** Endpoints return only legacy fields; no per-session metrics or performance summary; `Database` Protocol lacks the methods.
+Surface the new per-event fields and add two endpoints: per-session turn metrics and a cross-session performance summary.
 
-**Gap:** Surface new per-event fields, add `get_session_metrics` and `get_performance_summary`, and add `avg_tps`/idle/active/`peak_context_ratio` to sessions lists.
+## Context
 
-**Output(s):**
-- `database/sqlite/backend.py` (Python): extend `get_session_events`, `get_sessions_list`, `get_session_usage`; add `get_session_metrics`, `get_performance_summary`.
-- `database/protocol.py` (Python): add the two new methods.
-- `src/claude_code_sessions/main.py` (Python): `GET /api/sessions/{projectId}/{sessionId}/metrics`, `GET /api/performance` (honor `days`/`project`).
-- `tests/test_kg_cache_stats.py`-style endpoint tests under `tests/`.
+Endpoints return only legacy fields;
+there is no per-session metrics or performance summary,
+and the `Database` Protocol lacks the methods.
 
-## ADR: Performance summary aggregation grain
-| Option | Pros | Cons |
-|--------|------|------|
-| Per-model (TPS, context-ratio buckets, idle/active) | Compares model performance directly | No per-project drilldown |
-| Per-model × per-project | Richer drilldown | Larger payload; sparse cells |
-| Per-model + global context-ratio histogram | Compact, shows utilization spread | Less granular |
+## Outputs
 
-**Decision:** **Per-model aggregation that honors the global `days`/`project` filters**, plus a global context-ratio histogram (counts of response heads binned by their raw `context_ratio`). The endpoint returns: `by_model: [{model_id, avg_tps, median_tps, response_count, total_idle_ms, total_active_ms}]` and `ratio_histogram: [{bin_lo, bin_hi, count}]` (fixed-width ratio bins, e.g. 0–10%, 10–20%, …). No categorical zone labels (per the G2 ADR "Quantitative ratio only").
-**Rationale:** Project drilldown comes for free from the existing global filter (`useFilters`), so per-model rows already scope to the selected project without a sparse per-model×project matrix. The global histogram shows how full the window tends to get, quantitatively. This matches how every other endpoint in the app consumes `days`/`project`.
+| File | Change |
+|------|--------|
+| `database/sqlite/backend.py` | extend `get_session_events` / `get_sessions_list` / `get_session_usage`; add `get_session_metrics`, `get_performance_summary` |
+| `database/protocol.py` | add the two new methods |
+| `main.py` | `GET /api/sessions/{p}/{s}/metrics`; `GET /api/performance` (honor `days`/`project`) |
+| `tests/` | endpoint tests (per `test_kg_cache_stats.py` style) |
+
+## ADR6.1: Per-model summary plus raw-ratio histogram
+
+- **Decision:** aggregate **per-model**, honoring the global `days`/`project` filters, plus a global `ratio_histogram` (response heads binned by raw `context_ratio`). Returns `by_model: [{model_id, avg_tps, median_tps, response_count, total_idle_ms, total_active_ms}]` and `ratio_histogram: [{bin_lo, bin_hi, count}]` (fixed-width bins); no zone labels (per [ADR2.3](./tokenometrics-G2.md)).
+- **Why:** project drilldown comes free from the existing filter, avoiding a sparse per-model×project matrix; the histogram shows utilization spread quantitatively.
+- **Rejected:** per-model×project grain (larger payload, sparse cells).
 
 ## Tickets
 
-Each ticket is a standalone TDD vertical slice (one test → one implementation); the full Test/Implementation outlines live in the per-ticket files linked below.
+Each ticket is a standalone TDD vertical slice (one test → one implementation); full outlines live in the linked files.
 
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
 | [T6.1](./tokenometrics-G6-T6.1.md) | A client can fetch per-session turn metrics over HTTP | [T5.1](./tokenometrics-G5-T5.1.md) |
 | [T6.2](./tokenometrics-G6-T6.2.md) | A client can fetch the performance summary, scoped by filters | [T1.1](./tokenometrics-G1-T1.1.md), [T2.6](./tokenometrics-G2-T2.6.md), [T3.2](./tokenometrics-G3-T3.2.md), [T5.1](./tokenometrics-G5-T5.1.md) |
 | [T6.3](./tokenometrics-G6-T6.3.md) | An operator sees TPS and idle/active in the sessions list | [T5.1](./tokenometrics-G5-T5.1.md) |
-

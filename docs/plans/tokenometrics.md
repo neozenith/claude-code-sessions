@@ -14,12 +14,11 @@
     - [Progress](#progress)
     - [Done Criteria](#done-criteria)
   - [Overview](#overview)
-  - [Current State](#current-state)
-  - [Desired State](#desired-state)
   - [Gap Analysis](#gap-analysis)
     - [Gap Map](#gap-map)
     - [Dependencies](#dependencies)
     - [Gaps (detailed specs)](#gaps-detailed-specs)
+  - [Decisions (ADRs)](#decisions-adrs)
   - [Success Measures](#success-measures)
     - [Project Quality Bar (CI Gates)](#project-quality-bar-ci-gates)
     - [Domain-Specific Measures](#domain-specific-measures)
@@ -33,6 +32,9 @@
 ---
 
 ## Execution Plan
+
+<details>
+<summary><b>Loop runner, progress, done criteria</b> — execution detail for the <code>/loop</code> agent (collapsed for skim reading)</summary>
 
 ### Loop Runner Prompt
 
@@ -86,6 +88,8 @@ loop can resume.
 - [x] No `<!-- UNRESOLVED -->` ADR markers remain
 - [x] No `<!-- LINK_NOT_VERIFIED -->`, `<!-- ASSUMPTION -->`, or `<!-- PAYWALLED -->` markers requiring user resolution
 
+</details>
+
 ## Overview
 
 This initiative derives new analytics from Claude Code session JSONL logs, surfaced through the existing FastAPI + SQLite + React dashboard:
@@ -131,57 +135,7 @@ flowchart LR
     class G8 parity
 ```
 
-## Current State
-
-The dashboard ingests `~/.claude/projects/**/*.jsonl` into a cached SQLite index. Ingestion is a wave pipeline (`database/sqlite/wave_pipeline.py`) driving a `ParallelIngester` (`parallel_ingester.py`): worker threads parse files (`CacheManager._parse_file` → `_parse_event`, `cache.py:254`/`:445`) and a single writer thread inserts rows (`_write_parsed`, `cache.py:298`). Costs/classification live in `database/sqlite/pricing.py`. Rollups (`rebuild_aggregates`, `cache.py:695`) and the `agg` star-schema feed the API (`database/sqlite/backend.py`, contract in `database/protocol.py`, routes in `main.py`). The React app (`frontend/src/`) reads typed endpoints via `lib/api-client.ts`.
-
-**Key facts established by investigating the real data:**
-
-- A single model response (one `requestId`) is logged as **N content-block events** (1 thinking + 1 text + many tool_use). **Every block repeats the same** `output_tokens` / `input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`. Verified on the largest session file: naive per-event `SUM(output_tokens)` = **8,439,850** vs requestId-deduped = **3,462,111** (≈2.44× inflation). `rebuild_aggregates` (`cache.py:719-720`) and the `agg` table sum per event with no dedup, so **all dashboard token + cost totals are inflated**.
-- For an assistant event, `input_tokens + cache_read_tokens + cache_creation_tokens` **is** the live context-window occupancy (the full prompt sent), constant across a requestId's blocks. No occupancy field, ratio, or per-model window exists anywhere today.
-- Observed max occupancy per model: `opus-4-7` 999,948 and `opus-4-6` 970,536 (1M windows), while `sonnet-4-5/4-6`, `opus-4-5`, `haiku-4-5` all stay under ~200k — empirical corroboration that the window is a per-model constant.
-- `msg_kind` is derived by `message_kind(event_type, is_meta, content)` (`pricing.py:64`) into 9 kinds with no subagent awareness. **1,335 events** living in subagent / `agent_root` files are currently classed `human` (plus 16 `user_text`) — the mislabel bug. All such events carry `is_sidechain=1`.
-- There is **no per-assistant `durationMs`** in the JSONL (only on hook/system events), so response duration must be derived from event timestamps.
-
-```mermaid
-flowchart TD
-    JSONL["JSONL lines<br/>(N blocks per response,<br/>usage duplicated)"] --> PE["_parse_event<br/>cache.py:445"]
-    PE --> PF["_parse_file<br/>ordered list"]
-    PF --> PI["ParallelIngester<br/>writer thread"]
-    PI --> EV[("events table<br/>per-block rows,<br/>duplicated usage")]
-    EV --> RB["rebuild_aggregates<br/>SUM() no dedup"]
-    RB --> SESS[("sessions / agg<br/>INFLATED ~2.4x")]
-    SESS --> API["backend.py / main.py"]
-    API --> FE["React dashboard<br/>(inflated costs,<br/>no TPS/idle/context)"]
-    classDef problem fill:#b91c1c,color:#fff;
-    class EV,SESS problem
-```
-
-## Desired State
-
-A response-aware ingestion pass corrects the counts and annotates each event, new query methods expose the metrics, and the frontend surfaces them.
-
-- Ingestion gains a per-file post-pass `_annotate_responses` that groups assistant events by `requestId`, marks one **head** per response, **zeroes the duplicated usage on non-heads** (so every existing `SUM()` is correct with no query rewrites), and stamps `response_duration_ms` on the head.
-- Each event carries `context_tokens`, `context_window` (from a curated map), and `context_ratio`. Subagent events carry `subagent-<kind>` msg_kinds.
-- New `sessions` rollups (`avg_tps`, `total_idle_ms`, `total_active_ms`, `peak_context_ratio`, …) and two new endpoints: per-session turn metrics and a cross-session performance summary.
-- Frontend: per-event context-occupancy bar + TPS + idle markers in SessionDetail, a new **Performance** page (TPS by model, context-utilization ratio histogram, idle/active split), sessions-list columns, and a subagent dimension on the message-kind filter.
-
-```mermaid
-flowchart TD
-    JSONL["JSONL lines"] --> PE["_parse_event<br/>+ request_id, stop_reason,<br/>context_tokens/window/ratio,<br/>subagent- prefix"]
-    PE --> PF["_parse_file"]
-    PF --> AR["_annotate_responses<br/>group by requestId →<br/>mark head, zero dups,<br/>response_duration_ms"]
-    AR --> PI["ParallelIngester writer"]
-    PI --> EV[("events table<br/>+7 columns,<br/>accurate per-head usage")]
-    EV --> RB["rebuild_aggregates<br/>+ _compute_session_timing<br/>(LEAD window)"]
-    RB --> SESS[("sessions / agg<br/>ACCURATE + timing rollups")]
-    SESS --> API["backend.py / main.py<br/>+ /metrics + /performance"]
-    API --> FE["SessionDetail (occupancy/TPS/idle)<br/>+ Performance page<br/>+ sessions columns"]
-    classDef good fill:#166534,color:#fff;
-    classDef process fill:#7c3aed,color:#fff;
-    class EV,SESS good
-    class AR process
-```
+> **Background — Current vs Desired State:** the before/after architecture (and the ~2.4× over-count bug that motivates G1) lives in **[tokenometrics-DISCOVERY.md](./tokenometrics-DISCOVERY.md)** — review context, not needed once the implementation loop starts.
 
 ## Gap Analysis
 
@@ -280,6 +234,23 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 | G7 | [Frontend surfacing](./tokenometrics-G7.md) | 4 | SessionDetail occupancy/TPS/idle, a Performance page, sessions-list columns, subagent filter. |
 | G8 | [Introspect-script parity](./tokenometrics-G8.md) | 1 | Mirror every ingestion change in the standalone introspect script that shares the schema. |
 
+## Decisions (ADRs)
+
+The design decisions and their values, scoped to the gap that owns them. Full **Decision / Why / Rejected** in each gap spec.
+
+| ADR | Decision | Why |
+|-----|----------|-----|
+| [ADR1.1](./tokenometrics-G1.md) | Fix the token over-count everywhere (zero non-head usage) | Accuracy over inflated historicals, with no query rewrites |
+| [ADR1.2](./tokenometrics-G1.md) | Last block is the response head | It carries `stop_reason` + final usage; end-to-end timing |
+| [ADR2.1](./tokenometrics-G2.md) | Accumulated count is live occupancy | Bounded by the window — the only meaningful ratio basis |
+| [ADR2.2](./tokenometrics-G2.md) | Window from a curated per-model map | 1M is GA per model, so window is a pure function of `model_id` |
+| [ADR2.3](./tokenometrics-G2.md) | Expose the raw ratio, no zone labels | "Smart zone" is subjective; % used is quantitative and sufficient |
+| [ADR3.1](./tokenometrics-G3.md) | Detect subagents by sidechain or file type | `is_sidechain` is reliable; file-type union guards a missing flag |
+| [ADR3.2](./tokenometrics-G3.md) | Subagent scope is a separate filter param | Keeps the kind dropdown readable and the URL legible |
+| [ADR4.1](./tokenometrics-G4.md) | TPS is output ÷ response duration | Measures model performance, not wall-clock including idle |
+| [ADR5.1](./tokenometrics-G5.md) | Too-fast flag at an 8 tok/s skim bar | Fires only when a reply was impossible to have read |
+| [ADR6.1](./tokenometrics-G6.md) | Per-model summary plus raw-ratio histogram | Project drilldown comes free from the existing filters |
+
 ## Success Measures
 
 ### Project Quality Bar (CI Gates)
@@ -323,4 +294,5 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 - **Idle attribution leakage:** counting subagent or `tool_result` gaps as human idle, inflating idle time with machine latency.
 - **Cross-context occupancy mixing:** attributing a subagent response's occupancy to the main window's ratio (must stay per-event).
 - **Too-fast false positives:** flagging a short reply to a short response as "didn't read it," eroding trust in the signal.
+
 

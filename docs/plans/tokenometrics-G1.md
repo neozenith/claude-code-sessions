@@ -1,36 +1,43 @@
 # G1: Response-level token accounting
 
-> **[« Tokenometrics index](./tokenometrics.md)**  ·  Gap 1 of 8
->
-> **Depends on:** none  ·  **Blocks:** [G2](./tokenometrics-G2.md), [G3](./tokenometrics-G3.md), [G4](./tokenometrics-G4.md), [G6](./tokenometrics-G6.md), [G8](./tokenometrics-G8.md)
->
-> **Nav:** « _(first)_  ·  [G2 »](./tokenometrics-G2.md)
+> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Depends on:** none
+> - **Blocks:** [G2](./tokenometrics-G2.md), [G3](./tokenometrics-G3.md), [G4](./tokenometrics-G4.md), [G6](./tokenometrics-G6.md), [G8](./tokenometrics-G8.md)
+> - **Next:** [G2](./tokenometrics-G2.md)
 
-**Current:** Each response's content-block events duplicate request-level usage; `rebuild_aggregates` and `agg` `SUM()` them, inflating every token + cost total ~2.4×.
+Count each response once: mark one **head** per `requestId` and zero the duplicated usage on non-heads, so every existing `SUM()` is correct with no query rewrites.
 
-**Gap:** Introduce the `requestId` as the unit of a response. In a per-file post-pass, mark exactly one **head** event per `requestId` and **zero the duplicated token/cost columns on non-heads**, so every existing `SUM()` becomes correct without query rewrites. Bump `SCHEMA_VERSION` to force a full reingest.
+## Context
 
-**Output(s):**
-- `src/claude_code_sessions/database/sqlite/schema.py` (Python/SQL): `SCHEMA_VERSION "13"→"14"`; add `events.request_id TEXT`, `events.stop_reason TEXT`, `events.is_response_head INTEGER DEFAULT 1`; index `idx_events_request_id`.
-- `src/claude_code_sessions/database/sqlite/cache.py` (Python): extract `requestId`/`stop_reason` in `_parse_event`; new `_annotate_responses(events_data)` called at end of `_parse_file`; extend the `INSERT INTO events` column list/tuple in `_write_parsed`.
-- `tests/test_response_dedup.py` (Python).
+Each response's content-block events repeat the same request-level usage,
+and `rebuild_aggregates` + `agg` `SUM()` them with no dedup —
+inflating every token and cost total ~2.4×.
+A `SCHEMA_VERSION` bump (→14) forces the one-time reingest.
 
-**References:**
+## Outputs
+
+| File | Change |
+|------|--------|
+| `database/sqlite/schema.py` | `SCHEMA_VERSION`→14; add `request_id`, `stop_reason`, `is_response_head` + `idx_events_request_id` |
+| `database/sqlite/cache.py` | extract `requestId`/`stop_reason` in `_parse_event`; `_annotate_responses` at end of `_parse_file`; widen `INSERT` in `_write_parsed` |
+| `tests/test_response_dedup.py` | dedup correctness |
+
+## Key logic
+
 ```python
-# cache.py — new post-pass over the ALREADY-ORDERED per-file event list.
+# cache.py — post-pass over the ALREADY-ORDERED per-file event list.
 # Heads keep usage; non-heads are zeroed so every downstream SUM() is correct.
 _USAGE_COLS = ("input_tokens","output_tokens","cache_read_tokens",
                "cache_creation_tokens","cache_5m_tokens",
                "billable_tokens","total_cost_usd","context_tokens")
 
 def _annotate_responses(self, events: list[dict]) -> None:
-    # Group consecutive assistant events sharing a requestId.
     groups: dict[str, list[int]] = {}
     order: list[str] = []
     for i, e in enumerate(events):
         rid = e.get("request_id")
         if e["event_type"] != "assistant" or rid is None:
-            e["is_response_head"] = 1            # its own head (synthetic/non-assistant)
+            e["is_response_head"] = 1            # synthetic/non-assistant → own head
             continue
         if rid not in groups:
             groups[rid] = []; order.append(rid)
@@ -43,38 +50,29 @@ def _annotate_responses(self, events: list[dict]) -> None:
             if j != head:
                 for c in _USAGE_COLS:
                     events[j][c] = 0
-        # response duration: triggering event (preceding) → last block
         start = events[idxs[0] - 1]["timestamp"] if idxs[0] > 0 else events[idxs[0]]["timestamp"]
         events[head]["response_duration_ms"] = _delta_ms(start, events[head]["timestamp"])
 ```
 
-## ADR: Cost-correction scope
-| Option | Pros | Cons |
-|--------|------|------|
-| Fix everywhere (zero non-heads) | All totals/costs accurate, no query rewrites | Historical figures drop ~2.4×; per-event display shows 0 on continuation blocks |
-| New metrics only | No change to existing dashboards | Dashboards stay knowingly wrong; two number systems diverge |
-| Fix + keep raw columns | Accurate totals + display fidelity | Widest schema change, more query edits |
+## ADR1.1: Fix the over-count everywhere
 
-**Decision:** Fix everywhere (zero non-heads).
-**Rationale:** User chose accuracy over preserving inflated historicals; zeroing keeps every existing `SUM()` correct with no query changes (fail-loud over silent inaccuracy).
+- **Decision:** zero the duplicated usage on non-head events so every existing `SUM()` stays correct.
+- **Why:** accuracy over preserving inflated historicals, with no query rewrites (fail-loud).
+- **Rejected:** new-metrics-only (dashboards stay knowingly wrong); fix + raw columns (widest schema change).
 
-## ADR: Response head selection & duration start
-| Option | Pros | Cons |
-|--------|------|------|
-| Head = last block; duration from preceding event ts | Last block has `stop_reason`+final ts; duration = end-to-end (incl. TTFT) | Includes queue/tool latency before first token |
-| Head = first block; duration = last−first block ts | Excludes pre-first-token latency | First block lacks final stop_reason; misses TTFT |
+## ADR1.2: Last block is the response head
 
-**Decision:** Head = last block; `response_duration_ms` = last-block ts − triggering (preceding) event ts, falling back to first-block ts when there is no preceding event.
-**Rationale:** Matches "duration of the assistant response" as the user experiences it (request sent → response complete); the head is the natural carrier of stop_reason and final usage.
+- **Decision:** use the **last** block as the head, and set `response_duration_ms` = last-block ts − preceding-event ts (fallback: first-block ts).
+- **Why:** the last block carries `stop_reason` and final usage; end-to-end timing matches the response time the user feels.
+- **Rejected:** first-block head (lacks final `stop_reason`, misses TTFT).
 
 ## Tickets
 
-Each ticket is a standalone TDD vertical slice (one test → one implementation); the full Test/Implementation outlines live in the per-ticket files linked below.
+Each ticket is a standalone TDD vertical slice (one test → one implementation); full outlines live in the linked files.
 
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
-| [T1.1](./tokenometrics-G1-T1.1.md) | An operator can see a multi-block response counted once in session totals | none |
+| [T1.1](./tokenometrics-G1-T1.1.md) | An operator can see a multi-block response counted once in session totals | — |
 | [T1.2](./tokenometrics-G1-T1.2.md) | An operator can see exactly one response-head per requestId | [T1.1](./tokenometrics-G1-T1.1.md) |
 | [T1.3](./tokenometrics-G1-T1.3.md) | A single-block response is its own head with usage intact | [T1.1](./tokenometrics-G1-T1.1.md) |
 | [T1.4](./tokenometrics-G1-T1.4.md) | A synthetic assistant event (no requestId) is its own head | [T1.1](./tokenometrics-G1-T1.1.md) |
-

@@ -1,22 +1,31 @@
 # G2: Context-window utilization annotations
 
-> **[« Tokenometrics index](./tokenometrics.md)**  ·  Gap 2 of 8
->
-> **Depends on:** [G1](./tokenometrics-G1.md)  ·  **Blocks:** [G6](./tokenometrics-G6.md), [G8](./tokenometrics-G8.md)
->
-> **Nav:** [« G1](./tokenometrics-G1.md)  ·  [G3 »](./tokenometrics-G3.md)
+> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Depends on:** [G1](./tokenometrics-G1.md)
+> - **Blocks:** [G6](./tokenometrics-G6.md), [G8](./tokenometrics-G8.md)
+> - **Prev:** [G1](./tokenometrics-G1.md)
+> - **Next:** [G3](./tokenometrics-G3.md)
 
-**Current:** No notion of context occupancy or per-model window anywhere.
+Annotate each event with its live context occupancy and a raw utilization ratio (fraction of the model's window used), from a curated `model_id → window` map.
 
-**Gap:** Add a curated `model_id → window` map and annotate each event with live occupancy and the normalized ratio (fraction of the window used). Occupancy is read from the event's own usage, so subagent events measure against their own context automatically. The ratio is exposed as a **raw quantitative value** — no categorical "smart/caution/danger" labeling (see ADR: Quantitative ratio only).
+## Context
 
-**Output(s):**
-- `src/claude_code_sessions/database/sqlite/pricing.py` (Python): `CONTEXT_WINDOWS` map + `context_window(model_id)` + `context_ratio(tokens, window)`.
-- `src/claude_code_sessions/database/sqlite/schema.py`: add `events.context_tokens INTEGER DEFAULT 0`, `context_window INTEGER`, `context_ratio REAL`.
-- `cache.py:_parse_event`: compute occupancy + window + ratio.
-- `tests/test_context_window.py` (Python).
+No notion of context occupancy or per-model window exists today.
+Occupancy is read from the event's own usage,
+so subagent events measure against their own context automatically.
+The ratio is a **raw quantitative value** — no smart/caution/danger labeling (see *Quantitative ratio only*).
 
-**References:**
+## Outputs
+
+| File | Change |
+|------|--------|
+| `database/sqlite/pricing.py` | `CONTEXT_WINDOWS` map + `context_window(model_id)` + `context_ratio(tokens, window)` |
+| `database/sqlite/schema.py` | add `context_tokens INTEGER`, `context_window INTEGER`, `context_ratio REAL` |
+| `cache.py:_parse_event` | compute occupancy + window + ratio |
+| `tests/test_context_window.py` | window lookup + ratio |
+
+## Key logic
+
 ```python
 # pricing.py — substring match like the existing model_family().
 CONTEXT_WINDOWS: dict[str, int] = {
@@ -29,49 +38,43 @@ CONTEXT_WINDOWS: dict[str, int] = {
 def context_window(model_id: str | None) -> int | None:
     if not model_id: return None
     low = model_id.lower()
-    # iterate longest-key-first so "opus-4-5" can't shadow "opus-4-50"-style ids
+    # longest-key-first so "opus-4-5" can't shadow "opus-4-50"-style ids
     for key in sorted(CONTEXT_WINDOWS, key=len, reverse=True):
         if key in low: return CONTEXT_WINDOWS[key]
     return None
 # context_tokens = input + cache_read + cache_creation (assistant only)
 def context_ratio(tokens: int, window: int | None) -> float | None:
     if not window: return None         # window unknown → ratio undefined
-    return tokens / window             # raw fraction of the window in use
+    return tokens / window
 ```
 
-## ADR: Meaning of "accumulated token count"
-| Option | Pros | Cons |
-|--------|------|------|
-| Live context occupancy | Bounded by window; meaningful ratio | Not a monotonic odometer |
-| Monotonic running sum | Throughput odometer | Far exceeds window; ratio meaningless |
+## ADR2.1: Accumulated count is live occupancy
 
-**Decision:** Live context occupancy (`input + cache_read + cache_creation`).
-**Rationale:** User confirmed; it is the accurate "how full is the window now" measure and the only one for which a budget ratio is meaningful.
+- **Decision:** use live context occupancy (`input + cache_read + cache_creation`) as the per-event "accumulated" count.
+- **Why:** it is bounded by the window — the only basis on which a utilization ratio is meaningful.
+- **Rejected:** monotonic running sum (far exceeds the window; ratio meaningless).
 
-## ADR: Context-window budget basis
-**Decision:** Curated per-model `CONTEXT_WINDOWS` map (table above), researched against vendor docs and corroborated by observed occupancy. Unknown/`<synthetic>`/`model.gguf` → `None` (ratio undefined).
-**Rationale:** User asked for a researched, curated mapping. 1M is GA (not beta) on opus-4-6/4-7/4-8 + sonnet-4-6, so the window is a pure function of model_id — no per-session heuristic needed.
+## ADR2.2: Window from a curated per-model map
 
-## ADR: Quantitative ratio only — no zone labeling
-| Option | Pros | Cons |
-|--------|------|------|
-| Raw `context_ratio` (fraction of window) | Objective, quantitative, model-agnostic; no disputable thresholds | Caller must interpret "how full is too full" |
-| Categorical zones (smart/caution/danger) | One-glance qualitative read | Thresholds are subjective and model-dependent; introduced an internal spec contradiction (T2.4 40k=smart vs the 32K absolute caution floor) |
+- **Decision:** resolve the window from a curated per-model `CONTEXT_WINDOWS` map; unknown / `<synthetic>` / `model.gguf` → `None` (ratio undefined).
+- **Why:** 1M is GA (not beta) on opus-4-6/4-7/4-8 + sonnet-4-6, so the window is a pure function of `model_id` — no per-session heuristic needed.
 
-**Decision:** Expose the **raw `context_ratio` only** (`tokens / window`, `None` when the window is unknown). Drop all zone/band labeling — `SMART_ZONE_*` constants, `context_zone()`, the `frontend/src/lib/context-zone.ts` mirror, and the `zone_histogram` — across every gap and ticket.
-**Rationale:** User decision (Phase-2 refinement): the "smart zone" is subjective per model, whereas the percentage of context-window used is quantitative and sufficient. Removing the categorical layer also eliminates the T2.4/T2.5 threshold contradiction. Frontend surfaces (G6/G7) render the raw ratio (e.g. a proportional bar and a ratio-binned histogram) without named bands.
-**Superseded:** the previous "Smart-zone band thresholds" ADR (RULER 50% / NoLiMa 32K / Databricks 64K research) is withdrawn; those citations no longer drive any code.
+## ADR2.3: Expose the raw ratio, no zone labels
+
+- **Decision:** expose the **raw `context_ratio` only**, and drop all zone/band labeling (`SMART_ZONE_*`, `context_zone()`, the `context-zone.ts` mirror, and `zone_histogram`) across every gap and ticket.
+- **Why:** the "smart zone" is subjective per model, whereas % used is quantitative and sufficient; this also removes the T2.4/T2.5 threshold contradiction. G6/G7 render the raw ratio (proportional bar, ratio-binned histogram) without named bands.
+- **Rejected:** categorical zones (smart/caution/danger) — subjective, model-dependent thresholds.
+- **Superseded:** the prior "Smart-zone band thresholds" ADR (RULER 50%, NoLiMa 32K, Databricks 64K) is withdrawn; those citations no longer drive code.
 
 ## Tickets
 
-Each ticket is a standalone TDD vertical slice (one test → one implementation); the full Test/Implementation outlines live in the per-ticket files linked below.
+Each ticket is a standalone TDD vertical slice (one test → one implementation); full outlines live in the linked files.
 
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
-| [T2.1](./tokenometrics-G2-T2.1.md) | A caller can resolve a 1M-window model's context window | none |
+| [T2.1](./tokenometrics-G2-T2.1.md) | A caller can resolve a 1M-window model's context window | — |
 | [T2.2](./tokenometrics-G2-T2.2.md) | A caller gets 200k for standard models and None for unknown | [T2.1](./tokenometrics-G2-T2.1.md) |
 | [T2.3](./tokenometrics-G2-T2.3.md) | Window lookup is not fooled by substring collisions | [T2.1](./tokenometrics-G2-T2.1.md) |
 | [T2.4](./tokenometrics-G2-T2.4.md) | A caller gets the context-utilization ratio (fraction of window used) | [T2.1](./tokenometrics-G2-T2.1.md) |
 | [T2.5](./tokenometrics-G2-T2.5.md) | ~~The absolute-token override supersedes percentage on 1M windows~~ **Dropped** (zone labeling removed per ADR) | [T2.4](./tokenometrics-G2-T2.4.md) |
 | [T2.6](./tokenometrics-G2-T2.6.md) | An operator sees per-event occupancy and ratio after ingestion | [T1.1](./tokenometrics-G1-T1.1.md), [T2.1](./tokenometrics-G2-T2.1.md) |
-
