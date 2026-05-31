@@ -13,7 +13,10 @@ import json
 import sqlite3
 
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
-from claude_code_sessions.database.sqlite.summaries import summarise_session
+from claude_code_sessions.database.sqlite.summaries import (
+    MuninnSummaryEngine,
+    summarise_session,
+)
 
 
 class FakeEngine:
@@ -261,3 +264,26 @@ def test_session_without_human_events_writes_no_row() -> None:
         "SELECT COUNT(*) FROM session_summaries WHERE session_id = ?", (session_id,)
     ).fetchone()[0]
     assert count == 0
+
+
+def test_muninn_engine_passes_model_name_to_chat() -> None:
+    """The production engine forwards (model, prompt) to ``muninn_chat`` verbatim.
+
+    ``muninn_chat`` is stubbed as a registered SQL function on the test
+    connection (a permitted boundary fake at the sqlite-muninn edge), recording
+    the arguments the engine hands it.
+    """
+    conn = _make_cache()
+    recorded: list[tuple[str, str]] = []
+
+    def fake_muninn_chat(model_name: str, prompt: str) -> str:
+        recorded.append((model_name, prompt))
+        return json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
+
+    conn.create_function("muninn_chat", 2, fake_muninn_chat)
+
+    engine = MuninnSummaryEngine(conn)
+    out = engine.summarise("qwen2.5-3b-instruct", "THE_PROMPT_BODY")
+
+    assert recorded == [("qwen2.5-3b-instruct", "THE_PROMPT_BODY")]
+    assert "task_summary" in out

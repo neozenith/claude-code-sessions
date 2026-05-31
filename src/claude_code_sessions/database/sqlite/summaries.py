@@ -18,7 +18,7 @@ import sqlite3
 from datetime import UTC, datetime
 from typing import Protocol
 
-__all__ = ["SummaryEngine", "summarise_session"]
+__all__ = ["MuninnSummaryEngine", "SummaryEngine", "summarise_session"]
 
 
 class SummaryEngine(Protocol):
@@ -30,6 +30,30 @@ class SummaryEngine(Protocol):
     """
 
     def summarise(self, model: str, prompt: str) -> str: ...
+
+
+class MuninnSummaryEngine:
+    """Production :class:`SummaryEngine` backed by ``sqlite-muninn`` (ADR2.1).
+
+    Drives the in-repo local chat model via the 2-arg ``muninn_chat(model,
+    prompt)`` SQL function — the same engine the KG community-naming pass uses
+    (``kg/community_naming.py``). No external API, key, or network call: the
+    project's 100%-local, fail-loud invariant is preserved.
+
+    A third ``muninn_chat`` argument is interpreted by llama.cpp as a GBNF
+    grammar, so the system instruction is folded into the single ``prompt``
+    string by :func:`summarise_session` rather than passed separately.
+    """
+
+    def __init__(self, conn: sqlite3.Connection) -> None:
+        self._conn = conn
+
+    def summarise(self, model: str, prompt: str) -> str:
+        row = self._conn.execute(
+            "SELECT muninn_chat(?, ?)",
+            (model, prompt),
+        ).fetchone()
+        return str(row[0]) if row is not None and row[0] is not None else ""
 
 
 # The three lenses the extraction must yield, in schema-column order.

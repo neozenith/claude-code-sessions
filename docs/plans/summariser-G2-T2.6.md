@@ -5,7 +5,7 @@
 > - **Prev:** [T2.5](./summariser-G2-T2.5.md)
 > - **Next:** [T2.7](./summariser-G2-T2.7.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The production `MuninnSummaryEngine.summarise(model, prompt)` issues `muninn_chat(model_name, prompt)` against the connection, passing the model name through as the first argument (ADR2.1 engine-interface contract).
 
