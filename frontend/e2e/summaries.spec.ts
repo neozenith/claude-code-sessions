@@ -1,25 +1,25 @@
 import { test, expect } from '@playwright/test'
 
 /**
- * Summaries explorer E2E (G8 / T8.1)
+ * Summaries explorer E2E (G8) — shell smoke only.
  *
- * /summaries mounts the route, reads the default (root) scope via the G7 API,
- * and renders the three lens cards. The cards render whether or not the scope
- * is summarised (the not_summarised empty state is refined in T8.6); this
- * tracer only asserts the three lenses are present.
+ * Per ADR8.2, data-dependent rendering (lens cards vs. not_summarised empty
+ * state, variant prose) is unit-tested in `src/pages/Summaries.test.ts`; e2e
+ * verifies the data-independent shell: the route mounts and the heading, grain
+ * selector, and scope breadcrumb render against the real (summary-less) backend.
  */
 
 test.setTimeout(60000)
 
-test('summaries page renders the three lenses', async ({ page }) => {
+test('summaries page mounts and renders the shell', async ({ page }) => {
   await page.goto('/summaries')
   await page.waitForFunction(() => document.body.innerText.includes('Summaries'), {
     timeout: 45000,
   })
 
-  await expect(page.locator('[data-testid="lens-task"]')).toBeVisible({ timeout: 15000 })
-  await expect(page.locator('[data-testid="lens-patterns"]')).toBeVisible()
-  await expect(page.locator('[data-testid="lens-decisions"]')).toBeVisible()
+  await expect(page.locator('[data-testid="grain-select"]')).toBeVisible({ timeout: 15000 })
+  // Scope-lineage breadcrumb shell (the root "All" crumb renders at any scope).
+  await expect(page.locator('[data-testid="scope-crumb-root"]')).toBeVisible()
 })
 
 test('deep-link path and grain selects scope and grain', async ({ page }) => {

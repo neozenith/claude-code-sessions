@@ -3,15 +3,16 @@ import { useSearchParams } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import ScopeBreadcrumb from '@/components/ScopeBreadcrumb'
-import type { ScopeChild, SummaryResponse } from '@/lib/api-client'
+import type { ScopeChild, SummaryResponse, SummaryVariant } from '@/lib/api-client'
 
 /**
  * Summaries explorer (G8).
  *
- * Navigates the variable-depth scope trie at a chosen time grain, rendering the
- * three lenses for the current scope and a breadcrumb + child links to drill
- * up/down. All page-local state (`path`/`grain`/`bucket`) lives in the URL
- * (ADR8.1), so every view deep-links.
+ * Split into a thin container (`Summaries`, which fetches) and a presentational
+ * `SummariesView` (props-injected, URL-state via `useSearchParams`). The view's
+ * rendering logic — lens cards when summarised, empty state when not, variant
+ * selectors — is unit-tested with vitest (ADR8.2); the container's fetch wiring
+ * is data-independent shell exercised by the e2e smoke.
  */
 
 const LENSES = [
@@ -23,82 +24,158 @@ const LENSES = [
 const GRAINS = ['day', 'week', 'month'] as const
 const DEFAULT_GRAIN = 'day'
 
-export default function Summaries() {
+interface SummariesViewProps {
+  summary: SummaryResponse | null
+  childScopes: ScopeChild[]
+  variants: SummaryVariant[]
+  loading: boolean
+}
+
+/** Presentational explorer view — pure render + page-local URL state, no fetching. */
+export function SummariesView({ summary, childScopes, variants, loading }: SummariesViewProps) {
   const [searchParams, setSearchParams] = useSearchParams()
   const path = searchParams.get('path') ?? ''
   const grain = searchParams.get('grain') ?? DEFAULT_GRAIN
-  const bucket = searchParams.get('bucket') ?? ''
+  const strategy = searchParams.get('strategy') ?? ''
+  const model = searchParams.get('model') ?? ''
 
-  const scopeQuery = `/summaries/scope?path=${encodeURIComponent(path)}&grain=${grain}&bucket=${encodeURIComponent(bucket)}`
-  const { data, loading, error } = useApi<SummaryResponse>(scopeQuery)
-  const { data: children } = useApi<ScopeChild[]>(
-    `/summaries/scope/children?path=${encodeURIComponent(path)}`,
-  )
-
-  const lenses = data?.status === 'summarised' ? data.lenses : null
-  const notSummarised = !loading && !lenses
-
-  const setGrain = (next: string) => {
+  const setParam = (key: string, value: string, defaultValue = '') => {
     setSearchParams((prev) => {
-      const params = new URLSearchParams(prev)
-      if (next === DEFAULT_GRAIN) {
-        params.delete('grain')
+      const next = new URLSearchParams(prev)
+      if (value === defaultValue) {
+        next.delete(key)
       } else {
-        params.set('grain', next)
+        next.set(key, value)
       }
-      return params
+      return next
     })
   }
 
+  const lenses = summary?.status === 'summarised' ? summary.lenses : null
+  const notSummarised = !loading && !lenses
+
+  const strategies = Array.from(new Set(variants.map((v) => v.strategy)))
+  const models = Array.from(new Set(variants.map((v) => v.model)))
+
   return (
     <div className="space-y-6">
-      <div className="flex items-center justify-between gap-4">
+      <div className="flex flex-wrap items-center justify-between gap-4">
         <h1 className="text-3xl font-bold">Summaries</h1>
-        <label className="flex items-center gap-2 text-sm">
-          <span className="text-muted-foreground">Grain:</span>
-          <select
-            data-testid="grain-select"
-            value={grain}
-            onChange={(e) => setGrain(e.target.value)}
-            className="rounded border bg-background px-2 py-1"
-          >
-            {GRAINS.map((g) => (
-              <option key={g} value={g}>
-                {g}
-              </option>
-            ))}
-          </select>
-        </label>
+        <div className="flex flex-wrap items-center gap-3 text-sm">
+          <label className="flex items-center gap-2">
+            <span className="text-muted-foreground">Grain:</span>
+            <select
+              data-testid="grain-select"
+              value={grain}
+              onChange={(e) => setParam('grain', e.target.value, DEFAULT_GRAIN)}
+              className="rounded border bg-background px-2 py-1"
+            >
+              {GRAINS.map((g) => (
+                <option key={g} value={g}>
+                  {g}
+                </option>
+              ))}
+            </select>
+          </label>
+          {strategies.length > 0 ? (
+            <label className="flex items-center gap-2">
+              <span className="text-muted-foreground">Strategy:</span>
+              <select
+                data-testid="strategy-select"
+                value={strategy}
+                onChange={(e) => setParam('strategy', e.target.value)}
+                className="rounded border bg-background px-2 py-1"
+              >
+                <option value="">(any)</option>
+                {strategies.map((s) => (
+                  <option key={s} value={s}>
+                    {s}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+          {models.length > 0 ? (
+            <label className="flex items-center gap-2">
+              <span className="text-muted-foreground">Model:</span>
+              <select
+                data-testid="model-select"
+                value={model}
+                onChange={(e) => setParam('model', e.target.value)}
+                className="rounded border bg-background px-2 py-1"
+              >
+                <option value="">(any)</option>
+                {models.map((m) => (
+                  <option key={m} value={m}>
+                    {m}
+                  </option>
+                ))}
+              </select>
+            </label>
+          ) : null}
+        </div>
       </div>
 
-      <ScopeBreadcrumb scopePath={path} childScopes={children ?? []} />
+      <ScopeBreadcrumb scopePath={path} childScopes={childScopes} />
 
-      <div className="grid gap-4 md:grid-cols-3">
-        {LENSES.map((lens) => (
-          <Card key={lens.key}>
-            <CardHeader>
-              <CardTitle className="text-base">{lens.title}</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <p data-testid={lens.testid} className="whitespace-pre-wrap text-sm">
-                {loading
-                  ? 'Loading…'
-                  : lenses
-                    ? lenses[lens.key]
-                    : 'Not yet summarised for this scope.'}
-              </p>
-            </CardContent>
-          </Card>
-        ))}
-      </div>
+      {loading ? <p className="text-sm text-muted-foreground">Loading…</p> : null}
+
+      {lenses ? (
+        <div className="grid gap-4 md:grid-cols-3">
+          {LENSES.map((lens) => (
+            <Card key={lens.key}>
+              <CardHeader>
+                <CardTitle className="text-base">{lens.title}</CardTitle>
+              </CardHeader>
+              <CardContent>
+                <p data-testid={lens.testid} className="whitespace-pre-wrap text-sm">
+                  {lenses[lens.key]}
+                </p>
+              </CardContent>
+            </Card>
+          ))}
+        </div>
+      ) : null}
 
       {notSummarised ? (
-        <p className="text-sm text-muted-foreground" data-testid="summaries-empty">
-          {error
-            ? 'No summary available for this scope.'
-            : 'This scope has no summary yet. Run the summariser to populate it.'}
-        </p>
+        <Card data-testid="summary-empty">
+          <CardContent className="pt-6">
+            <p className="text-sm text-muted-foreground">
+              This scope has no summary yet for the selected strategy/model. Run the summariser to
+              populate it.
+            </p>
+          </CardContent>
+        </Card>
       ) : null}
     </div>
+  )
+}
+
+/** Container — reads page-local URL params, fetches, and feeds the presentational view. */
+export default function Summaries() {
+  const [searchParams] = useSearchParams()
+  const path = searchParams.get('path') ?? ''
+  const grain = searchParams.get('grain') ?? DEFAULT_GRAIN
+  const bucket = searchParams.get('bucket') ?? ''
+  const strategy = searchParams.get('strategy') ?? ''
+  const model = searchParams.get('model') ?? ''
+
+  const scopeQuery =
+    `/summaries/scope?path=${encodeURIComponent(path)}&grain=${grain}&bucket=${encodeURIComponent(bucket)}` +
+    (strategy ? `&strategy=${encodeURIComponent(strategy)}` : '') +
+    (model ? `&model=${encodeURIComponent(model)}` : '')
+  const { data: summary, loading } = useApi<SummaryResponse>(scopeQuery)
+  const { data: children } = useApi<ScopeChild[]>(
+    `/summaries/scope/children?path=${encodeURIComponent(path)}`,
+  )
+  const { data: variants } = useApi<SummaryVariant[]>('/summaries/variants')
+
+  return (
+    <SummariesView
+      summary={summary}
+      childScopes={children ?? []}
+      variants={variants ?? []}
+      loading={loading}
+    />
   )
 }

@@ -27,30 +27,39 @@ Scope is the variable-depth `scope_path` (G1); the page reads `list_scope_childr
 - **Why:** Exactly the documented URL-as-state global-vs-page-local split (CLAUDE.md), enabling deep links and deterministic e2e setup.
 - **Rejected:** A single composite param (breaks the established split and the `filterSearchString` nav-link contract).
 
-## ADR8.2: How eval-aware e2e obtains summary fixtures
-<!-- UNRESOLVED -->
+## ADR8.2: Data-dependent summary rendering is tested at the component level, not e2e
 
-**Blocking T8.5 (and the content-bearing assertions of T8.6).** The eval selector
-is populated from `listSummaryVariants` (distinct `(strategy, model)` in
-`rollup_summaries`), and switching variants must swap the lens prose. But
-summarisation is a manual, ingest-decoupled pass (ADR2.4) that has not run, the
-Playwright `webServer` serves the backend against the real `~/.claude/cache` db
-(which holds **no** summary rows), and there is no e2e seeding seam. So the
-variants list is empty and every scope is `not_summarised` — T8.5's
-"switching variant changes the prose" is unobservable, and the structural
-tracers (T8.1–T8.4) only passed because they assert rendering, not content.
+**Resolved by reframing (5-Whys), 2026-06-01.** The original framing — "how does the
+e2e backend obtain seeded summary fixtures" — was the wrong question. T8.5 (switching
+a variant swaps the lens prose) and T8.6 (`not_summarised` empty state vs. lens cards)
+verify *component rendering logic* (API-response-shape → DOM), not browser/route
+integration. The project's test-suite split puts that in **vitest** (frontend
+component/unit), reserving **Playwright** for browser e2e — and the precedent is
+already in-tree this initiative: `ScopeBreadcrumb` (T8.2/T8.3) is a vitest
+component test (`@testing-library/react` + `MemoryRouter`), not e2e.
 
-The whole `webServer` cannot simply be repointed at a seeded fixture cache —
-the other e2e specs (`performance`, `kg`, …) depend on the real cache's data.
-
-| Option | Pros | Cons |
-|--------|------|------|
-| Seed test `rollup_summaries` rows into the real cache in a summaries-specific e2e setup | No new infra | Writes to the user's real db; ordering/cleanup fragility |
-| Add a `CLAUDE_SESSIONS_CACHE_DB_PATH` env override + a dedicated Playwright project/webServer on a fixture cache | Clean isolation; reusable for G9/G10 UI eval | New env surface + second webServer; project↔webServer wiring |
-| A test-only seeding endpoint guarded by an env flag | Seeds via API, no path coupling | Adds a write path to the API surface (even if guarded) |
-| Run a tiny real summarisation pass in e2e setup with a small GGUF | Exercises the real pipeline | Slow; needs a model download; flaky in CI |
-
-- **Decision:** pending — requires a Phase-2 refinement choice before T8.5 can be implemented test-first.
+- **Decision:**
+  1. Split `Summaries.tsx` into a thin **container** (does the `useApi` fetches) and a
+     presentational **`SummariesView`** that receives `summary`/`children`/`variants`
+     as **props** (dependency injection — no fetch, no mocks, per the no-mocks rule).
+  2. **T8.5 / T8.6** are **vitest** tests of `SummariesView` with controlled props
+     (summarised / not_summarised / variant-A vs variant-B) plus `MemoryRouter` for the
+     selector's `?strategy/?model` URL round-trip. Deterministic; no backend, no model,
+     no real-db writes.
+  3. The **e2e `summaries.spec.ts`** is reserved for the data-independent **shell smoke**
+     (route mounts; heading / grain selector / breadcrumb render). T8.1's lens-rendering
+     assertion (which only passed via the tracer's cards-always shell) moves to the
+     vitest test; its e2e becomes the shell smoke — which also removes the latent
+     T8.1↔T8.6 contradiction.
+- **Why:** Tests data-dependent rendering at the level the project already prescribes
+  and that `ScopeBreadcrumb` set precedent for; needs no GGUF, no curated gold set, no
+  real-cache writes, and no new e2e infra. The G10 human review still reads *real*
+  summaries in the UI once the benchmark has populated them — that is a manual activity,
+  not something the automated test suite should fake.
+- **Rejected:** all four "seed the e2e backend" options (real-cache seeding / fixture-cache
+  backend / seeding endpoint / real-GGUF-in-e2e) — each solved the wrong problem and
+  carried real costs (real-db writes, second webServer wiring, an API write path, or
+  slow flaky model downloads).
 
 ## Tickets
 | Ticket | Behavior | Depends on |

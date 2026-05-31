@@ -5,7 +5,7 @@
 > - **Prev:** [T8.4](./summariser-G8-T8.4.md)
 > - **Next:** [T8.6](./summariser-G8-T8.6.md)
 
-- [ ] **Done**
+- [x] **Done** _(per ADR8.2: tested at the component level — `src/pages/Summaries.test.ts` — not e2e)_
 
 With the eval selector present, changing `?strategy=`/`?model=` fetches that variant and swaps the prose shown in the lens cards (ADR7.2 eval-aware viewers).
 

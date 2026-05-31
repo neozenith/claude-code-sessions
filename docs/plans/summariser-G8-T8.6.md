@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T8.5](./summariser-G8-T8.5.md)
 
-- [ ] **Done**
+- [x] **Done** _(per ADR8.2: tested at the component level — `src/pages/Summaries.test.ts` — not e2e)_
 
 When the G7 API reports a scope has no summary, the page renders a `not_summarised` empty state instead of empty/blank lens cards.
 
