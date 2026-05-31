@@ -49,3 +49,18 @@ def test_ancestor_scopes_depth1_chain(tmp_path: Path) -> None:
     resolver = ProjectResolver(projects)
 
     assert ancestor_scopes(resolver, pid) == ["", "play", "play/foo"]
+
+
+def test_ancestor_scopes_depth2_clients_chain(tmp_path: Path) -> None:
+    projects = tmp_path / "projects"
+    pid = "-Users-testuser-clients-acme-app"
+    _write_index(projects, pid, "/Users/testuser/clients/acme/app")
+
+    resolver = ProjectResolver(projects)
+
+    assert ancestor_scopes(resolver, pid) == [
+        "",
+        "clients",
+        "clients/acme",
+        "clients/acme/app",
+    ]

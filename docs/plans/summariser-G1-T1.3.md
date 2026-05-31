@@ -5,7 +5,7 @@
 > - **Prev:** [T1.2](./summariser-G1-T1.2.md)
 > - **Next:** [T1.4](./summariser-G1-T1.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `ancestor_scopes(resolver, "-Users-testuser-clients-acme-app")` returns `["", "clients", "clients/acme", "clients/acme/app"]` — the variable-depth rule produces one scope per path segment for a deeper branch.
 
