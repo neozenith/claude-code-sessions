@@ -64,3 +64,21 @@ def test_ancestor_scopes_depth2_clients_chain(tmp_path: Path) -> None:
         "clients/acme",
         "clients/acme/app",
     ]
+
+
+def test_dashed_segment_uses_authoritative_path_not_id_split(tmp_path: Path) -> None:
+    """A project whose final segment contains dashes must resolve to ONE scope
+    segment via the authoritative ``projectPath`` — never split on '-' into
+    phantom levels (the ADR1.1 domain mis-bucketing failure)."""
+    projects = tmp_path / "projects"
+    pid = "-Users-testuser-play-claude-code-sessions"
+    _write_index(projects, pid, "/Users/testuser/play/claude-code-sessions")
+
+    resolver = ProjectResolver(projects)
+
+    assert scope_path_of(resolver, pid) == "play/claude-code-sessions"
+    assert ancestor_scopes(resolver, pid) == [
+        "",
+        "play",
+        "play/claude-code-sessions",
+    ]

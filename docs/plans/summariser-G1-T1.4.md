@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T1.3](./summariser-G1-T1.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 For `project_id == "-Users-testuser-play-claude-code-sessions"` whose authoritative `projectPath` is `/Users/testuser/play/claude-code-sessions`, `ancestor_scopes(...)` returns `["", "play", "play/claude-code-sessions"]` — the dashed segment stays one segment, proving derivation from `project_path` not from splitting the dash-encoded id.
 
