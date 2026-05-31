@@ -169,7 +169,9 @@ def build_parser() -> argparse.ArgumentParser:
     sessions_p = sub.add_parser(
         "sessions", help="Summarise sessions ingested to date (content-hash guarded)"
     )
-    sessions_p.add_argument("--model", required=True, help="Chat model name (provenance + registration)")
+    sessions_p.add_argument(
+        "--model", required=True, help="Chat model name (provenance + registration)"
+    )
     sessions_p.add_argument(
         "--scope", default=None, help="Restrict to a scope_path subtree, e.g. 'clients/acme'"
     )
@@ -179,7 +181,9 @@ def build_parser() -> argparse.ArgumentParser:
         "rollup", help="Roll up one level band at one grain off existing session_summaries"
     )
     rollup_p.add_argument("--strategy", required=True, help="Merge strategy flag (registry key)")
-    rollup_p.add_argument("--model", required=True, help="Summariser model name (provenance + scope)")
+    rollup_p.add_argument(
+        "--model", required=True, help="Summariser model name (provenance + scope)"
+    )
     rollup_p.add_argument(
         "--level", default=None, help="Level band to roll up: 'leaf' or 'root' (default: all tiers)"
     )

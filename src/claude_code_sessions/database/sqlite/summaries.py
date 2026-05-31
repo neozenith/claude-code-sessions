@@ -94,9 +94,7 @@ _PROMPT_HEADER = (
 )
 
 
-def _gather_human_text(
-    conn: sqlite3.Connection, project_id: str, session_id: str
-) -> list[str]:
+def _gather_human_text(conn: sqlite3.Connection, project_id: str, session_id: str) -> list[str]:
     """The session's ``msg_kind='human'`` prompt texts, in chronological order."""
     rows = conn.execute(
         """SELECT message_content
@@ -182,6 +180,7 @@ def summarise_session(
 # ---------------------------------------------------------------------------
 # Roll-up driver (G3)
 # ---------------------------------------------------------------------------
+
 
 def _rollup_source_hash(strategy: str, model: str, child_keys: list[tuple[str, str]]) -> str:
     """Freshness hash over (strategy, model, sorted child id+content-hash pairs).
@@ -396,7 +395,9 @@ def roll_up_scopes(
     # Scopes a project sits exactly at — the 'leaf' band (ADR3.4).
     leaf_scopes = {sc for (sc, _bucket) in own_sessions}
 
-    def _sessions_to_children(rows: list[sqlite3.Row]) -> tuple[list[Summary], list[tuple[str, str]]]:
+    def _sessions_to_children(
+        rows: list[sqlite3.Row],
+    ) -> tuple[list[Summary], list[tuple[str, str]]]:
         children = [Summary(m["task_summary"], m["patterns"], m["decisions_values"]) for m in rows]
         return children, [(m["session_id"], m["content_hash"]) for m in rows]
 
@@ -437,14 +438,25 @@ def roll_up_scopes(
                 children, child_keys = _sessions_to_children(own_sessions.get((scope, bucket), []))
                 rollups = child_rollups.get(bucket, [])
                 children += [
-                    Summary(r["task_summary"], r["patterns"], r["decisions_values"]) for r in rollups
+                    Summary(r["task_summary"], r["patterns"], r["decisions_values"])
+                    for r in rollups
                 ]
                 child_keys += [(r["scope_path"], r["source_hash"]) for r in rollups]
                 payload[bucket] = (children, child_keys)
 
         for bucket, (children, child_keys) in payload.items():
             if _write_scope_bucket(
-                conn, merger, engine, strategy, model, granularity, scope, bucket, children, child_keys, resolver
+                conn,
+                merger,
+                engine,
+                strategy,
+                model,
+                granularity,
+                scope,
+                bucket,
+                children,
+                child_keys,
+                resolver,
             ):
                 written += 1
     conn.commit()

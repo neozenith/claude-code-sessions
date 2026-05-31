@@ -115,7 +115,9 @@ class Database(Protocol):
         histogram, honoring the global days/project filters."""
         ...
 
-    def get_session_summary(self, project_id: str, session_id: str, *, model: str) -> dict[str, Any]:
+    def get_session_summary(
+        self, project_id: str, session_id: str, *, model: str
+    ) -> dict[str, Any]:
         """The 3-lens summary for a session under ``model`` (G7).
 
         Returns a discriminated payload: ``{"status": "summarised", "lenses": {...}}``

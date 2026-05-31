@@ -211,7 +211,9 @@ class SummaryMergerReGround:
         children: list[Summary],
         excerpts: SourceExcerpts | None,
     ) -> Summary:
-        prompt = _MERGE_PROMPT_HEADER + "\n" + _format_children(children) + _format_excerpts(excerpts)
+        prompt = (
+            _MERGE_PROMPT_HEADER + "\n" + _format_children(children) + _format_excerpts(excerpts)
+        )
         return _parse_summary(engine.summarise(model, prompt))
 
 
