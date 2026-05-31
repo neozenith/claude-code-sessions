@@ -4,6 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T10.6](./summariser-G10-T10.6.md)
 > - **Next:** [T10.8](./summariser-G10-T10.8.md)
+> - **Blocked by [CR1](./summariser-CR1.md):** this gate was unreachable — no survivor could be generated because the benchmark harness shipped stubbed/unrunnable. CR1 delivers the real, self-contained sweep so the report (T10.6) carries real scores for this verdict.
 
 - [ ] **Done**
 

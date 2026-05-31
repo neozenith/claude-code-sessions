@@ -18,6 +18,7 @@
     - [Gap Map](#gap-map)
     - [Dependencies](#dependencies)
     - [Gaps (detailed specs)](#gaps-detailed-specs)
+  - [Change Requests](#change-requests)
   - [Decisions (ADRs)](#decisions-adrs)
   - [Success Measures](#success-measures)
     - [Project Quality Bar (CI Gates)](#project-quality-bar-ci-gates)
@@ -238,6 +239,16 @@ flowchart LR
 | G9 | [SessionDetail evaluation — 18-kind filter + summary lineage](./summariser-G9.md) | TBD | One 18-value (+ All) `?msg=` selector plus the lineage breadcrumb linking a session to its scope summaries. |
 | G10 | [Empirical benchmark & decision gate](./summariser-G10.md) | TBD | Sweep {strategy × family × size}; ROUGE-L/BLEU/F1 screen + human taste gate via the UI; PROCEED-and-collapse or ABANDON-as-PoC. |
 | G11 | [Introspect-script parity](./summariser-G11.md) | TBD | Mirror the collapsed single-strategy pipeline into the introspect script (conditional on PROCEED). |
+
+## Change Requests
+
+Midflight scope discovered during implementation. A CR is raised when a ticket as written
+cannot be satisfied with real, executable code (distinct from an `<!-- UNRESOLVED -->` ADR,
+which is a pending *decision*). Each CR names the gap/ticket where it was discovered.
+
+| CR | Title | Discovered in | Status |
+|----|-------|---------------|--------|
+| [CR1](./summariser-CR1.md) | Make the G10 benchmark real, runnable, and self-contained in `summarise_cli` | [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) | in progress |
 
 ## Decisions (ADRs)
 

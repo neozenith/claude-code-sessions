@@ -5,6 +5,7 @@
 > - **Blocks:** [G11](./summariser-G11.md)
 > - **Prev:** [G9](./summariser-G9.md)
 > - **Next:** [G11](./summariser-G11.md)
+> - **Change Requests:** [CR1](./summariser-CR1.md) — this gap's benchmark shipped unrunnable (stubbed generation seam, no real model inventory, no gold set, a parallel `scripts/` harness not reusing the production path); CR1 makes it real, self-contained in `summarise_cli`, and evidenced by a live 2-model sweep.
 
 Sweeps the summarisation pipeline across {merge strategy × model family × parameter size}, screens it with reference metrics, lets the user evaluate the survivors **through the real UI** (G7/G8/G9), then makes the binding call that selects the production strategy + model — or abandons. This gap is the decision gate: it produces the information that determines whether the rest of the plan proceeds.
 
