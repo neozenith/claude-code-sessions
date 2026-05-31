@@ -88,6 +88,20 @@ def summarise_session(
     session_id, model)``.
     """
     human_texts = _gather_human_text(conn, project_id, session_id)
+    content_hash = _content_hash(human_texts)
+
+    # Content-hash freshness guard (ADR2.3): an unchanged session under the
+    # same model is a cache hit — skip the engine entirely so an incremental
+    # run does zero work for untouched sessions. A different model has no row
+    # here, so it falls through as a cache miss and writes its own row.
+    existing = conn.execute(
+        """SELECT content_hash FROM session_summaries
+           WHERE project_id = ? AND session_id = ? AND model = ?""",
+        (project_id, session_id, model),
+    ).fetchone()
+    if existing is not None and existing[0] == content_hash:
+        return
+
     prompt = _build_prompt(human_texts)
     raw = engine.summarise(model, prompt)
     parsed = json.loads(raw)
@@ -101,7 +115,7 @@ def summarise_session(
             project_id,
             session_id,
             model,
-            _content_hash(human_texts),
+            content_hash,
             parsed[_LENSES[0]],
             parsed[_LENSES[1]],
             parsed[_LENSES[2]],

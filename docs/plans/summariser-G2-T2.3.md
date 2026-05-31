@@ -5,7 +5,7 @@
 > - **Prev:** [T2.2](./summariser-G2-T2.2.md)
 > - **Next:** [T2.4](./summariser-G2-T2.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 A session whose concatenated human text yields an unchanged `content_hash` **for the same `model_id`** is skipped — `summarise_session` issues zero engine calls and leaves the existing row intact; the same text under a different `model_id` is a cache miss that writes a new row (ADR2.3).
 

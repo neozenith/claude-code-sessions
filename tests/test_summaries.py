@@ -171,3 +171,33 @@ def test_only_human_kind_text_is_summarised() -> None:
 
     row = conn.execute("SELECT human_event_count FROM session_summaries").fetchone()
     assert row["human_event_count"] == 2
+
+
+def test_unchanged_human_text_skips_engine_per_model() -> None:
+    """An unchanged session under the same model is a cache hit (zero calls);
+    a different model is a cache miss that writes a second row (ADR2.3)."""
+    conn = _make_cache()
+    project_id = "-Users-dev-play-foo"
+    session_id = "sess-guard"
+    _seed_human_events(conn, project_id, session_id, ["Build the guard.", "Make it cheap."])
+
+    engine = FakeEngine(
+        json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
+    )
+
+    # First run for model-a: one engine call, one row.
+    summarise_session(conn, project_id, session_id, engine, "model-a")
+    assert len(engine.calls) == 1
+    assert conn.execute("SELECT COUNT(*) FROM session_summaries").fetchone()[0] == 1
+
+    # Re-run on the same session+model with unchanged text: a cache hit —
+    # zero further engine calls, the single row left intact.
+    summarise_session(conn, project_id, session_id, engine, "model-a")
+    assert len(engine.calls) == 1
+    assert conn.execute("SELECT COUNT(*) FROM session_summaries").fetchone()[0] == 1
+
+    # The same text under a different model is a cache miss: a new call + row.
+    summarise_session(conn, project_id, session_id, engine, "model-b")
+    assert len(engine.calls) == 2
+    rows = conn.execute("SELECT model FROM session_summaries ORDER BY model").fetchall()
+    assert [r["model"] for r in rows] == ["model-a", "model-b"]
