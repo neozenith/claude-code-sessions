@@ -27,6 +27,31 @@ Scope is the variable-depth `scope_path` (G1); the page reads `list_scope_childr
 - **Why:** Exactly the documented URL-as-state global-vs-page-local split (CLAUDE.md), enabling deep links and deterministic e2e setup.
 - **Rejected:** A single composite param (breaks the established split and the `filterSearchString` nav-link contract).
 
+## ADR8.2: How eval-aware e2e obtains summary fixtures
+<!-- UNRESOLVED -->
+
+**Blocking T8.5 (and the content-bearing assertions of T8.6).** The eval selector
+is populated from `listSummaryVariants` (distinct `(strategy, model)` in
+`rollup_summaries`), and switching variants must swap the lens prose. But
+summarisation is a manual, ingest-decoupled pass (ADR2.4) that has not run, the
+Playwright `webServer` serves the backend against the real `~/.claude/cache` db
+(which holds **no** summary rows), and there is no e2e seeding seam. So the
+variants list is empty and every scope is `not_summarised` — T8.5's
+"switching variant changes the prose" is unobservable, and the structural
+tracers (T8.1–T8.4) only passed because they assert rendering, not content.
+
+The whole `webServer` cannot simply be repointed at a seeded fixture cache —
+the other e2e specs (`performance`, `kg`, …) depend on the real cache's data.
+
+| Option | Pros | Cons |
+|--------|------|------|
+| Seed test `rollup_summaries` rows into the real cache in a summaries-specific e2e setup | No new infra | Writes to the user's real db; ordering/cleanup fragility |
+| Add a `CLAUDE_SESSIONS_CACHE_DB_PATH` env override + a dedicated Playwright project/webServer on a fixture cache | Clean isolation; reusable for G9/G10 UI eval | New env surface + second webServer; project↔webServer wiring |
+| A test-only seeding endpoint guarded by an env flag | Seeds via API, no path coupling | Adds a write path to the API surface (even if guarded) |
+| Run a tiny real summarisation pass in e2e setup with a small GGUF | Exercises the real pipeline | Slow; needs a model download; flaky in CI |
+
+- **Decision:** pending — requires a Phase-2 refinement choice before T8.5 can be implemented test-first.
+
 ## Tickets
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
