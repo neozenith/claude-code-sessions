@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T7.2](./summariser-G7-T7.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/session/{project_id}/{session_id}?model=` returns `200` with the discriminated payload `{status:"summarised", lenses:{...}}` carrying the three lenses for a session that has a `session_summaries` row. _(tracer bullet)_
 

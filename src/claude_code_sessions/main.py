@@ -247,6 +247,15 @@ async def get_performance_summary(
     return get_db().get_performance_summary(days=days, project=project)
 
 
+@app.get("/api/summaries/session/{project_id}/{session_id}")
+async def get_session_summary(project_id: str, session_id: str, model: str) -> dict[str, Any]:
+    """The 3-lens summary for a session under ``model`` (G7).
+
+    Returns a discriminated payload: ``{status:"summarised", lenses:{...}}`` or
+    ``{status:"not_summarised"}`` — never a fabricated summary (ADR7.1)."""
+    return get_db().get_session_summary(project_id, session_id, model=model)
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

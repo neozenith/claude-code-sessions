@@ -533,6 +533,30 @@ class SQLiteDatabase:
             params,
         )
 
+    def get_session_summary(self, project_id: str, session_id: str, *, model: str) -> dict[str, Any]:
+        """The 3-lens summary for a session under ``model`` (G7, ADR7.1).
+
+        Returns ``{"status": "summarised", "lenses": {...}}`` when a row exists,
+        else ``{"status": "not_summarised"}`` — never a fabricated summary.
+        """
+        rows = self._q(
+            """SELECT task_summary, patterns, decisions_values
+               FROM session_summaries
+               WHERE project_id = ? AND session_id = ? AND model = ?""",
+            (project_id, session_id, model),
+        )
+        if not rows:
+            return {"status": "not_summarised"}
+        row = rows[0]
+        return {
+            "status": "summarised",
+            "lenses": {
+                "task_summary": row["task_summary"],
+                "patterns": row["patterns"],
+                "decisions_values": row["decisions_values"],
+            },
+        }
+
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.
 

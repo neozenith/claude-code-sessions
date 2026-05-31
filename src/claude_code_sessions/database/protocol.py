@@ -115,6 +115,14 @@ class Database(Protocol):
         histogram, honoring the global days/project filters."""
         ...
 
+    def get_session_summary(self, project_id: str, session_id: str, *, model: str) -> dict[str, Any]:
+        """The 3-lens summary for a session under ``model`` (G7).
+
+        Returns a discriminated payload: ``{"status": "summarised", "lenses": {...}}``
+        when a ``session_summaries`` row exists, else ``{"status": "not_summarised"}``
+        — never a fabricated summary (ADR7.1)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 
