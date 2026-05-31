@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T4.2](./summariser-G4-T4.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `SummaryMergerStrict.wants_excerpts` is `False`, and calling `merge` with excerpts supplied produces the same engine prompt as calling it with `None` — strict never consumes source text.
 

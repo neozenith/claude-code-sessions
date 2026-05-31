@@ -12,7 +12,11 @@ import json
 import sqlite3
 from pathlib import Path
 
-from claude_code_sessions.database.sqlite.merge import Summary, SummaryMergerStrict
+from claude_code_sessions.database.sqlite.merge import (
+    SourceExcerpts,
+    Summary,
+    SummaryMergerStrict,
+)
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import roll_up_scopes
 from claude_code_sessions.project_resolver import ProjectResolver
@@ -122,3 +126,20 @@ def test_strict_flag_drives_rollup(tmp_path: Path) -> None:
     ).fetchone()
     assert leaf["strategy"] == "strict"
     assert leaf["task_summary"] == "STRICT_task"  # parsed from the strict merger's engine reply
+
+
+def test_strict_ignores_excerpts() -> None:
+    """Supplying excerpts produces the same prompt as None — strict never reads
+    source text (summary-only contract)."""
+    children = [Summary("a", "b", "c"), Summary("d", "e", "f")]
+    merger = SummaryMergerStrict()
+    assert merger.wants_excerpts is False
+
+    reply = json.dumps({"task_summary": "x", "patterns": "y", "decisions_values": "z"})
+    e_none = RecordingEngine(reply)
+    merger.merge(e_none, "model-a", children, None)
+    e_excerpts = RecordingEngine(reply)
+    merger.merge(e_excerpts, "model-a", children, SourceExcerpts(["RAW_EXCERPT_ONE", "RAW_EXCERPT_TWO"]))
+
+    assert e_none.calls[0][1] == e_excerpts.calls[0][1]
+    assert "RAW_EXCERPT_ONE" not in e_excerpts.calls[0][1]
