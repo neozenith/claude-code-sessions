@@ -3,6 +3,7 @@ import { useParams, Link, useLocation, useNavigate } from 'react-router-dom'
 import { useApi } from '@/hooks/useApi'
 import { useFilters } from '@/hooks/useFilters'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import ScopeBreadcrumb from '@/components/ScopeBreadcrumb'
 import { formatProjectName } from '@/lib/formatters'
 import type {
   SessionEvent,
@@ -14,6 +15,7 @@ import type {
   SummaryLenses,
   SummaryResponse,
   SummaryVariant,
+  ProjectScope,
 } from '@/lib/api-client'
 import { MSG_KIND_OPTIONS, baseKind, matchesKind } from '@/lib/message-kinds'
 import {
@@ -577,6 +579,22 @@ export default function SessionDetail() {
   const { data: sessionSummary } = useApi<SummaryResponse>(sessionSummaryUrl)
   const summaryLenses: SummaryLenses | null =
     sessionSummary?.status === 'summarised' ? sessionSummary.lenses : null
+
+  // Scope lineage (G9/ADR9.2): the session's project scope_path drives a shared
+  // ScopeBreadcrumb whose crumbs link UP to the explorer scope summaries.
+  const { data: projectScope } = useApi<ProjectScope>(
+    projectId ? `/summaries/scope/of-project?project_id=${encodeURIComponent(projectId)}` : null,
+  )
+  const sessionScopePath = projectScope?.scope_path ?? ''
+  const breadcrumbLinkTo = (scope: string): string => {
+    // Carry only the global filters (days/project) to the explorer — never the
+    // page-local ?msg= filter (URL-as-state global-vs-page-local split).
+    const params = new URLSearchParams(filterSearchString)
+    if (scope) params.set('path', scope)
+    else params.delete('path')
+    const qs = params.toString()
+    return `/summaries${qs ? `?${qs}` : ''}`
+  }
   const turnsByUuid = useMemo(() => {
     const map = new Map<string, SessionMetricsTurn>()
     metrics?.turns.forEach((t) => {
@@ -688,6 +706,13 @@ export default function SessionDetail() {
           <span className="font-mono text-sm">{sessionId}</span>
         </p>
       </div>
+
+      {/* Scope lineage breadcrumb (G9 / ADR9.2) — link up to the explorer scopes. */}
+      {sessionScopePath ? (
+        <div data-testid="session-scope-breadcrumb">
+          <ScopeBreadcrumb scopePath={sessionScopePath} linkTo={breadcrumbLinkTo} />
+        </div>
+      ) : null}
 
       {/* Session 3-lens summary (G9 / ADR9.2) — read the summary next to the prompts. */}
       <Card data-testid="session-summary-card">

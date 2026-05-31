@@ -94,6 +94,19 @@ test.describe('Session Detail - Message Kind Filter', () => {
     await expect(page.getByTestId('session-lens-decisions')).toBeVisible()
   })
 
+  test('session detail breadcrumb links to the explorer scope', async ({ page }) => {
+    await navigateToSession(page, TEST_SESSION_ID)
+
+    const breadcrumb = page.getByTestId('session-scope-breadcrumb')
+    await expect(breadcrumb).toBeVisible()
+
+    // A crumb links UP to the explorer scope route (/summaries?…path=…).
+    const crumb = breadcrumb.locator('[data-testid="scope-crumb"]').first()
+    const href = await crumb.getAttribute('href')
+    expect(href).toContain('/summaries')
+    expect(href).toContain('path=')
+  })
+
   test('selecting subagent-thinking filters and round-trips through ?msg=', async ({ page }) => {
     await navigateToSession(page, TEST_SESSION_ID)
 

@@ -14,14 +14,22 @@ interface ScopeBreadcrumbProps {
   scopePath: string
   /** Immediate child scopes to render as drill-down links (G7 listScopeChildren). */
   childScopes?: ScopeChild[]
+  /**
+   * Override the crumb/child href for a scope_path. Defaults to an in-place
+   * `?path=` on the current route (explorer). SessionDetail (G9) passes a builder
+   * that targets the explorer route `/summaries?path=…` carrying only the global
+   * filters, so the session links up to the explorer scope (ADR9.2).
+   */
+  linkTo?: (scopePath: string) => string
 }
 
-export default function ScopeBreadcrumb({ scopePath, childScopes }: ScopeBreadcrumbProps) {
+export default function ScopeBreadcrumb({ scopePath, childScopes, linkTo }: ScopeBreadcrumbProps) {
   const [searchParams] = useSearchParams()
 
   // Build a `?path=` href that sets path (or clears it at root) while
   // preserving every other current param (days/project/grain/…).
   const toPath = (path: string): string => {
+    if (linkTo) return linkTo(path)
     const next = new URLSearchParams(searchParams)
     if (path === '') {
       next.delete('path')

@@ -154,6 +154,12 @@ class Database(Protocol):
         the eval picker's option source (G7, ADR7.2)."""
         ...
 
+    def get_project_scope(self, project_id: str) -> dict[str, Any]:
+        """A project's resolved ``scope_path`` + root-first ancestor chain (G1),
+        for the SessionDetail lineage breadcrumb (G9); ``scope_path`` is ``None``
+        when unresolved."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

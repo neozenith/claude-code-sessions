@@ -56,6 +56,12 @@ export interface ScopeChild {
   scope_depth: number
 }
 
+/** A project's resolved scope_path + root-first ancestor chain (G1). */
+export interface ProjectScope {
+  scope_path: string | null
+  ancestor_scopes: string[]
+}
+
 /**
  * Creates an ApiError from a failed Response
  */
@@ -305,6 +311,11 @@ export class ApiClient {
   /** Distinct (strategy, model) variants present in the roll-up table (G7). */
   async listSummaryVariants(): Promise<ApiResult<SummaryVariant[]>> {
     return this.get('/summaries/variants')
+  }
+
+  /** A project's resolved scope_path + ancestor chain, for the lineage breadcrumb (G9). */
+  async getProjectScope(projectId: string): Promise<ApiResult<ProjectScope>> {
+    return this.get('/summaries/scope/of-project', { project_id: projectId })
   }
 
   /** Per-turn idle/active/tps/too_fast + a session summary. */

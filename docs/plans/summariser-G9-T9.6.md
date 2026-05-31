@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T9.5](./summariser-G9-T9.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 SessionDetail mounts the G8 `ScopeBreadcrumb` so the session links up its `scope_path` ancestors to the explorer scope and root summaries (ADR9.2 shared lineage navigation).
 

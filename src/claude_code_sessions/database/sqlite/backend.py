@@ -44,7 +44,7 @@ from claude_code_sessions.database.sqlite.pricing import (
     TOO_FAST_MIN_TOKENS,
 )
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH
-from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes
+from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes, scope_path_of
 
 
 class SQLiteDatabase:
@@ -657,6 +657,17 @@ class SQLiteDatabase:
                 if sc and parent == scope_path:
                     children.add(sc)
         return [{"scope_path": c, "scope_depth": len(c.split("/"))} for c in sorted(children)]
+
+    def get_project_scope(self, project_id: str) -> dict[str, Any]:
+        """A project's resolved ``scope_path`` + root-first ancestor chain (G1),
+        for the SessionDetail lineage breadcrumb (G9). ``scope_path`` is ``None``
+        when the project can't be resolved on this machine."""
+        try:
+            resolver = ProjectResolver(self.projects_path)
+            scope = scope_path_of(resolver, project_id)
+        except (FileNotFoundError, ValueError, KeyError):
+            return {"scope_path": None, "ancestor_scopes": []}
+        return {"scope_path": scope, "ancestor_scopes": ancestor_scopes(resolver, project_id)}
 
     def list_summary_variants(self) -> list[dict[str, Any]]:
         """Distinct ``(strategy, model)`` pairs in ``rollup_summaries`` — the eval

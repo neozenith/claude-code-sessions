@@ -291,6 +291,13 @@ async def list_summary_variants() -> list[dict[str, Any]]:
     return get_db().list_summary_variants()
 
 
+@app.get("/api/summaries/scope/of-project")
+async def get_project_scope(project_id: str) -> dict[str, Any]:
+    """A project's resolved scope_path + ancestor chain, for the SessionDetail
+    lineage breadcrumb (G9)."""
+    return get_db().get_project_scope(project_id)
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,
