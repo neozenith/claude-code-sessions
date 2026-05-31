@@ -483,3 +483,38 @@ def test_get_merger_resolves_registered_and_rejects_unknown() -> None:
     finally:
         MERGER_REGISTRY.pop("merger-a", None)
         MERGER_REGISTRY.pop("merger-b", None)
+
+
+def test_rollup_selects_only_matching_model_children(tmp_path: Path) -> None:
+    """A (strategy, model) rollup merges only that model's child summaries (ADR3.3)."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme-app"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    resolver = ProjectResolver(projects)
+
+    # Same two sessions summarised under BOTH models.
+    for sid in ["s1", "s2"]:
+        sf = _seed_source_file(conn, acme, sid)
+        _seed_event(conn, acme, sid, "human", f"t {sid}", 1, sf)
+        _seed_session_summary(conn, acme, sid, "model-a", f"{sid}-a")
+        _seed_session_summary(conn, acme, sid, "model-b", f"{sid}-b")
+    conn.commit()
+
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+        roll_up_scopes(conn, _canned(), "stub", "model-b", "day", resolver=resolver)
+    finally:
+        MERGER_REGISTRY.pop("stub", None)
+
+    leaf_a = conn.execute(
+        "SELECT * FROM rollup_summaries WHERE scope_path = 'clients/acme/app' AND model = 'model-a'"
+    ).fetchall()
+    leaf_b = conn.execute(
+        "SELECT * FROM rollup_summaries WHERE scope_path = 'clients/acme/app' AND model = 'model-b'"
+    ).fetchall()
+    assert len(leaf_a) == 1 and leaf_a[0]["child_count"] == 2  # only the model-A rows
+    assert len(leaf_b) == 1 and leaf_b[0]["child_count"] == 2  # a distinct model-B row
+    assert leaf_a[0]["source_hash"] != leaf_b[0]["source_hash"]  # model is in the freshness key

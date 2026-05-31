@@ -5,7 +5,7 @@
 > - **Prev:** [T3.3](./summariser-G3-T3.3.md)
 > - **Next:** [T3.5](./summariser-G3-T3.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 When `session_summaries` for the same session exist under two models, `roll_up_scopes(..., model=M)` merges only the model-`M` rows — the resulting rollup's `child_count` and content derive solely from model-`M` children (ADR3.3 model scoping).
 
