@@ -289,10 +289,27 @@ def roll_up_scopes(
             ] + [Summary(r["task_summary"], r["patterns"], r["decisions_values"]) for r in rollups]
             if not children:
                 continue
-            merged = merger.merge(engine, model, children, None)
             child_keys = [(m["session_id"], m["content_hash"]) for m in sessions] + [
                 (r["scope_path"], r["source_hash"]) for r in rollups
             ]
+            source_hash = _rollup_source_hash(strategy, model, child_keys)
+
+            # Freshness guard (ADR3.3): a row with the same source_hash means
+            # nothing this (strategy, model) depends on changed — skip the merge
+            # entirely, leaving the existing row (and its generated_at) intact.
+            # Because the walk is deepest-first, a re-merged child below already
+            # carries a new source_hash, so its parent's hash flips too — the
+            # re-computation cascades up only as far as a change reaches.
+            existing = conn.execute(
+                """SELECT source_hash FROM rollup_summaries
+                   WHERE strategy = ? AND model = ? AND scope_path = ?
+                     AND time_granularity = ? AND time_bucket = ?""",
+                (strategy, model, scope, granularity, bucket),
+            ).fetchone()
+            if existing is not None and existing["source_hash"] == source_hash:
+                continue
+
+            merged = merger.merge(engine, model, children, None)
             conn.execute(
                 """INSERT OR REPLACE INTO rollup_summaries
                        (strategy, model, scope_path, scope_depth,
@@ -311,7 +328,7 @@ def roll_up_scopes(
                     merged.patterns,
                     merged.decisions_values,
                     len(children),
-                    _rollup_source_hash(strategy, model, child_keys),
+                    source_hash,
                     datetime.now(UTC).isoformat(),
                 ),
             )

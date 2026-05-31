@@ -518,3 +518,54 @@ def test_rollup_selects_only_matching_model_children(tmp_path: Path) -> None:
     assert len(leaf_a) == 1 and leaf_a[0]["child_count"] == 2  # only the model-A rows
     assert len(leaf_b) == 1 and leaf_b[0]["child_count"] == 2  # a distinct model-B row
     assert leaf_a[0]["source_hash"] != leaf_b[0]["source_hash"]  # model is in the freshness key
+
+
+def test_source_hash_freshness_scoped_by_model_strategy(tmp_path: Path) -> None:
+    """An identical re-run is a no-op (0 merges, generated_at unchanged); a changed
+    child re-merges its scope chain; a different model recomputes (ADR3.3)."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme-app"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    resolver = ProjectResolver(projects)
+
+    for sid, ch in [("s1", "h1"), ("s2", "h2")]:
+        sf = _seed_source_file(conn, acme, sid)
+        _seed_event(conn, acme, sid, "human", f"t {sid}", 1, sf)
+        _seed_session_summary(conn, acme, sid, "model-a", ch)
+        _seed_session_summary(conn, acme, sid, "model-b", ch)
+    conn.commit()
+
+    leaf_q = "SELECT generated_at FROM rollup_summaries WHERE scope_path = 'clients/acme/app' AND model = 'model-a'"
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+        first_calls = len(stub.calls)
+        gen_before = conn.execute(leaf_q).fetchone()[0]
+
+        # Identical re-run: every scope is fresh → zero merges, row untouched.
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+        assert len(stub.calls) == first_calls
+        assert conn.execute(leaf_q).fetchone()[0] == gen_before
+
+        # A changed child content_hash flips the leaf hash → re-merge cascades up.
+        conn.execute(
+            "UPDATE session_summaries SET content_hash = 'h1-new' WHERE session_id = 's1' AND model = 'model-a'"
+        )
+        conn.commit()
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+        assert len(stub.calls) > first_calls  # the changed scope chain re-merged
+
+        # A different model is never a freshness hit — it computes its own rows.
+        calls_before_b = len(stub.calls)
+        roll_up_scopes(conn, _canned(), "stub", "model-b", "day", resolver=resolver)
+        assert len(stub.calls) > calls_before_b
+        assert (
+            conn.execute(
+                "SELECT COUNT(*) FROM rollup_summaries WHERE scope_path = 'clients/acme/app' AND model = 'model-b'"
+            ).fetchone()[0]
+            == 1
+        )
+    finally:
+        MERGER_REGISTRY.pop("stub", None)

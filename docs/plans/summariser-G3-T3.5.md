@@ -5,7 +5,7 @@
 > - **Prev:** [T3.4](./summariser-G3-T3.4.md)
 > - **Next:** [T3.6](./summariser-G3-T3.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 A second driver run over identical inputs computes the same `source_hash` (hash of `strategy`, `model`, child ids + content_hashes) per scope and performs zero engine calls; changing a child summary, the model, or the strategy flips the hash and triggers re-merge (ADR3.3).
 
