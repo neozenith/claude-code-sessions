@@ -12,6 +12,7 @@ types it exchanges, and the fail-loud registry lookup.
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
 
@@ -26,6 +27,7 @@ __all__ = [
     "SourceExcerpts",
     "Summary",
     "SummaryMerger",
+    "SummaryMergerStrict",
     "get_merger",
     "register_merger",
 ]
@@ -93,3 +95,61 @@ def get_merger(name: str) -> SummaryMerger:
         raise KeyError(
             f"Unknown merge strategy {name!r}. Registered strategies: {sorted(MERGER_REGISTRY)}"
         ) from None
+
+
+# ---------------------------------------------------------------------------
+# Concrete mergers
+# ---------------------------------------------------------------------------
+
+_MERGE_PROMPT_HEADER = (
+    "You are merging several child summaries into ONE higher-level summary across "
+    "the same three lenses. Read the child summaries below and reply with a single "
+    "JSON object with exactly these keys:\n"
+    '  "task_summary": the combined task + ubiquitous language across the children;\n'
+    '  "patterns": the architectural patterns used or reused across the children;\n'
+    '  "decisions_values": the decisions and values expressed across the children.\n'
+)
+
+
+def _parse_summary(raw: str) -> Summary:
+    """Parse the engine's JSON reply into a :class:`Summary` (fail-loud on bad output)."""
+    parsed = json.loads(raw)
+    return Summary(parsed["task_summary"], parsed["patterns"], parsed["decisions_values"])
+
+
+def _format_children(children: list[Summary]) -> str:
+    blocks = []
+    for i, child in enumerate(children, start=1):
+        blocks.append(
+            f"Child {i}:\n"
+            f"- task: {child.task_summary}\n"
+            f"- patterns: {child.patterns}\n"
+            f"- decisions/values: {child.decisions_values}"
+        )
+    return "\n\n".join(blocks)
+
+
+class SummaryMergerStrict:
+    """Bottom-up, summaries-only merger (GraphRAG-style) — the cheapest strategy.
+
+    Synthesises a scope's three lenses from its children's summaries alone, with
+    no source re-grounding. ``excerpts`` is accepted to satisfy the Protocol but
+    ignored — the summary-only contract (ADR3.1; G5 is the re-grounding variant).
+    """
+
+    name = "strict"
+    child_mode: ChildMode = "child_rollups"
+    wants_excerpts = False
+
+    def merge(
+        self,
+        engine: SummaryEngine,
+        model: str,
+        children: list[Summary],
+        excerpts: SourceExcerpts | None,
+    ) -> Summary:
+        prompt = _MERGE_PROMPT_HEADER + "\n" + _format_children(children)
+        return _parse_summary(engine.summarise(model, prompt))
+
+
+register_merger(SummaryMergerStrict())

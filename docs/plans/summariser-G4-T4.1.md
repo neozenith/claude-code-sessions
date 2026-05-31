@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T4.2](./summariser-G4-T4.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `SummaryMergerStrict.merge(engine, model, children, None)` returns one `Summary` whose three lenses synthesise the two child summaries via the engine; the engine prompt contains the children's lens text and no raw source excerpts. _(tracer bullet)_
 
