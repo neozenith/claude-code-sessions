@@ -248,7 +248,7 @@ which is a pending *decision*). Each CR names the gap/ticket where it was discov
 
 | CR | Title | Discovered in | Status |
 |----|-------|---------------|--------|
-| [CR1](./summariser-CR1.md) | Make the G10 benchmark real, runnable, and self-contained in `summarise_cli` | [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) | in progress |
+| [CR1](./summariser-CR1.md) | Make the G10 benchmark real, runnable, and self-contained in `summarise_cli` | [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) | done (2026-06-01) — 2 GGUFs × all permutations scored; see [report](./summariser-G10-REPORT.md) |
 
 ## Decisions (ADRs)
 

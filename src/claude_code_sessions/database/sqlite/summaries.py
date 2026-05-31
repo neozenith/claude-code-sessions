@@ -13,7 +13,7 @@ output parsing, and the upsert; the engine owns only "text in → text out".
 from __future__ import annotations
 
 import hashlib
-import json
+import logging
 import re
 import sqlite3
 from collections import Counter, defaultdict
@@ -28,6 +28,7 @@ from claude_code_sessions.database.sqlite.merge import (
     get_merger,
     select_excerpts,
 )
+from claude_code_sessions.database.sqlite.summary_json import parse_lenses
 from claude_code_sessions.database.sqlite.time_buckets import bucket_expr
 from claude_code_sessions.project_resolver import (
     ProjectResolver,
@@ -42,6 +43,23 @@ __all__ = [
     "score_summary",
     "summarise_session",
 ]
+
+# Note: ``log`` is ``math.log`` in this module (BLEU), so the logger is ``logger``.
+logger = logging.getLogger(__name__)
+
+
+def _resolve_scopes(resolver: ProjectResolver, project_id: str) -> tuple[str, list[str]] | None:
+    """A project's ``(scope_path, ancestor chain)``, or ``None`` if it can't be
+    resolved to a real path.
+
+    Some encoded ``project_id`` values in the cache don't map to a resolvable
+    filesystem path (e.g. odd nested-skill encodings); such a project belongs to
+    *no* scope, so the roll-up driver and excerpt gatherer skip it rather than
+    crash on a ``KeyError`` from ``scope_path_of`` (CR1 — surfaced by a live run)."""
+    try:
+        return scope_path_of(resolver, project_id), ancestor_scopes(resolver, project_id)
+    except KeyError:
+        return None
 
 
 class SummaryEngine(Protocol):
@@ -155,7 +173,7 @@ def summarise_session(
 
     prompt = _build_prompt(human_texts)
     raw = engine.summarise(model, prompt)
-    parsed = json.loads(raw)
+    lenses = parse_lenses(raw)
     conn.execute(
         """INSERT OR REPLACE INTO session_summaries
                (project_id, session_id, model, content_hash,
@@ -167,9 +185,9 @@ def summarise_session(
             session_id,
             model,
             content_hash,
-            parsed[_LENSES[0]],
-            parsed[_LENSES[1]],
-            parsed[_LENSES[2]],
+            lenses[_LENSES[0]],
+            lenses[_LENSES[1]],
+            lenses[_LENSES[2]],
             datetime.now(UTC).isoformat(),
             len(human_texts),
         ),
@@ -239,7 +257,11 @@ def _gather_excerpt_candidates(
     ).fetchall()
     candidates: list[ExcerptCandidate] = []
     for row in rows:
-        if scope in ancestor_scopes(resolver, row["project_id"]):
+        resolved = _resolve_scopes(resolver, row["project_id"])
+        if resolved is None:
+            continue  # unresolvable project — belongs to no scope
+        _scope_path, ancestors = resolved
+        if scope in ancestors:
             candidates.append(ExcerptCandidate(str(row["timestamp"]), str(row["message_content"])))
     return candidates
 
@@ -386,10 +408,16 @@ def roll_up_scopes(
     own_sessions: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
     session_entries: list[tuple[sqlite3.Row, set[str], str]] = []
     for row in session_rows:
-        ancestors = set(ancestor_scopes(resolver, row["project_id"]))
+        resolved = _resolve_scopes(resolver, row["project_id"])
+        if resolved is None:
+            # Unresolvable project — can't place it in the trie; skip (not an error).
+            logger.warning("roll-up: skipping unresolvable project %s", row["project_id"])
+            continue
+        leaf, ancestors_list = resolved
+        ancestors = set(ancestors_list)
         all_scopes |= ancestors
         bucket = str(row["bucket"])
-        own_sessions[(scope_path_of(resolver, row["project_id"]), bucket)].append(row)
+        own_sessions[(leaf, bucket)].append(row)
         session_entries.append((row, ancestors, bucket))
 
     # Scopes a project sits exactly at — the 'leaf' band (ADR3.4).

@@ -1,0 +1,10 @@
+{
+  "project_id": "-Users-joshpeak-play-claude-code-sessions",
+  "session_id": "44ad89b7-c693-46e6-b37f-4d5b74b56228",
+  "note": "Hand-curated gold (CR1.3) — configurable projects path + background pipeline + warnings-as-errors.",
+  "gold": {
+    "task_summary": "Let the claude-code-sessions server start from either the default ~/.claude/projects/ or an environment-variable-injected projects path, run the full ingestion/chunking/embedding/NER+RE+ER pipeline as a background process parallel to the server so the server never stalls, and fix the project's linting.",
+    "patterns": "Configurable data-source path via env var with a sensible default; a background/parallel indexing pipeline decoupled from the request-serving server; a warnings-as-errors lint policy.",
+    "decisions_values": "Treat all warnings as errors — fix them or ask the human; never ignore lint errors at the agent's own discretion; always get human authorisation before adding any lint exception."
+  }
+}

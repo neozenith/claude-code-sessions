@@ -636,3 +636,48 @@ def test_rollup_runs_only_requested_level_band(tmp_path: Path) -> None:
         assert root["child_count"] == 1
     finally:
         MERGER_REGISTRY.pop("stub", None)
+
+
+class ExcerptStub:
+    """A wants_excerpts stub merger (exercises the re-grounding excerpt path)."""
+
+    name = "reground-stub"
+    child_mode: ChildMode = "child_rollups"
+    wants_excerpts = True
+
+    def merge(self, engine: object, model: str, children: list[Summary], excerpts: object) -> Summary:
+        return Summary("R_task", "R_pat", "R_dec")
+
+
+def test_rollup_skips_unresolvable_projects_during_excerpt_gather(tmp_path: Path) -> None:
+    """A reground roll-up must not crash when the cache holds a human event for a
+    project_id that can't be resolved to a scope (CR1 — surfaced by a live run);
+    the unresolvable project is skipped, the resolvable scope still rolls up."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme-app"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    resolver = ProjectResolver(projects)
+
+    # A resolvable session (summarised) ...
+    sf = _seed_source_file(conn, acme, "s1")
+    _seed_event(conn, acme, "s1", "human", "resolvable prompt", 1, sf)
+    _seed_session_summary(conn, acme, "s1", "model-a", "h1")
+    # ... plus a human event for a bogus, unresolvable project_id (no index, no
+    # real path) — this is what crashed excerpt gathering before the fix.
+    bogus = "-Users-dev-nope--weird-unresolvable-encoding"
+    bsf = _seed_source_file(conn, bogus, "b1")
+    _seed_event(conn, bogus, "b1", "human", "unresolvable prompt", 1, bsf)
+    conn.commit()
+
+    MERGER_REGISTRY["reground-stub"] = ExcerptStub()
+    try:
+        written = roll_up_scopes(conn, _canned(), "reground-stub", "model-a", "day", resolver=resolver)
+    finally:
+        MERGER_REGISTRY.pop("reground-stub", None)
+
+    assert written >= 1  # did not crash; the resolvable scope rolled up
+    leaf = conn.execute(
+        "SELECT * FROM rollup_summaries WHERE scope_path = 'clients/acme/app'"
+    ).fetchone()
+    assert leaf is not None

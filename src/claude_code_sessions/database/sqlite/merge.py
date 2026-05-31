@@ -12,9 +12,10 @@ types it exchanges, and the fail-loud registry lookup.
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, Protocol
+
+from claude_code_sessions.database.sqlite.summary_json import parse_lenses
 
 if TYPE_CHECKING:
     # Only needed for the merge() annotation. Importing at runtime would create
@@ -140,9 +141,10 @@ _MERGE_PROMPT_HEADER = (
 
 
 def _parse_summary(raw: str) -> Summary:
-    """Parse the engine's JSON reply into a :class:`Summary` (fail-loud on bad output)."""
-    parsed = json.loads(raw)
-    return Summary(parsed["task_summary"], parsed["patterns"], parsed["decisions_values"])
+    """Parse the engine's reply into a :class:`Summary` (fail-loud, tolerant of
+    ``<think>``/prose-wrapped model output via :func:`parse_lenses`)."""
+    lenses = parse_lenses(raw)
+    return Summary(lenses["task_summary"], lenses["patterns"], lenses["decisions_values"])
 
 
 def _format_children(children: list[Summary]) -> str:

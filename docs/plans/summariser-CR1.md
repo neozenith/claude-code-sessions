@@ -3,7 +3,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Type:** Change Request (midflight discovery)
 > - **Discovered in:** [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) — the decision gate could never be reached because the benchmark harness shipped unrunnable.
-> - **Status:** in progress
+> - **Status:** done (2026-06-01)
 
 ## Why this CR exists
 
@@ -53,3 +53,43 @@ short runs over a small batch of sessions are fast.
   no reingest, no chunking, no KG needed for the sweep.
 - Available chat GGUFs (copyable from `~/play/sqlite-vector-graph/models/`): gemma-4 E2B/E4B,
   Qwen3.5 0.8B/2B/4B.
+
+## Done evidence (CR1.6 gate met — 2026-06-01)
+
+Two real GGUFs (gemma-4-E2B, Qwen3.5-2B) swept across **all three** strategies over the
+3-session curated gold set, scored with real numbers. Report:
+[summariser-G10-REPORT.md](./summariser-G10-REPORT.md).
+
+| Permutation | ROUGE-L | BLEU | F1 | status | sec |
+|-------------|--------:|-----:|---:|--------|----:|
+| `gemma-4-E2B__flat`     | 0.206 | 0.077 | 0.367 | ok    | 52.1 |
+| `gemma-4-E2B__strict`   | 0.206 | 0.077 | 0.367 | ok    | 86.0 |
+| `gemma-4-E2B__reground` | 0.206 | 0.077 | 0.367 | error | 112.8 |
+| `Qwen3.5-2B__flat`      | 0.198 | 0.070 | 0.336 | ok    | 35.2 |
+| `Qwen3.5-2B__strict`    | 0.198 | 0.070 | 0.336 | ok    | 105.6 |
+| `Qwen3.5-2B__reground`  | 0.198 | 0.070 | 0.336 | error | 21.7 |
+
+**Empirical findings the real run surfaced (the point of the executable-evidence bar):**
+
+1. The automated screen ranks the **model** — extraction scores are identical across a model's
+   three strategies (same `summarise_session`; ADR10.1), and gemma-4-E2B edges out Qwen3.5-2B.
+2. **`reground` is infeasible for both models on this corpus**: gemma's excerpt-laden merge
+   prompt hit 27,301 tokens vs the 16,384 context window; Qwen returned no parseable JSON.
+   `select_excerpts` bounds excerpt *count* (ADR5.1) but not *total tokens* — a real cost of the
+   reground strategy, recorded as first-class data (`status: error` + `rollup_error`), not hidden.
+3. The benchmark now records a model-boundary failure as a result row rather than crashing the
+   sweep, so the report is always complete and the failures are auditable.
+
+**Reuse achieved:** the harness calls the production path verbatim — `summarise_session`,
+`roll_up_scopes`, the registered mergers, and `score_summary` — with the registered GGUF
+`muninn_chat` SQL function as the *only* external boundary. `scripts/summary_bench.py` (the
+parallel re-implementation with stubs) was deleted.
+
+### Open follow-up (out of CR1 scope)
+
+`reground`'s unbounded excerpt-token budget is a genuine product gap surfaced here, not a CR1
+deliverable. If the strategy is to remain viable it needs a token-budgeted excerpt selector
+(bound total tokens, not just count) — a candidate for a future CR or the G10 ABANDON-branch
+"new gap-analysis for the discovered failure modes."
+
+- [x] **Done** — two GGUFs × all permutations swept and scored with real numbers; report committed.

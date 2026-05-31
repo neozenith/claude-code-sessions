@@ -1,0 +1,10 @@
+{
+  "project_id": "-Users-joshpeak-play-claude-code-sessions",
+  "session_id": "0a2b2078-985a-49bf-af3d-d12864a0abf5",
+  "note": "Hand-curated gold (CR1.3) — port ML text analysis into the introspect reflect command.",
+  "gold": {
+    "task_summary": "Port the ML text-analysis functionality from analyze_text.py into introspect_sessions.py as an --engine option on the reflect command, move the ML dependencies into the sibling test file, then delete analyze_text.py and remove every reference to it under .claude/skills/introspect/.",
+    "patterns": "Consolidate a standalone helper script into an existing CLI as a subcommand/engine option; declare a sibling test file's dependencies via PEP-723 inline metadata rather than extra make-target --run flags.",
+    "decisions_values": "Achieve full functionality parity in the port; prefer PEP-723 inline deps over ad-hoc make --run arguments; remove the old script entirely once its functionality is ported so no dead references remain."
+  }
+}
