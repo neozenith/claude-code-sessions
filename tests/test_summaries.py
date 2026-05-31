@@ -13,7 +13,15 @@ import json
 import sqlite3
 from pathlib import Path
 
-from claude_code_sessions.database.sqlite.merge import MERGER_REGISTRY, ChildMode, Summary
+import pytest
+
+from claude_code_sessions.database.sqlite.merge import (
+    MERGER_REGISTRY,
+    ChildMode,
+    Summary,
+    get_merger,
+    register_merger,
+)
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import (
     MuninnSummaryEngine,
@@ -457,3 +465,21 @@ def test_ancestor_merges_child_rollups_bottom_up(tmp_path: Path) -> None:
     ]
     assert leaf_rowids
     assert clients[0]["rowid"] > max(leaf_rowids)
+
+
+def test_get_merger_resolves_registered_and_rejects_unknown() -> None:
+    """``get_merger`` returns the impl whose ``.name`` matches; unknown fails loud."""
+    a = StubMerger()
+    a.name = "merger-a"
+    b = StubMerger()
+    b.name = "merger-b"
+    register_merger(a)
+    register_merger(b)
+    try:
+        assert get_merger("merger-a") is a
+        assert get_merger("merger-b") is b
+        with pytest.raises(KeyError):
+            get_merger("nope")
+    finally:
+        MERGER_REGISTRY.pop("merger-a", None)
+        MERGER_REGISTRY.pop("merger-b", None)

@@ -5,7 +5,7 @@
 > - **Prev:** [T3.2](./summariser-G3-T3.2.md)
 > - **Next:** [T3.4](./summariser-G3-T3.4.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `get_merger(name)` returns the registered `SummaryMerger` whose `.name` matches the feature-flag value; an unknown name raises (no silent default), so the `strategy` written and the impl invoked always agree.
 
