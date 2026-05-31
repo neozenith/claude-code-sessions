@@ -5,7 +5,7 @@
 > - **Prev:** [T7.3](./summariser-G7-T7.3.md)
 > - **Next:** [T7.5](./summariser-G7-T7.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/scope?...` returns `200` with `{status:"not_summarised"}` when the scope exists in the G1 hierarchy but has no `rollup_summaries` row (ADR7.1).
 

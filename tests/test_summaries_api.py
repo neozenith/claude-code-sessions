@@ -7,6 +7,7 @@ is swapped to a tmp-cache ``SQLiteDatabase`` seeded directly with summary rows
 
 from __future__ import annotations
 
+import json
 from pathlib import Path
 
 import pytest
@@ -19,6 +20,22 @@ from claude_code_sessions.main import app
 def _fixture_db(tmp_path: Path) -> SQLiteDatabase:
     projects = tmp_path / "projects"
     (projects / "-Users-test-proj").mkdir(parents=True, exist_ok=True)
+    return SQLiteDatabase(
+        local_projects_path=projects,
+        home_projects_path=projects,
+        db_path=tmp_path / "cache.db",
+    )
+
+
+def _fixture_db_with_project(tmp_path: Path, pid: str, project_path: str) -> SQLiteDatabase:
+    """A fixture DB whose projects dir makes ``scope_path_of(pid)`` a valid scope."""
+    projects = tmp_path / "projects"
+    pdir = projects / pid
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "sessions-index.json").write_text(
+        json.dumps({"version": 1, "entries": [{"projectPath": project_path}]}),
+        encoding="utf-8",
+    )
     return SQLiteDatabase(
         local_projects_path=projects,
         home_projects_path=projects,
@@ -124,3 +141,20 @@ def test_scope_summary_selects_matching_strategy_model_variant(
         assert data["status"] == "summarised"
         assert data["strategy"] == strat
         assert data["model"] == mdl
+
+
+def test_unsummarised_scope_returns_not_summarised_status(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A valid scope (a real ancestor_scopes path) with no rollup row returns
+    200 {status:"not_summarised"} — not a fabricated summary (ADR7.1)."""
+    db = _fixture_db_with_project(tmp_path, "-Users-dev-play-foo", "/Users/dev/play/foo")
+    monkeypatch.setattr(app.state, "db", db)
+    client = TestClient(app)
+
+    resp = client.get(
+        "/api/summaries/scope",
+        params={"path": "play/foo", "grain": "day", "bucket": "2026-01-01", "strategy": "strict", "model": "model-a"},
+    )
+    assert resp.status_code == 200
+    assert resp.json() == {"status": "not_summarised"}
