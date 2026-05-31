@@ -21,3 +21,17 @@ test('summaries page renders the three lenses', async ({ page }) => {
   await expect(page.locator('[data-testid="lens-patterns"]')).toBeVisible()
   await expect(page.locator('[data-testid="lens-decisions"]')).toBeVisible()
 })
+
+test('deep-link path and grain selects scope and grain', async ({ page }) => {
+  await page.goto('/summaries?path=clients/acme&grain=week')
+  await page.waitForFunction(() => document.body.innerText.includes('acme'), {
+    timeout: 45000,
+  })
+
+  // The breadcrumb reflects ?path= (deepest crumb = the path leaf).
+  const crumbs = page.locator('[data-testid="scope-crumb"]')
+  await expect(crumbs.last()).toHaveText('acme')
+
+  // The grain selector reflects ?grain=.
+  await expect(page.locator('[data-testid="grain-select"]')).toHaveValue('week')
+})

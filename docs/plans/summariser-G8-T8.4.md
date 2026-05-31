@@ -5,7 +5,7 @@
 > - **Prev:** [T8.3](./summariser-G8-T8.3.md)
 > - **Next:** [T8.5](./summariser-G8-T8.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `/summaries?path=<encoded>&grain=week` selects the targeted scope and grain on first paint, with the breadcrumb reflecting `path` and the grain selector reflecting `grain` (ADR8.1; defaults omitted from the URL).
 
