@@ -398,15 +398,62 @@ def test_driver_writes_one_rollup_row_via_registered_merger(tmp_path: Path) -> N
     finally:
         MERGER_REGISTRY.pop("stub", None)
 
-    rows = conn.execute("SELECT * FROM rollup_summaries").fetchall()
+    # Exactly one rollup row for this leaf scope (ancestors get their own rows —
+    # see T3.2; this tracer fixes the leaf-scope behaviour only).
+    rows = conn.execute(
+        "SELECT * FROM rollup_summaries WHERE scope_path = 'clients/acme/app'"
+    ).fetchall()
     assert len(rows) == 1
     row = rows[0]
     assert row["strategy"] == "stub"
     assert row["model"] == "model-a"
-    assert row["scope_path"] == "clients/acme/app"
     assert row["scope_depth"] == 3
     assert row["time_granularity"] == "day"
     assert row["time_bucket"] == "2026-01-01"
     assert row["child_count"] == 2
     assert row["task_summary"] == "ROLLUP_task"
-    assert len(stub.calls) == 1
+    # the leaf scope was merged once, with its two session summaries as children
+    leaf_calls = [c for c in stub.calls if len(c[1]) == 2]
+    assert len(leaf_calls) == 1
+
+
+def test_ancestor_merges_child_rollups_bottom_up(tmp_path: Path) -> None:
+    """An ancestor scope merges its direct child scopes' rollups, deepest-first;
+    its child_count counts direct child scopes (not transitive sessions)."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme"
+    beta = "-Users-dev-clients-beta"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme")
+    _write_project_index(projects, beta, "/Users/dev/clients/beta")
+    resolver = ProjectResolver(projects)
+
+    for pid, sid, ch in [(acme, "a1", "ha"), (beta, "b1", "hb")]:
+        sf = _seed_source_file(conn, pid, sid)
+        _seed_event(conn, pid, sid, "human", f"text {sid}", 1, sf)
+        _seed_session_summary(conn, pid, sid, "model-a", ch)
+    conn.commit()
+
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+    finally:
+        MERGER_REGISTRY.pop("stub", None)
+
+    clients = conn.execute(
+        "SELECT rowid, * FROM rollup_summaries WHERE scope_path = 'clients'"
+    ).fetchall()
+    assert len(clients) == 1
+    assert clients[0]["scope_depth"] == 1
+    assert clients[0]["child_count"] == 2  # two direct child scopes, not sessions
+
+    # The ancestor row is written after its deeper child rows (deepest-first).
+    leaf_rowids = [
+        r["rowid"]
+        for r in conn.execute(
+            "SELECT rowid FROM rollup_summaries WHERE scope_depth = 2"
+        ).fetchall()
+    ]
+    assert leaf_rowids
+    assert clients[0]["rowid"] > max(leaf_rowids)

@@ -5,7 +5,7 @@
 > - **Prev:** [T3.1](./summariser-G3-T3.1.md)
 > - **Next:** [T3.3](./summariser-G3-T3.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The driver processes scopes deepest-first: given child-scope rollups at `clients/acme` and `clients/beta`, it merges them into a `clients` rollup whose `child_count` equals the number of direct child scopes (not transitive sessions), children existing before their parent merges.
 
