@@ -5,7 +5,7 @@
 > - **Prev:** [T10.3](./summariser-G10-T10.3.md)
 > - **Next:** [T10.5](./summariser-G10-T10.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `run --id <perm>` generates a candidate summary via the selected merger/model, scores it with `score_summary`, and writes a JSON result row (`permutation_id`, scores, speed) so a re-run sees it `done`.
 

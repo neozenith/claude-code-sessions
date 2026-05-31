@@ -73,3 +73,44 @@ def test_manifest_missing_lists_incomplete(tmp_path: Path, capsys) -> None:
     # Cheapest-first: parameter sizes are non-decreasing down the list.
     sizes = [int(pid.rsplit("_", 1)[1].rstrip("b")) for pid in printed_ids]
     assert sizes == sorted(sizes)
+
+
+def test_run_writes_result_row(tmp_path: Path, monkeypatch) -> None:
+    """`run --id <perm>` (model-generation seam stubbed) scores the candidate
+    with the real scorer and writes a JSON result row, marking the cell done."""
+    import json
+
+    results = tmp_path / "results"
+    refs = tmp_path / "refs"
+    refs.mkdir()
+    (refs / "r1.json").write_text(
+        json.dumps(
+            {
+                "gold": {
+                    "task_summary": "build a summariser",
+                    "patterns": "pluggable engine",
+                    "decisions_values": "local only",
+                }
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    # Stub ONLY the model-generation seam (the GGUF boundary); the scorer is real.
+    monkeypatch.setattr(
+        summary_bench,
+        "_generate_candidate",
+        lambda perm, references_dir: ("build a summariser pluggable engine local only", 0.05),
+    )
+
+    pid = summary_bench.permutation_id("strict", "gemma", "2b")
+    summary_bench.main(
+        ["run", "--id", pid, "--results-dir", str(results), "--references-dir", str(refs)]
+    )
+
+    out = results / f"{pid}.json"
+    assert out.exists()
+    record = json.loads(out.read_text(encoding="utf-8"))
+    assert record["permutation_id"] == pid
+    assert {"rouge_l", "bleu", "f1"} <= set(record)
+    assert summary_bench.check_status(results, pid) is True

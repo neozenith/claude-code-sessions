@@ -19,11 +19,16 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import json
+import time
 from pathlib import Path
 from typing import Any
 
+from claude_code_sessions.database.sqlite.summaries import score_summary
+
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_RESULTS_DIR = PROJECT_ROOT / "tmp" / "summary_bench"
+DEFAULT_REFERENCES_DIR = PROJECT_ROOT / "data" / "summary_bench" / "references"
 
 # The three merge strategies (G4/G5/G6), each a registry flag.
 STRATEGIES: tuple[str, ...] = ("strict", "reground", "flat")
@@ -109,6 +114,66 @@ def cmd_manifest(args: argparse.Namespace) -> None:
         print(f"  [{marker}] {p['permutation_id']:<26} {p['label']}")
 
 
+# ---------------------------------------------------------------------------
+# Execution lifecycle (Layer 4 — run one permutation)
+# ---------------------------------------------------------------------------
+
+
+def _load_reference_text(references_dir: Path) -> str:
+    """The concatenated gold three-lens text — the scoring target (ADR10.1)."""
+    parts: list[str] = []
+    for ref_file in sorted(references_dir.glob("*.json")):
+        gold = json.loads(ref_file.read_text(encoding="utf-8")).get("gold", {})
+        parts.append(
+            " ".join(str(gold.get(k, "")) for k in ("task_summary", "patterns", "decisions_values"))
+        )
+    return "\n".join(parts)
+
+
+def _generate_candidate(perm: dict[str, Any], references_dir: Path) -> tuple[str, float]:
+    """The model-generation seam: produce a candidate summary + elapsed seconds.
+
+    The real sweep registers the GGUF for ``perm``'s family×size in
+    ``temp.muninn_chat_models`` and runs ``summarise_session`` + ``roll_up_scopes``
+    (via ``perm['strategy']``) over the reference sessions. That requires the model
+    artifacts, so it fails loud here; the benchmark tests stub this one seam while
+    the scorer runs real (ADR10.1, T10.4 contract).
+    """
+    raise NotImplementedError(
+        "model-generation requires the GGUF artifacts for "
+        f"{perm['family']} {perm['size']}; register it in temp.muninn_chat_models "
+        "and run the pipeline. Tests stub this seam."
+    )
+
+
+def save_result(results_dir: Path, perm_id: str, record: dict[str, Any]) -> None:
+    """Write a permutation's result row; its existence marks the cell done."""
+    results_dir.mkdir(parents=True, exist_ok=True)
+    (results_dir / f"{perm_id}.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
+
+
+def cmd_run(args: argparse.Namespace) -> None:
+    """Generate a candidate for one permutation, score it, and write the result row."""
+    perms = {p["permutation_id"]: p for p in all_permutations(args.results_dir)}
+    if args.id not in perms:  # fail loud — never run an unknown cell
+        raise SystemExit(f"unknown permutation id: {args.id!r}")
+    perm = perms[args.id]
+
+    t0 = time.monotonic()
+    candidate, gen_seconds = _generate_candidate(perm, args.references_dir)
+    scores = score_summary(candidate, _load_reference_text(args.references_dir))
+    record: dict[str, Any] = {
+        "permutation_id": args.id,
+        "strategy": perm["strategy"],
+        "family": perm["family"],
+        "size": perm["size"],
+        "seconds": gen_seconds,
+        "wall_seconds": time.monotonic() - t0,
+        **scores,
+    }
+    save_result(args.results_dir, args.id, record)
+
+
 def _help(parser: argparse.ArgumentParser):  # type: ignore[no-untyped-def]
     def _print_help(_: argparse.Namespace) -> None:
         parser.print_help()
@@ -133,6 +198,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--results-dir", type=Path, default=DEFAULT_RESULTS_DIR, help="Per-permutation result dir"
     )
     manifest.set_defaults(func=cmd_manifest)
+
+    run = sub.add_parser("run", help="Run one permutation: generate, score, write result")
+    run.add_argument("--id", required=True, help="Permutation id (see manifest)")
+    run.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    run.add_argument("--references-dir", type=Path, default=DEFAULT_REFERENCES_DIR)
+    run.set_defaults(func=cmd_run)
     return parser
 
 
