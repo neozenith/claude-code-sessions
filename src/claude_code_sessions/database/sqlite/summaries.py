@@ -15,10 +15,20 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import Protocol
 
-__all__ = ["MuninnSummaryEngine", "SummaryEngine", "summarise_session"]
+from claude_code_sessions.database.sqlite.merge import Summary, get_merger
+from claude_code_sessions.database.sqlite.time_buckets import bucket_expr
+from claude_code_sessions.project_resolver import ProjectResolver, scope_path_of
+
+__all__ = [
+    "MuninnSummaryEngine",
+    "SummaryEngine",
+    "roll_up_scopes",
+    "summarise_session",
+]
 
 
 class SummaryEngine(Protocol):
@@ -154,3 +164,110 @@ def summarise_session(
         ),
     )
     conn.commit()
+
+
+# ---------------------------------------------------------------------------
+# Roll-up driver (G3)
+# ---------------------------------------------------------------------------
+
+def _rollup_source_hash(strategy: str, model: str, child_keys: list[tuple[str, str]]) -> str:
+    """Freshness hash over (strategy, model, sorted child id+content-hash pairs).
+
+    Scoping by ``strategy`` and ``model`` (ADR3.3) means a different permutation
+    over the same source text yields a distinct hash — never a false skip.
+    """
+    digest = hashlib.sha256()
+    digest.update(strategy.encode("utf-8"))
+    digest.update(b"\x00")
+    digest.update(model.encode("utf-8"))
+    digest.update(b"\x00")
+    for child_id, child_hash in sorted(child_keys):
+        digest.update(child_id.encode("utf-8"))
+        digest.update(b"=")
+        digest.update(child_hash.encode("utf-8"))
+        digest.update(b"\x00")
+    return digest.hexdigest()
+
+
+def roll_up_scopes(
+    conn: sqlite3.Connection,
+    engine: SummaryEngine,
+    strategy: str,
+    model: str,
+    granularity: str,
+    level: str | None = None,
+    resolver: ProjectResolver | None = None,
+) -> int:
+    """Roll up leaf scopes for one ``(strategy, model)`` at one ``granularity``.
+
+    Selects the merger via ``get_merger(strategy)`` (fail-loud on unknown), then
+    for each project-leaf scope groups its ``session_summaries`` (for ``model``)
+    by time bucket — anchored to each session's *activity* timestamp from
+    ``events``, not its summarisation time — and writes one ``rollup_summaries``
+    row per ``(scope_path, bucket)``. Returns the number of rollup rows written.
+    """
+    merger = get_merger(strategy)
+    if resolver is None:
+        # A scope is the project's resolved path; without a resolver we cannot
+        # place a session in the trie. Fail loud rather than fabricate a scope.
+        raise ValueError("roll_up_scopes requires a ProjectResolver")
+
+    grain_expr = bucket_expr(granularity, "e.timestamp")
+    rows = conn.execute(
+        f"""
+        SELECT ss.project_id        AS project_id,
+               ss.session_id        AS session_id,
+               ss.content_hash      AS content_hash,
+               ss.task_summary      AS task_summary,
+               ss.patterns          AS patterns,
+               ss.decisions_values  AS decisions_values,
+               {grain_expr}         AS bucket
+        FROM session_summaries ss
+        JOIN events e
+          ON e.project_id = ss.project_id AND e.session_id = ss.session_id
+        WHERE ss.model = ? AND e.timestamp IS NOT NULL
+        GROUP BY ss.project_id, ss.session_id
+        """,
+        (model,),
+    ).fetchall()
+
+    groups: dict[tuple[str, str], list[sqlite3.Row]] = defaultdict(list)
+    for row in rows:
+        scope = scope_path_of(resolver, row["project_id"])
+        groups[(scope, str(row["bucket"]))].append(row)
+
+    written = 0
+    for (scope, bucket), members in groups.items():
+        children = [
+            Summary(m["task_summary"], m["patterns"], m["decisions_values"]) for m in members
+        ]
+        merged = merger.merge(engine, model, children, None)
+        scope_depth = 0 if scope == "" else len(scope.split("/"))
+        source_hash = _rollup_source_hash(
+            strategy, model, [(m["session_id"], m["content_hash"]) for m in members]
+        )
+        conn.execute(
+            """INSERT OR REPLACE INTO rollup_summaries
+                   (strategy, model, scope_path, scope_depth,
+                    time_granularity, time_bucket,
+                    task_summary, patterns, decisions_values,
+                    child_count, source_hash, generated_at)
+               VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
+            (
+                strategy,
+                model,
+                scope,
+                scope_depth,
+                granularity,
+                bucket,
+                merged.task_summary,
+                merged.patterns,
+                merged.decisions_values,
+                len(children),
+                source_hash,
+                datetime.now(UTC).isoformat(),
+            ),
+        )
+        written += 1
+    conn.commit()
+    return written

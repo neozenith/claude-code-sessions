@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T3.2](./summariser-G3-T3.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `roll_up_scopes(conn, engine, strategy, model, granularity)` with an in-test stub merger registered under that strategy writes exactly one `rollup_summaries` row keyed `(strategy, model, scope_path, 'day', bucket)` for a project-leaf scope, merging its `session_summaries` for that model. _(tracer bullet)_
 

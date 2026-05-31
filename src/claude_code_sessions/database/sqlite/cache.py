@@ -34,6 +34,7 @@ from claude_code_sessions.database.sqlite.pricing import (
     message_kind,
 )
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH, SCHEMA_SQL, SCHEMA_VERSION
+from claude_code_sessions.database.sqlite.time_buckets import bucket_expr
 
 log = logging.getLogger(__name__)
 
@@ -679,12 +680,15 @@ class CacheManager:
     # -- Aggregates ----------------------------------------------------------
 
     # SQLite expressions that truncate timestamp to each granularity.
-    # Used by refresh_aggregates_for_range() to rebuild agg_* tables.
+    # Used by refresh_aggregates_for_range() to rebuild agg_* tables. The
+    # truncation SQL is sourced from the shared ``time_buckets`` helper so the
+    # agg grains and the roll-up driver's grains can't drift apart; the dict
+    # keys remain the agg.granularity column values ('hourly'…'monthly').
     _AGG_BUCKET_EXPRS: dict[str, str] = {
-        "hourly": "strftime('%Y-%m-%dT%H:00:00', timestamp)",
-        "daily": "date(timestamp)",
-        "weekly": "date(timestamp, 'weekday 0', '-6 days')",
-        "monthly": "strftime('%Y-%m-01', timestamp)",
+        "hourly": bucket_expr("hour", "timestamp"),
+        "daily": bucket_expr("day", "timestamp"),
+        "weekly": bucket_expr("week", "timestamp"),
+        "monthly": bucket_expr("month", "timestamp"),
     }
 
     def _refresh_one_agg(

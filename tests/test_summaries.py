@@ -13,9 +13,11 @@ import json
 import sqlite3
 from pathlib import Path
 
+from claude_code_sessions.database.sqlite.merge import MERGER_REGISTRY, ChildMode, Summary
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import (
     MuninnSummaryEngine,
+    roll_up_scopes,
     summarise_session,
 )
 from claude_code_sessions.project_resolver import ProjectResolver
@@ -341,3 +343,70 @@ def test_summarise_sessions_runner_is_incremental_and_scope_filtered(tmp_path: P
         "SELECT DISTINCT project_id FROM session_summaries WHERE model = 'model-b'"
     ).fetchall()
     assert [r["project_id"] for r in scoped_projects] == [acme]
+
+
+class StubMerger:
+    """An in-test :class:`SummaryMerger` returning canned lenses, recording calls."""
+
+    name = "stub"
+    child_mode: ChildMode = "child_rollups"
+    wants_excerpts = False
+
+    def __init__(self) -> None:
+        self.calls: list[tuple[str, list[Summary]]] = []
+
+    def merge(self, engine: object, model: str, children: list[Summary], excerpts: object) -> Summary:
+        self.calls.append((model, list(children)))
+        return Summary("ROLLUP_task", "ROLLUP_pat", "ROLLUP_dec")
+
+
+def _seed_session_summary(
+    conn: sqlite3.Connection,
+    project_id: str,
+    session_id: str,
+    model: str,
+    content_hash: str,
+) -> None:
+    conn.execute(
+        """INSERT INTO session_summaries
+               (project_id, session_id, model, content_hash,
+                task_summary, patterns, decisions_values, generated_at, human_event_count)
+           VALUES (?, ?, ?, ?, 't', 'p', 'd', '2026-01-01T00:00:00Z', 1)""",
+        (project_id, session_id, model, content_hash),
+    )
+
+
+def test_driver_writes_one_rollup_row_via_registered_merger(tmp_path: Path) -> None:
+    """The driver + a registered stub merger write one rollup row for a leaf scope."""
+    conn = _make_cache()
+    projects = tmp_path / "projects"
+    acme = "-Users-dev-clients-acme-app"
+    _write_project_index(projects, acme, "/Users/dev/clients/acme/app")
+    resolver = ProjectResolver(projects)
+
+    # Two sessions in the one leaf project, same day → one rollup bucket.
+    for sid, ch in [("s1", "h1"), ("s2", "h2")]:
+        sf = _seed_source_file(conn, acme, sid)
+        _seed_event(conn, acme, sid, "human", f"text {sid}", 1, sf)
+        _seed_session_summary(conn, acme, sid, "model-a", ch)
+    conn.commit()
+
+    stub = StubMerger()
+    MERGER_REGISTRY["stub"] = stub
+    try:
+        roll_up_scopes(conn, _canned(), "stub", "model-a", "day", resolver=resolver)
+    finally:
+        MERGER_REGISTRY.pop("stub", None)
+
+    rows = conn.execute("SELECT * FROM rollup_summaries").fetchall()
+    assert len(rows) == 1
+    row = rows[0]
+    assert row["strategy"] == "stub"
+    assert row["model"] == "model-a"
+    assert row["scope_path"] == "clients/acme/app"
+    assert row["scope_depth"] == 3
+    assert row["time_granularity"] == "day"
+    assert row["time_bucket"] == "2026-01-01"
+    assert row["child_count"] == 2
+    assert row["task_summary"] == "ROLLUP_task"
+    assert len(stub.calls) == 1

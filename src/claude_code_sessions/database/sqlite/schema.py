@@ -39,7 +39,11 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 #           session_id, model, content_hash, task_summary, patterns,
 #           decisions_values, generated_at, human_event_count). One row per
 #           (session, model); the benchmark stores many models side-by-side.
-SCHEMA_VERSION = "18"
+# v19 (G3): bottom-up roll-ups — rollup_summaries keyed by (strategy, model,
+#           scope_path, time_granularity, time_bucket). One row per merged
+#           scope×grain×bucket per (strategy, model) so the G10 benchmark can
+#           roll up every permutation side-by-side without clobbering.
+SCHEMA_VERSION = "19"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -455,4 +459,35 @@ CREATE TABLE IF NOT EXISTS session_summaries (
 );
 CREATE INDEX IF NOT EXISTS idx_session_summaries_model
     ON session_summaries(model);
+
+-- =====================================================================
+-- Roll-up layer (schema v19) — bottom-up scope×time merges
+-- =====================================================================
+-- Written by ``summaries.roll_up_scopes`` via the standalone ``summarise_cli
+-- rollup`` runner. The variable-depth scope trie (G1 ``ancestor_scopes``) is
+-- walked deepest-first per (strategy, model): a leaf scope merges its
+-- ``session_summaries`` for that model; each ancestor merges its child scopes'
+-- rollups. ``strategy`` + ``model`` are part of the key (ADR3.3) so the G10
+-- benchmark rolls up every permutation at once without collision; ``strategy``
+-- collapses to a single value post-G10. ``source_hash`` over the merged child
+-- ids+hashes drives the freshness skip (ADR3.3).
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS rollup_summaries (
+    strategy TEXT NOT NULL,
+    model TEXT NOT NULL,
+    scope_path TEXT NOT NULL,
+    scope_depth INTEGER NOT NULL,
+    time_granularity TEXT NOT NULL,
+    time_bucket TEXT NOT NULL,
+    task_summary TEXT NOT NULL,
+    patterns TEXT NOT NULL,
+    decisions_values TEXT NOT NULL,
+    child_count INTEGER NOT NULL,
+    source_hash TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    PRIMARY KEY (strategy, model, scope_path, time_granularity, time_bucket)
+);
+CREATE INDEX IF NOT EXISTS idx_rollup_summaries_scope
+    ON rollup_summaries(strategy, model, scope_path);
 """
