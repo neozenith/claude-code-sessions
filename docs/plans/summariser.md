@@ -72,7 +72,7 @@ The user must re-enter Phase 2 refinement to resolve the ADR before the loop can
 | [G6](./summariser-G6.md) | 3 | 3 | 0 | — | — |
 | [G7](./summariser-G7.md) | 7 | 7 | 0 | — | — |
 | [G8](./summariser-G8.md) | 6 | 4 | 2 | [T8.5](./summariser-G8-T8.5.md), [T8.6](./summariser-G8-T8.6.md) _(both blocked)_ | [ADR8.2](./summariser-G8.md) _(UNRESOLVED — e2e summary fixtures; T8.6's cards-absent assertion also needs a summarised scope to coexist with T8.1)_ |
-| [G9](./summariser-G9.md) | 6 | 3 | 3 | [T9.4](./summariser-G9-T9.4.md) | — |
+| [G9](./summariser-G9.md) | 6 | 4 | 2 | [T9.5](./summariser-G9-T9.5.md) | — |
 | [G10](./summariser-G10.md) | 8 | 0 | 8 | [T10.1](./summariser-G10-T10.1.md) | — |
 | [G11](./summariser-G11.md) | 4 | 0 | 4 | — | [T10.8](./summariser-G10-T10.8.md) _(conditional on PROCEED)_ |
 

@@ -5,7 +5,7 @@
 > - **Prev:** [T9.3](./summariser-G9-T9.3.md)
 > - **Next:** [T9.5](./summariser-G9-T9.5.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 The dropdown renders 19 `<option>`s with "All messages" first; existing base-kind selections still deep-link via `?msg=`.
 
