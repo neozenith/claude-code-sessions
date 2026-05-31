@@ -5,7 +5,7 @@
 > - **Prev:** [T4.1](./summariser-G4-T4.1.md)
 > - **Next:** [T4.3](./summariser-G4-T4.3.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 With the feature flag set to `strict`, `get_merger('strict')` returns `SummaryMergerStrict` and the G3 driver writes `rollup_summaries` rows carrying `strategy='strict'`.
 

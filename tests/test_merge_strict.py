@@ -9,8 +9,13 @@ engine prompt.
 from __future__ import annotations
 
 import json
+import sqlite3
+from pathlib import Path
 
 from claude_code_sessions.database.sqlite.merge import Summary, SummaryMergerStrict
+from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
+from claude_code_sessions.database.sqlite.summaries import roll_up_scopes
+from claude_code_sessions.project_resolver import ProjectResolver
 
 
 class RecordingEngine:
@@ -61,3 +66,59 @@ def test_strict_merge_synthesises_children() -> None:
         "CHILD_B_dec",
     ):
         assert marker in prompt
+
+
+def _seed_leaf_session_summary(conn: sqlite3.Connection, tmp_path: Path) -> ProjectResolver:
+    """A one-project, one-session fixture cache + resolver for driver tests."""
+    pid = "-Users-dev-clients-acme-app"
+    pdir = tmp_path / "projects" / pid
+    pdir.mkdir(parents=True, exist_ok=True)
+    (pdir / "sessions-index.json").write_text(
+        json.dumps({"version": 1, "entries": [{"projectPath": "/Users/dev/clients/acme/app"}]}),
+        encoding="utf-8",
+    )
+    cur = conn.execute(
+        """INSERT INTO source_files
+               (filepath, mtime, size_bytes, line_count, last_ingested_at, project_id, session_id, file_type)
+           VALUES ('f', 0, 0, 0, '2026-01-01T00:00:00Z', ?, 's1', 'main_session')""",
+        (pid,),
+    )
+    sf = cur.lastrowid
+    conn.execute(
+        """INSERT INTO events
+               (event_type, msg_kind, message_content, timestamp, session_id, project_id,
+                source_file_id, line_number, raw_json)
+           VALUES ('user', 'human', 't', '2026-01-01T00:01:00Z', 's1', ?, ?, 1, '')""",
+        (pid, sf),
+    )
+    conn.execute(
+        """INSERT INTO session_summaries
+               (project_id, session_id, model, content_hash, task_summary, patterns,
+                decisions_values, generated_at, human_event_count)
+           VALUES (?, 's1', 'model-a', 'h', 'CT', 'CP', 'CD', '2026-01-01T00:00:00Z', 1)""",
+        (pid,),
+    )
+    conn.commit()
+    return ProjectResolver(tmp_path / "projects")
+
+
+def test_strict_flag_drives_rollup(tmp_path: Path) -> None:
+    """`strategy='strict'` selects SummaryMergerStrict; the driver writes rows
+    carrying strategy='strict' whose content came from the strict merger."""
+    conn = sqlite3.connect(":memory:")
+    conn.row_factory = sqlite3.Row
+    conn.executescript(SCHEMA_SQL)
+    resolver = _seed_leaf_session_summary(conn, tmp_path)
+
+    engine = RecordingEngine(
+        json.dumps(
+            {"task_summary": "STRICT_task", "patterns": "STRICT_pat", "decisions_values": "STRICT_dec"}
+        )
+    )
+    roll_up_scopes(conn, engine, "strict", "model-a", "day", resolver=resolver)
+
+    leaf = conn.execute(
+        "SELECT * FROM rollup_summaries WHERE scope_path = 'clients/acme/app'"
+    ).fetchone()
+    assert leaf["strategy"] == "strict"
+    assert leaf["task_summary"] == "STRICT_task"  # parsed from the strict merger's engine reply
