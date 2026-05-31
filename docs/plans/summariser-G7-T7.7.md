@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T7.6](./summariser-G7-T7.6.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `GET /api/summaries/variants` returns `200` with the distinct `(strategy, model)` pairs present across the summary tables — the eval picker's option source.
 

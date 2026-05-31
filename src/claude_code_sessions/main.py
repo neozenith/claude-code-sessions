@@ -285,6 +285,12 @@ async def list_scope_children(
     return get_db().list_scope_children(path, days=days, project=project)
 
 
+@app.get("/api/summaries/variants")
+async def list_summary_variants() -> list[dict[str, Any]]:
+    """Distinct (strategy, model) pairs present in the roll-up table (eval picker)."""
+    return get_db().list_summary_variants()
+
+
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
 async def get_event_raw_json(
     project_id: str,

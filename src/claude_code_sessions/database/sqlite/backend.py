@@ -658,6 +658,14 @@ class SQLiteDatabase:
                     children.add(sc)
         return [{"scope_path": c, "scope_depth": len(c.split("/"))} for c in sorted(children)]
 
+    def list_summary_variants(self) -> list[dict[str, Any]]:
+        """Distinct ``(strategy, model)`` pairs in ``rollup_summaries`` — the eval
+        picker's options (G7, ADR7.2)."""
+        rows = self._q(
+            "SELECT DISTINCT strategy, model FROM rollup_summaries ORDER BY strategy, model"
+        )
+        return [{"strategy": r["strategy"], "model": r["model"]} for r in rows]
+
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.
 

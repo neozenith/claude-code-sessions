@@ -231,3 +231,20 @@ def test_scope_children_returns_next_trie_level(tmp_path: Path, monkeypatch: pyt
     )
     assert resp2.status_code == 200
     assert {c["scope_path"] for c in resp2.json()} == {"play"}
+
+
+def test_variants_lists_available_strategy_model_pairs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """GET /api/summaries/variants lists exactly the distinct (strategy, model)
+    pairs present in the roll-up table."""
+    db = _fixture_db(tmp_path)
+    _seed_rollup(db, "play/foo", strategy="strict", model="model-a")
+    _seed_rollup(db, "clients/acme", strategy="reground", model="model-b")
+    monkeypatch.setattr(app.state, "db", db)
+    client = TestClient(app)
+
+    resp = client.get("/api/summaries/variants")
+    assert resp.status_code == 200
+    pairs = {(v["strategy"], v["model"]) for v in resp.json()}
+    assert pairs == {("strict", "model-a"), ("reground", "model-b")}

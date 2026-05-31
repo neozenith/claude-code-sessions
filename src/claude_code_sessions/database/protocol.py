@@ -149,6 +149,11 @@ class Database(Protocol):
         filters (G7)."""
         ...
 
+    def list_summary_variants(self) -> list[dict[str, Any]]:
+        """The distinct ``(strategy, model)`` pairs present in the roll-up table —
+        the eval picker's option source (G7, ADR7.2)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 
