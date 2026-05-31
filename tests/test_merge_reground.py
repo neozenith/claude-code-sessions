@@ -16,6 +16,7 @@ from claude_code_sessions.database.sqlite.merge import (
     SourceExcerpts,
     Summary,
     SummaryMergerReGround,
+    SummaryMergerStrict,
     select_excerpts,
 )
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
@@ -122,3 +123,23 @@ def test_reground_driver_supplies_excerpts(tmp_path: Path) -> None:
     roll_up_scopes(conn, engine, "reground", "model-a", "day", resolver=resolver)
 
     assert any("DRIVER_EXCERPT_MARKER" in prompt for _model, prompt in engine.calls)
+
+
+def test_reground_prompt_differs_from_strict() -> None:
+    """For identical children + non-empty excerpts, the reground prompt carries
+    the excerpts and the strict prompt does not — the distinction the benchmark
+    measures."""
+    children = [Summary("CT", "CP", "CD"), Summary("CT2", "CP2", "CD2")]
+    excerpts = SourceExcerpts(["DISTINGUISHING_EXCERPT"])
+    reply = json.dumps({"task_summary": "m", "patterns": "m", "decisions_values": "m"})
+
+    e_reground = RecordingEngine(reply)
+    SummaryMergerReGround().merge(e_reground, "model-a", children, excerpts)
+    e_strict = RecordingEngine(reply)
+    SummaryMergerStrict().merge(e_strict, "model-a", children, excerpts)
+
+    reground_prompt = e_reground.calls[0][1]
+    strict_prompt = e_strict.calls[0][1]
+    assert "DISTINGUISHING_EXCERPT" in reground_prompt
+    assert "DISTINGUISHING_EXCERPT" not in strict_prompt
+    assert reground_prompt != strict_prompt

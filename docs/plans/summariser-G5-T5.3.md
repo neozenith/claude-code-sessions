@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Prev:** [T5.2](./summariser-G5-T5.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 Given identical children but non-empty excerpts, the re-ground merger's engine input includes the excerpts while strict's does not — so the two strategies produce observably different prompts (the behavioral distinction the benchmark measures).
 
