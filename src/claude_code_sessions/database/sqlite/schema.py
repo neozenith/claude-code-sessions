@@ -34,7 +34,12 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 # v17 (G5/G6): per-session timing rollups — sessions.avg_tps, total_idle_ms,
 #           total_active_ms, peak_context_ratio (computed in rebuild_aggregates
 #           by _compute_session_timing).
-SCHEMA_VERSION = "17"
+# Summariser initiative — hierarchical human-prompt knowledge extraction.
+# v18 (G2): per-session 3-lens summaries — session_summaries(project_id,
+#           session_id, model, content_hash, task_summary, patterns,
+#           decisions_values, generated_at, human_event_count). One row per
+#           (session, model); the benchmark stores many models side-by-side.
+SCHEMA_VERSION = "18"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (
@@ -423,4 +428,31 @@ CREATE TABLE IF NOT EXISTS community_labels (
     generated_at TEXT NOT NULL,
     PRIMARY KEY (resolution, community_id)
 );
+
+-- =====================================================================
+-- Summariser layer (schema v18) — per-session human-prompt extraction
+-- =====================================================================
+-- Populated by ``claude_code_sessions.database.sqlite.summaries`` via the
+-- standalone ``summarise_cli`` runner (decoupled from ingest — ADR2.4).
+-- One row per (session, model): ``model`` is part of the key so the G10
+-- benchmark can store several summariser models side-by-side. ``content_hash``
+-- is the hash of the concatenated ``msg_kind='human'`` text and drives the
+-- content-hash freshness guard (ADR2.3) — an unchanged session under the same
+-- model is skipped, a new model is a cache miss that writes a new row.
+-- =====================================================================
+
+CREATE TABLE IF NOT EXISTS session_summaries (
+    project_id TEXT NOT NULL,
+    session_id TEXT NOT NULL,
+    model TEXT NOT NULL,
+    content_hash TEXT NOT NULL,
+    task_summary TEXT NOT NULL,
+    patterns TEXT NOT NULL,
+    decisions_values TEXT NOT NULL,
+    generated_at TEXT NOT NULL,
+    human_event_count INTEGER NOT NULL,
+    PRIMARY KEY (project_id, session_id, model)
+);
+CREATE INDEX IF NOT EXISTS idx_session_summaries_model
+    ON session_summaries(model);
 """

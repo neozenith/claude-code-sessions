@@ -65,12 +65,12 @@ The user must re-enter Phase 2 refinement to resolve the ADR before the loop can
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
 | [G1](./summariser-G1.md) | 4 | 4 | 0 | — | — |
-| [G2](./summariser-G2.md) | 7 | 0 | 7 | [T2.1](./summariser-G2-T2.1.md) | — |
-| [G3](./summariser-G3.md) | 7 | 0 | 7 | — | [T2.1](./summariser-G2-T2.1.md) |
+| [G2](./summariser-G2.md) | 7 | 1 | 6 | [T2.2](./summariser-G2-T2.2.md) | — |
+| [G3](./summariser-G3.md) | 7 | 0 | 7 | [T3.1](./summariser-G3-T3.1.md) | — |
 | [G4](./summariser-G4.md) | 3 | 0 | 3 | — | [T3.1](./summariser-G3-T3.1.md), [T3.3](./summariser-G3-T3.3.md) |
 | [G5](./summariser-G5.md) | 3 | 0 | 3 | — | [T3.1](./summariser-G3-T3.1.md), [T3.3](./summariser-G3-T3.3.md) |
 | [G6](./summariser-G6.md) | 3 | 0 | 3 | — | [T3.1](./summariser-G3-T3.1.md), [T3.3](./summariser-G3-T3.3.md) |
-| [G7](./summariser-G7.md) | 7 | 0 | 7 | — | [T2.1](./summariser-G2-T2.1.md) |
+| [G7](./summariser-G7.md) | 7 | 0 | 7 | [T7.1](./summariser-G7-T7.1.md) | — |
 | [G8](./summariser-G8.md) | 6 | 0 | 6 | — | [T7.1](./summariser-G7-T7.1.md) |
 | [G9](./summariser-G9.md) | 6 | 0 | 6 | [T9.1](./summariser-G9-T9.1.md) | — |
 | [G10](./summariser-G10.md) | 8 | 0 | 8 | [T10.1](./summariser-G10-T10.1.md) | — |

@@ -4,7 +4,7 @@
 > - **Index:** [summariser.md](./summariser.md)
 > - **Next:** [T2.2](./summariser-G2-T2.2.md)
 
-- [ ] **Done**
+- [x] **Done**
 
 `summarise_session(conn, project_id, session_id, engine, model)` gathers the session's `msg_kind='human'` text, calls the injected engine once, and writes exactly one `session_summaries` row holding `task_summary`, `patterns`, and `decisions_values` from the engine's parsed output. _(tracer bullet)_
 
