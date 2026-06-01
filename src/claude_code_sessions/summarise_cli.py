@@ -59,11 +59,13 @@ MODEL_REGISTRY: dict[str, tuple[str, str, float]] = {
     "Qwen3.5-0.8B": ("Qwen3.5-0.8B-Q4_K_M.gguf", "qwen", 0.8),
     "Qwen3.5-2B": ("Qwen3.5-2B-Q4_K_M.gguf", "qwen", 2.0),
     "Qwen3.5-4B": ("Qwen3.5-4B-Q4_K_M.gguf", "qwen", 4.0),
+    "Qwen3.5-9B": ("Qwen3.5-9B-Q4_K_M.gguf", "qwen", 9.0),
 }
 
-# The two fastest models (examples/muninn/FINDINGS.md): the sweep holds the model
-# constant and compares strategies × speed, one results table per model.
-BENCH_MODELS: tuple[str, ...] = ("Qwen3.5-2B", "Qwen3.5-4B")
+# Three sizes of the same Qwen3.5 line so the sweep is a clean apples-to-apples
+# capability ladder (2B → 4B → 9B): the model is held constant per results table
+# and strategies × speed compared head-to-head.
+BENCH_MODELS: tuple[str, ...] = ("Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B")
 
 # Merge strategies swept against each model (G4/G5/G6 registry flags).
 STRATEGIES: tuple[str, ...] = ("strict", "reground", "flat")

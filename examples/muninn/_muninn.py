@@ -24,6 +24,7 @@ MODELS_DIRS: tuple[Path, ...] = (
 # model_id -> gguf filename. 4B is the dial-in default; the 2B/4B bench models
 # are the validation set. The 0.8B is deliberately absent (CR2 model policy).
 MODELS: dict[str, str] = {
+    "Qwen3.5-9B": "Qwen3.5-9B-Q4_K_M.gguf",
     "Qwen3.5-4B": "Qwen3.5-4B-Q4_K_M.gguf",  # dial-in default (reliable)
     "gemma-4-E4B": "gemma-4-E4B-it-Q4_K_M.gguf",
     "Qwen3.5-2B": "Qwen3.5-2B-Q4_K_M.gguf",
