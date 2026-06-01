@@ -76,14 +76,14 @@ def test_gguf_path_and_inventory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 def test_manifest_grid_is_models_x_strategies_x_grains(tmp_path: Path) -> None:
     results = tmp_path / "results"
     results.mkdir()
-    done = bench.permutation_id("gemma-4-E2B", "strict", "day")
+    done = bench.permutation_id("Qwen3.5-2B", "strict", "day")
     (results / f"{done}.json").write_text("{}", encoding="utf-8")
 
     by_id = {p["permutation_id"]: p for p in bench.bench_permutations(results)}
     assert len(by_id) == len(bench.BENCH_MODELS) * len(bench.STRATEGIES) * len(bench.GRAINS)
     assert by_id[done]["done"] is True
     assert by_id[done]["grain"] == "day"
-    assert by_id[bench.permutation_id("Qwen3.5-2B", "flat", "month")]["done"] is False
+    assert by_id[bench.permutation_id("Qwen3.5-4B", "flat", "week")]["done"] is False
 
 
 def test_bench_session_keys_selects_only_in_scope_sessions(tmp_path: Path) -> None:

@@ -20,6 +20,7 @@ import logging
 import sqlite3
 import time
 from collections.abc import Iterator
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
@@ -60,19 +61,29 @@ MODEL_REGISTRY: dict[str, tuple[str, str, float]] = {
     "Qwen3.5-4B": ("Qwen3.5-4B-Q4_K_M.gguf", "qwen", 4.0),
 }
 
-# The four models actually swept (CR1, 2026-06-01): both families × two sizes.
-BENCH_MODELS: tuple[str, ...] = ("gemma-4-E2B", "gemma-4-E4B", "Qwen3.5-2B", "Qwen3.5-4B")
+# The two fastest models (examples/muninn/FINDINGS.md): the sweep holds the model
+# constant and compares strategies × speed, one results table per model.
+BENCH_MODELS: tuple[str, ...] = ("Qwen3.5-2B", "Qwen3.5-4B")
 
 # Merge strategies swept against each model (G4/G5/G6 registry flags).
 STRATEGIES: tuple[str, ...] = ("strict", "reground", "flat")
 
 # Time grains swept (the rollup bucketing axis, G7); part of each permutation.
-GRAINS: tuple[str, ...] = ("day", "week", "month")
+GRAINS: tuple[str, ...] = ("day", "week")
 
-# The real, non-sensitive corpus the sweep runs over: the two dogfood repos and
-# their subtrees (resolved scope_paths). A session is in-scope iff one of these
-# is in its inclusive ancestor chain — never a sample, never client/work data.
-BENCH_SCOPES: tuple[str, ...] = ("play/claude-code-sessions", "play/sqlite-vector-graph")
+# Four real projects — two per domain (play, work) — so the scope trie yields the
+# full matrix: 4 project scopes + 2 domain scopes (play, work) + the root, each
+# rolled up daily and weekly. A session is in-scope iff one of these is in its
+# inclusive ancestor chain (G1 authoritative resolution).
+BENCH_SCOPES: tuple[str, ...] = (
+    "play/claude-code-sessions",
+    "play/sqlite-vector-graph",
+    "work/agent-capabilities",
+    "work/rapid-whitelabelling",
+)
+
+# Restrict the corpus to the most recent week so the matrix stays small + fast.
+BENCH_SINCE_DAYS = 7
 
 
 def _iter_session_keys(
@@ -229,20 +240,33 @@ def _lens_text(lenses: dict[str, str] | sqlite3.Row) -> str:
 
 
 def bench_session_keys(
-    conn: sqlite3.Connection, resolver: ProjectResolver, scopes: tuple[str, ...]
+    conn: sqlite3.Connection,
+    resolver: ProjectResolver,
+    scopes: tuple[str, ...],
+    since: str | None = None,
 ) -> list[tuple[str, str]]:
     """Every ingested ``(project_id, session_id)`` whose scope falls under one of
     ``scopes`` — the real corpus the sweep runs over, de-duplicated and ordered.
+    With ``since`` (ISO timestamp), only sessions with a human event at or after
+    it are kept (the last-week window).
 
     Membership is by G1's authoritative ancestor chain (``scope in
     ancestor_scopes``), never a dash-split of the encoded id. Projects that can't
     be resolved are skipped (they can't be placed in the hierarchy)."""
     keys: list[tuple[str, str]] = []
     seen: set[tuple[str, str]] = set()
-    rows = conn.execute(
-        """SELECT DISTINCT project_id, session_id FROM events
-           WHERE session_id IS NOT NULL ORDER BY project_id, session_id"""
-    ).fetchall()
+    if since is None:
+        rows = conn.execute(
+            """SELECT DISTINCT project_id, session_id FROM events
+               WHERE session_id IS NOT NULL ORDER BY project_id, session_id"""
+        ).fetchall()
+    else:
+        rows = conn.execute(
+            """SELECT DISTINCT project_id, session_id FROM events
+               WHERE session_id IS NOT NULL AND msg_kind = 'human' AND timestamp >= ?
+               ORDER BY project_id, session_id""",
+            (since,),
+        ).fetchall()
     for project_id, session_id in rows:
         try:
             chain = set(ancestor_scopes(resolver, project_id))
@@ -546,14 +570,18 @@ def cmd_run(args: argparse.Namespace) -> None:
 
     model_id, strategy, grain = perm["model"], perm["strategy"], perm["grain"]
     scopes = tuple(args.scope) if args.scope else BENCH_SCOPES
+    since = args.since or (datetime.now(UTC) - timedelta(days=args.since_days)).date().isoformat()
     conn = _open_chat_connection(model_id, gguf_path(model_id))
     try:
         resolver = ProjectResolver(PROJECTS_PATH)
-        session_keys = bench_session_keys(conn, resolver, scopes)
+        session_keys = bench_session_keys(conn, resolver, scopes, since=since)
         if not session_keys:
-            raise SystemExit(f"no ingested sessions under scopes {scopes} (nothing to summarise)")
+            raise SystemExit(
+                f"no sessions under {scopes} since {since} (nothing to summarise)"
+            )
         log.info(
-            "run %s: %d real sessions under %s", args.id, len(session_keys), ", ".join(scopes)
+            "run %s: %d real sessions under %s since %s",
+            args.id, len(session_keys), ", ".join(scopes), since,
         )
         t0 = time.monotonic()
         record = run_permutation(
@@ -584,43 +612,50 @@ def cmd_run(args: argparse.Namespace) -> None:
 
 
 def cmd_report(args: argparse.Namespace) -> None:
-    """Rank result rows into the benchmark report (CR1.5)."""
+    """One results table per model — strategies × grain × grounding score × speed."""
     ranked = rank_results(args.results_dir)
     lines = [
         "# G10 Benchmark Report",
         "",
-        "Real sweep over the dogfood corpus (no fabricated gold). Every score is",
-        "**source grounding** — the generated summary's ROUGE-L/BLEU/F1 overlap against the",
-        "*actual human-prompt text it derives from*; the corpus itself is the reference.",
+        "Scoped real sweep: the four benchmark projects (two `play`, two `work`), last week,",
+        "two fastest models. The model is held constant per table so the **strategies** can be",
+        "compared head-to-head on source grounding and speed.",
         "",
-        "- **session (r/b/f)** — a session summary vs its own real prompts → screens the *model*.",
-        "- **rollup (r/b/f)** — a scope's rolled-up summary vs the concatenated real source",
-        "  beneath it → screens the *strategy*'s drift up the hierarchy (this drives the rank).",
-        "",
-        "Absolute values are low by construction (a summary is a compression of a much larger",
-        "source); what matters is the *relative* ordering. These numbers rank and surface — the",
-        "binding PROCEED/ABANDON call is the human taste review of the rollups in the UI (T10.7).",
-        "",
-        "| Rank | Permutation | model | strat | grain | sess r/b/f | n | roll r/b/f | n | "
-        "Combined | status | sec |",
-        "|------|-------------|-------|-------|-------|------------|--:|------------|--:|"
-        "---------:|--------|----:|",
+        "Every score is **source grounding** — the generated summary's ROUGE-L/BLEU/F1 overlap",
+        "against the *real* human-prompt text it derives from (the corpus is the reference, no",
+        "fabricated gold). **rollup (r/b/f)** scores a scope's rolled-up summary vs the",
+        "concatenated real source beneath it — the strategy discriminator. Absolute values are",
+        "low by construction; the *relative* ordering ranks. The binding PROCEED/ABANDON call is",
+        "the human taste review of the rollups in the UI (T10.7).",
     ]
+
     def _triple(r: dict[str, Any], prefix: str) -> str:
         vals = (float(r.get(f"{prefix}_{m}", 0.0)) for m in ("rouge_l", "bleu", "f1"))
         return "/".join(f"{v:.3f}" for v in vals)
 
-    for i, r in enumerate(ranked, start=1):
-        marker = " ⭐" if i == 1 else ""
-        status = r.get("status", "ok")
-        sess = _triple(r, "session")
-        roll = _triple(r, "rollup")
-        lines.append(
-            f"| {i}{marker} | `{r['permutation_id']}` | {r.get('model', '')} | "
-            f"{r.get('strategy', '')} | {r.get('grain', '')} | {sess} | "
-            f"{r.get('n_sessions_scored', 0)} | {roll} | {r.get('n_rollups_scored', 0)} | "
-            f"{r['combined']:.3f} | {status} | {r.get('seconds', 0):.0f} |"
+    models = [m for m in BENCH_MODELS if any(r.get("model") == m for r in ranked)]
+    models += [m for m in {r.get("model") for r in ranked} if m and m not in models]
+    for model_id in models:
+        rows = sorted(
+            (r for r in ranked if r.get("model") == model_id),
+            key=lambda r: (r.get("strategy", ""), r.get("grain", "")),
         )
+        best = max(rows, key=lambda r: r["combined"], default=None)
+        lines += [
+            "",
+            f"## {model_id}",
+            "",
+            "| strategy | grain | rollups | sess r/b/f | roll r/b/f | combined | sec | status |",
+            "|----------|-------|--------:|------------|------------|---------:|----:|--------|",
+        ]
+        for r in rows:
+            star = " ⭐" if r is best else ""
+            lines.append(
+                f"| {r.get('strategy', '')}{star} | {r.get('grain', '')} | "
+                f"{r.get('n_rollups_scored', 0)} | {_triple(r, 'session')} | "
+                f"{_triple(r, 'rollup')} | {r['combined']:.3f} | "
+                f"{r.get('seconds', 0):.0f} | {r.get('status', 'ok')} |"
+            )
 
     # Surface every model-boundary failure verbatim — these ARE the G10 findings
     # for a strategy that won't fit (reground) on a given model, not noise to hide.
@@ -637,20 +672,66 @@ def cmd_report(args: argparse.Namespace) -> None:
             for err in extract_errs:
                 lines.append(f"- `{pid}` — {err}")
 
-    top = ranked[0]["permutation_id"] if ranked else "(no results yet)"
+    lines += ["", "## Best strategy per model (automated screen)", ""]
+    for model_id in models:
+        rows = [r for r in ranked if r.get("model") == model_id]
+        if rows:
+            best = max(rows, key=lambda r: r["combined"])
+            lines.append(
+                f"- **{model_id}**: `{best.get('strategy')}` "
+                f"(grain {best.get('grain')}, combined {best['combined']:.3f})"
+            )
     lines += [
         "",
-        "## Recommendation",
-        "",
-        f"Top automated candidate: `{top}`.",
-        "",
-        "<!-- PROCEED/ABANDON pending the binding human taste review (T10.7) of the top "
-        "survivors via the G8/G9 UI. The reference metrics above do not decide. -->",
+        "<!-- PROCEED/ABANDON pending the binding human taste review (T10.7) of the rollups in "
+        "the G8/G9 UI. The reference metrics above rank and surface; they do not decide. -->",
         "",
     ]
     args.output.parent.mkdir(parents=True, exist_ok=True)
     args.output.write_text("\n".join(lines), encoding="utf-8")
-    log.info("wrote benchmark report: %s (%d permutations)", args.output, len(ranked))
+    log.info("wrote benchmark report: %s (%d cells)", args.output, len(ranked))
+
+
+def dump_summaries_md(conn: sqlite3.Connection, model_id: str) -> tuple[str, int]:
+    """All of ``model_id``'s rollup summaries as markdown, grouped strategy→grain→scope."""
+    rows = conn.execute(
+        """SELECT strategy, time_granularity AS grain, scope_path, time_bucket,
+                  task_summary, patterns, decisions_values
+           FROM rollup_summaries WHERE model = ?
+           ORDER BY strategy, time_granularity, scope_path, time_bucket""",
+        (model_id,),
+    ).fetchall()
+    out = [f"# Rollup summaries — {model_id}", "", f"{len(rows)} summaries.", ""]
+    cur: tuple[str, str] | None = None
+    for r in rows:
+        head = (r["strategy"], r["grain"])
+        if head != cur:
+            cur = head
+            out += ["", f"## {r['strategy']} · {r['grain']}", ""]
+        out += [
+            f"### `{r['scope_path'] or '(all)'}` — {r['time_bucket']}",
+            f"- **task_summary:** {r['task_summary']}",
+            f"- **patterns:** {r['patterns']}",
+            f"- **decisions_values:** {r['decisions_values']}",
+            "",
+        ]
+    return "\n".join(out), len(rows)
+
+
+def cmd_dump(args: argparse.Namespace) -> None:
+    """Write every rollup summary per model to markdown (one file per model)."""
+    conn = sqlite3.connect(f"file:{CACHE_DB_PATH}?mode=ro", uri=True)
+    conn.row_factory = sqlite3.Row
+    try:
+        models = [args.model] if args.model else list(BENCH_MODELS)
+        args.output_dir.mkdir(parents=True, exist_ok=True)
+        for model_id in models:
+            md, n = dump_summaries_md(conn, model_id)
+            out = args.output_dir / f"summaries_{model_id}.md"
+            out.write_text(md, encoding="utf-8")
+            log.info("wrote %s (%d summaries)", out, n)
+    finally:
+        conn.close()
 
 
 def build_parser() -> argparse.ArgumentParser:
@@ -712,15 +793,26 @@ def build_parser() -> argparse.ArgumentParser:
         "--scope",
         nargs="+",
         default=None,
-        help="Override the corpus scope_path(s) (default: the dogfood repos). Useful for smoke.",
+        help="Override the corpus scope_path(s) (default: the four benchmark projects).",
+    )
+    run_p.add_argument(
+        "--since", default=None, help="ISO date floor for sessions (default: last BENCH_SINCE_DAYS)"
+    )
+    run_p.add_argument(
+        "--since-days", type=int, default=BENCH_SINCE_DAYS, help="Window in days when --since unset"
     )
     run_p.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     run_p.set_defaults(func=cmd_run)
 
-    report_p = sub.add_parser("report", help="Rank result rows into the benchmark report")
+    report_p = sub.add_parser("report", help="Per-model strategy×speed results table")
     report_p.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     report_p.add_argument("--output", type=Path, default=DEFAULT_REPORT_PATH)
     report_p.set_defaults(func=cmd_report)
+
+    dump_p = sub.add_parser("dump", help="Write every rollup summary per model to markdown")
+    dump_p.add_argument("--model", default=None, help="One model (default: all BENCH_MODELS)")
+    dump_p.add_argument("--output-dir", type=Path, default=DEFAULT_RESULTS_DIR)
+    dump_p.set_defaults(func=cmd_dump)
 
     return parser
 
