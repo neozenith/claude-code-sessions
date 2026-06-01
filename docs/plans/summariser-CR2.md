@@ -8,7 +8,10 @@
 > - **Blocks:** [CR1](./summariser-CR1.md) (the real sweep cannot be made tractable until the base
 >   generation call is dialed in) and the production summariser generation path (G2 `summarise_session`,
 >   G3 merge prompts).
-> - **Status:** proposed (2026-06-01)
+> - **Status:** done (2026-06-01) — recipe dialed in: `muninn_chat(model, prompt, THREE_LENS_GBNF,
+>   512)` yields bounded, valid 3-lens JSON on all four bench models (sample + real 12k-char input),
+>   zero runaway. See [`examples/muninn/FINDINGS.md`](../../examples/muninn/FINDINGS.md). CR1 adopts
+>   next and the sweep resumes.
 
 ## Why this CR exists
 
@@ -85,4 +88,6 @@ CR1's `MuninnSummaryEngine.summarise` (and the G3 merge prompts) switch from the
 the real 4-model × 36-cell dogfood sweep becomes tractable (~1–2h) and the non-JSON failures
 disappear. CR1 resumes from its durable `session_summaries` checkpoint once the recipe is in.
 
-- [ ] **Done** — bounded, valid 3-lens JSON on all four bench models, zero runaway, recipe committed.
+- [x] **Done** (2026-06-01) — bounded, valid 3-lens JSON on all four bench models (sample + real
+  input), zero runaway; probes + recipe committed under `examples/muninn/`. CR1 adopts the 4-arg
+  call next.

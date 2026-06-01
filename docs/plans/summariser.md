@@ -249,7 +249,7 @@ which is a pending *decision*). Each CR names the gap/ticket where it was discov
 | CR | Title | Discovered in | Status |
 |----|-------|---------------|--------|
 | [CR1](./summariser-CR1.md) | Make the G10 benchmark real, runnable, and self-contained in `summarise_cli` | [G10](./summariser-G10.md) / [T10.7](./summariser-G10-T10.7.md) | **blocked on [CR2](./summariser-CR2.md)** (2026-06-01) — real source-grounded sweep built + smoke-proven, then paused: `muninn_chat` called unbounded → runaway generation. Fabricated-gold v1 rejected |
-| [CR2](./summariser-CR2.md) | Dial in the base muninn LLM invocation (grammar / `max_tokens` / thinking control) in small focused prototypes | [CR1](./summariser-CR1.md) (G2/G3 generation path) | proposed (2026-06-01) — `muninn_chat(model, prompt[, grammar[, max_tokens]])` is 4-arg; summariser uses 2-arg |
+| [CR2](./summariser-CR2.md) | Dial in the base muninn LLM invocation (grammar / `max_tokens` / thinking control) in small focused prototypes | [CR1](./summariser-CR1.md) (G2/G3 generation path) | done (2026-06-01) — recipe `muninn_chat(model, prompt, THREE_LENS_GBNF, 512)`: bounded valid 3-lens JSON on all 4 bench models; grammar suppresses `<think>`. See [`examples/muninn/`](../../examples/muninn/FINDINGS.md) |
 
 ## Decisions (ADRs)
 
