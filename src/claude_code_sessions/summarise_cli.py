@@ -19,14 +19,24 @@ import json
 import logging
 import sqlite3
 import time
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
 
+import numpy as np
 import sqlite_muninn
 
 from claude_code_sessions.config import CACHE_DB_PATH, PROJECTS_PATH
+from claude_code_sessions.database.sqlite.embeddings import (
+    EMBED_MAX_CHARS,
+)
+from claude_code_sessions.database.sqlite.embeddings import (
+    GGUF_MODEL_NAME as EMBED_MODEL_NAME,
+)
+from claude_code_sessions.database.sqlite.embeddings import (
+    ensure_model_downloaded as ensure_embed_model_downloaded,
+)
 from claude_code_sessions.database.sqlite.kg.runtime import ensure_chat_model_downloaded
 from claude_code_sessions.database.sqlite.summaries import (
     MuninnSummaryEngine,
@@ -313,7 +323,50 @@ _SCORE_METRICS = (
     "rouge_l_ceiling",
     "rouge_l_normalised",
     "lead_combined",
+    "embed_cosine",
 )
+
+
+# Cap on how many EMBED_MAX_CHARS-sized chunks of a (possibly huge) reference we
+# mean-pool into one embedding — bounds the cosine cost while staying representative.
+_MAX_EMBED_CHUNKS = 8
+
+
+def _embed(conn: sqlite3.Connection, text: str) -> Any:
+    """A unit-norm embedding of ``text`` — mean-pooled over up to _MAX_EMBED_CHUNKS
+    EMBED_MAX_CHARS-sized pieces (muninn_embed returns L2-normalised float32)."""
+    pieces = [text[i : i + EMBED_MAX_CHARS] for i in range(0, len(text), EMBED_MAX_CHARS)]
+    pieces = pieces[:_MAX_EMBED_CHUNKS] or [""]
+    vecs = [
+        np.frombuffer(
+            conn.execute("SELECT muninn_embed(?, ?)", (EMBED_MODEL_NAME, p)).fetchone()[0],
+            dtype=np.float32,
+        )
+        for p in pieces
+    ]
+    pooled = np.mean(vecs, axis=0)
+    norm = float(np.linalg.norm(pooled))
+    return pooled / norm if norm else pooled
+
+
+def make_embed_cosine(conn: sqlite3.Connection) -> Callable[[str, str], float]:
+    """Register the local embedder on ``conn`` and return a ``(candidate,
+    reference) -> cosine`` function (CR4.3). Semantic grounding: unlike BLEU it
+    credits paraphrase — high cosine with low BLEU = strong abstractive grounding
+    (SCORING.md §4). Fail-loud: if the embedder can't load, this raises."""
+    row = conn.execute(
+        "SELECT name FROM temp.muninn_models WHERE name = ?", (EMBED_MODEL_NAME,)
+    ).fetchone()
+    if row is None:
+        conn.execute(
+            "INSERT INTO temp.muninn_models(name, model) SELECT ?, muninn_embed_model(?)",
+            (EMBED_MODEL_NAME, str(ensure_embed_model_downloaded())),
+        )
+
+    def _cosine(candidate: str, reference: str) -> float:
+        return round(float(_embed(conn, candidate) @ _embed(conn, reference)), 4)
+
+    return _cosine
 
 
 def _mean_scores(scores: list[dict[str, float]]) -> dict[str, float]:
@@ -332,6 +385,7 @@ def run_permutation(
     *,
     resolver: ProjectResolver,
     session_keys: list[tuple[str, str]],
+    embed_cosine: Callable[[str, str], float],
 ) -> dict[str, Any]:
     """Run one real permutation over ``session_keys`` and score by source grounding.
 
@@ -373,7 +427,10 @@ def run_permutation(
         src = sources.get((pid, sid), "")
         if row is None or not src.strip():
             continue  # no human prompts (T2.5) — nothing real to ground against
-        session_scores.append(score_summary(_lens_text(row), src))
+        cand = _lens_text(row)
+        score = score_summary(cand, src)
+        score["embed_cosine"] = embed_cosine(cand, src)
+        session_scores.append(score)
 
     # --- rollups (strategy × grain) over the just-written session summaries ---
     rollup_rows = 0
@@ -401,7 +458,10 @@ def run_permutation(
             if k in chains and scope_path in chains[k] and sources.get(k, "").strip()
         )
         if ref.strip():
-            rollup_scores.append(score_summary(" ".join(texts), ref))
+            cand = " ".join(texts)
+            score = score_summary(cand, ref)
+            score["embed_cosine"] = embed_cosine(cand, ref)
+            rollup_scores.append(score)
 
     sess = _mean_scores(session_scores)
     roll = _mean_scores(rollup_scores)
@@ -606,7 +666,8 @@ def cmd_run(args: argparse.Namespace) -> None:
         )
         t0 = time.monotonic()
         record = run_permutation(
-            conn, model_id, strategy, grain, resolver=resolver, session_keys=session_keys
+            conn, model_id, strategy, grain, resolver=resolver, session_keys=session_keys,
+            embed_cosine=make_embed_cosine(conn),
         )
         record["seconds"] = round(time.monotonic() - t0, 2)
         record["scopes"] = list(scopes)
@@ -651,7 +712,9 @@ def cmd_report(args: argparse.Namespace) -> None:
         "- **norm** — ROUGE-L as a fraction of its compression-bounded ceiling (achievable %).",
         "- **lead** — combined score of a verbatim first-N-token extract (the extractive ceiling);",
         "  a good *abstractive* summary sits below it — that gap is abstraction the lexical",
-        "  metrics can't credit (embedding cosine + LLM-judge, CR4, score it).",
+        "  metrics can't credit.",
+        "- **cos** — embedding cosine (summary vs source, local nomic-embed). Credits paraphrase:",
+        "  **high cos with low BLEU = strong *abstractive* grounding** — what lexical misses.",
         "",
         "Absolutes are low by construction; *relative* ordering ranks. The binding PROCEED/ABANDON",
         "call is the human taste review of the rollups in the UI (T10.7).",
@@ -679,8 +742,10 @@ def cmd_report(args: argparse.Namespace) -> None:
             "",
             f"## {model_id}",
             "",
-            "| strategy | grain | n | roll r/b/f | comp | norm | lead | combined | sec | status |",
-            "|----------|-------|--:|------------|-----:|-----:|-----:|---------:|----:|--------|",
+            "| strategy | grain | n | roll r/b/f | comp | norm | lead | cos | combined | sec | "
+            "status |",
+            "|----------|-------|--:|------------|-----:|-----:|-----:|----:|---------:|----:|"
+            "--------|",
         ]
         for r in rows:
             star = " ⭐" if r is best else ""
@@ -689,7 +754,8 @@ def cmd_report(args: argparse.Namespace) -> None:
                 f"{r.get('n_rollups_scored', 0)} | {_triple(r, 'rollup')} | "
                 f"{float(r.get('rollup_compression_ratio', 0.0)):.3f} | "
                 f"{float(r.get('rollup_rouge_l_normalised', 0.0)):.3f} | "
-                f"{float(r.get('rollup_lead_combined', 0.0)):.3f} | {r['combined']:.3f} | "
+                f"{float(r.get('rollup_lead_combined', 0.0)):.3f} | "
+                f"{float(r.get('rollup_embed_cosine', 0.0)):.3f} | {r['combined']:.3f} | "
                 f"{r.get('seconds', 0):.0f} | {r.get('status', 'ok')} |"
             )
 

@@ -121,13 +121,15 @@ def test_run_permutation_is_source_grounded(tmp_path: Path) -> None:
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
-        conn, "gemma-4-E2B", "strict", "day", resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")]
+        conn, "gemma-4-E2B", "strict", "day", resolver=resolver,
+        session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["permutation_id"] == "gemma-4-E2B__strict__day"
     assert record["grain"] == "day"
     assert record["status"] == "ok"
     assert record["n_sessions_scored"] == 1
+    assert record["rollup_embed_cosine"] == 0.5  # the injected cosine flows through
     assert record["session_bleu"] > 0  # summary words really appear in the source
     assert record["n_rollups_scored"] >= 1  # leaf + ancestor scopes scored for real
     assert record["rollup_bleu"] > 0
@@ -157,7 +159,7 @@ def test_run_permutation_records_rollup_failure_as_data(tmp_path: Path) -> None:
 
     record = bench.run_permutation(
         conn, "gemma-4-E2B", "reground", "day",
-        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")],
+        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["n_sessions_scored"] == 1  # extraction still happened and scored
@@ -177,7 +179,7 @@ def test_run_permutation_records_non_json_extraction_as_data(tmp_path: Path) -> 
 
     record = bench.run_permutation(
         conn, "Qwen3.5-2B", "strict", "day",
-        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")],
+        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["n_sessions_scored"] == 0  # nothing scorable — extraction failed to parse
