@@ -59,18 +59,24 @@ class SummaryMerger(Protocol):
 - **Why:** The fidelity/speed trade-off between GraphRAG-style merging and Ou & Lapata re-grounding is corpus- and model-dependent; measuring it on this data derisks the choice cheaply and avoids building production on an unvalidated assumption.
 - **Rejected:** Committing to re-grounding upfront (likely best on fidelity but unmeasured on this corpus and slower — exactly the unjustified assumption the benchmark exists to test).
 
-## ADR3.2: Production merge strategy
-<!-- UNRESOLVED -->
+## ADR3.2: Production merge strategy — RESOLVED (2026-06-01)
 
-Resolved by the [G10](./summariser-G10.md) decision gate, not by upfront reasoning. Until G10's benchmark report exists, the production strategy is undetermined and all three remain behind the flag.
+Resolved by the [G10](./summariser-G10.md) decision gate on real benchmark evidence — full write-up
+in **[ADR3.2 report](./summariser-ADR3.2-merge-strategy.md)**.
 
 | Option | Pros | Cons |
 |--------|------|------|
-| strict (bottom-up, summaries only) | Cheapest, reuses tiers | Hallucination-amplification risk |
-| reground (bottom-up + source excerpts) | Expected best faithfulness | Most tokens/slowest |
-| flat (re-summarise raw per scope/bucket) | Simple DAG | Largest top-tier prompts, redundant work |
+| strict (bottom-up, summaries only) | Cheapest, reuses tiers; bounded ancestor merges scale to high scopes | Drift compounds with height |
+| reground (bottom-up + source excerpts) | **Best faithfulness — the only strategy visibly working (BLEU ~6–10× the others); advantage grows with depth** | Excerpt tokens overflow context at big buckets/scopes |
+| flat (re-summarise raw per scope/bucket) | Simple DAG | Single all-descendants prompt overflows first at high/coarse scopes; never beat strict |
 
-- **Decision:** pending — emitted by the [G10](./summariser-G10.md) benchmark (speed + faithfulness on this corpus).
+- **Decision (PROCEED):** **reground** is the production strategy, applied **grain/height-aware** —
+  reground @ daily by default; reground at week/month/deep *where the context budget holds*
+  (contingent on a 128k model like Llama-3.1-8B or [CR3](./summariser-CR3.md) batching); **strict**
+  as the deterministic fallback when the excerpt budget is blown; **flat** deprecated to shallow
+  scopes only. Mistral-7B rejected (8k context). See the [report](./summariser-ADR3.2-merge-strategy.md).
+- **Consequence:** the G11 collapse keeps **two** strategies (reground primary + strict fallback),
+  not one — the context-aware policy, not a single winner.
 
 ## ADR3.4: Roll-ups run per level band on an external cadence
 - **Decision:** `roll_up_scopes` accepts a `level` band (and `granularity`) so each tier of the trie can be rolled up independently and on its own cadence — e.g. leaf/project rollups daily, domain/root rollups weekly — all manually triggered (ADR2.4), reading the `session_summaries` that exist to date.
