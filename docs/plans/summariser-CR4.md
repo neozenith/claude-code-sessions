@@ -1,4 +1,4 @@
-# CR4: A located, gaming-resistant scorecard (compression, anchors, semantic, LLM-judge)
+# CR4: A located, gaming-resistant scorecard (compression, anchors, embedding cosine)
 
 > - **Index:** [summariser.md](./summariser.md)
 > - **Type:** Change Request (midflight discovery)
@@ -22,20 +22,21 @@ score, (b) **anchors** that bracket the band, and (c) a human-aligned absolute. 
 | CR4.1 | **Compression ratio + normalisation** — emit `compression_ratio = len(summary)/len(source)` and `rouge_l_normalised = rouge_l / ceiling(compression_ratio)` per scored row (the "% of achievable"). | unit on known lengths |
 | CR4.2 | **Anchors** — score, against the same source, a `lead-N` extract (first N chars) and an `oracle-extractive` (greedy ROUGE-maximising extract of the summary's length). Report each row's position on `[lead → oracle]`. | unit: model summary placed between lead and oracle |
 | CR4.3 | **Embedding cosine** — `cos(embed(summary), embed(source))` via the local embedder (`muninn_embed` / nomic / bge). Paraphrase-aware grounding that BLEU misses. | runs on real rows; high-cos/low-BLEU surfaces good abstraction |
-| CR4.4 | **LLM-as-judge** — a G-Eval-style pass rating each summary 1–5 on faithfulness/coverage/coherence vs source, using a **large** model as judge (judging < generating). The human-aligned absolute. | runs on real rows; judge ≥4 = great |
-| CR4.5 | **Report the vector** — every strategy×model row carries lexical + compression + anchors + cosine + (optional) judge + speed; report renders the located scorecard. | the report answers "good/great" with anchors, not a bare triple |
-| **CR4.6 (done gate)** | Re-run the 4-project last-week matrix — including the new Qwen3.6 model(s) — so each row reports the **full located scorecard**, and the report states where each model/strategy sits on the lead→oracle band. | committed report with located scores |
+| CR4.4 *(optional)* | **Binary faithfulness classifier** — a yes/no "is every summary claim entailed by the source?" pass, aggregated to a *proportion* (% faithful). **NOT** a numeric 1–5 judge scale (rejected — pseudo-quantitative, see SCORING §4). Coarse pre-screen of the human gate, which is itself binary (PROCEED/ABANDON). | proportion faithful on real rows |
+| CR4.5 | **Report the vector** — every strategy×model row carries lexical + compression + anchors + cosine + speed (+ optional % faithful); report renders the located scorecard. | the report answers "good/great" with anchors, not a bare triple |
+| **CR4.6 (done gate)** | Re-run the 4-project last-week matrix across the model panel so each row reports the **full located scorecard**, and the report states where each model/strategy sits on the lead→oracle band. | committed report with located scores |
 
 ## Notes / decisions
 
 - **Keep the lexical triple** — it's the cheap deterministic relative screen and the gaming-balance
   system (SCORING §1). CR4 *contextualises* it, it does not replace it.
-- **LLM-judge is the only one that needs a big model** — and judging is the right job for one. This
-  is where a downloaded Qwen3.6-27B / 35B-A3B earns its keep (as the *judge*, not necessarily the
-  generator).
+- **No numeric LLM-judge.** A 1–5 LLM rating is not evidence-based — Likert LLM scores are poorly
+  calibrated and biased, so "3.7/5" is pseudo-quantitative, not a measurement (SCORING §4). The only
+  honest LLM use is **binary** classification (faithful/not, or pairwise A-vs-B) → a real proportion.
+  Even that is a coarse pre-screen; the binding verdict is the human gate (T10.7).
 - **Anchors are deterministic** — lead and oracle are pure functions of source + length, so the
   located score is reproducible.
 - **Pairs with CR3** — over-context rows still need map-reduce batching to be scorable at all.
 
-- [ ] **Done** — located scorecard (compression + anchors + cosine + judge) on a re-run of the
-  matrix incl. Qwen3.6; report states each row's band position.
+- [ ] **Done** — located scorecard (compression + anchors + cosine) on a re-run of the model-panel
+  matrix; report states each row's band position. (Binary faithfulness pass optional.)

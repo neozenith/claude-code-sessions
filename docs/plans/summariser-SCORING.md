@@ -20,8 +20,8 @@ CNN/DailyMail is ~0.40, not 0.7+.)
 | Metric | Captures | Structural failure mode | Gamed by… | …caught by |
 |--------|----------|-------------------------|-----------|-----------|
 | **ROUGE-L** (LCS, f-measure) | Longest common *subsequence* — overlap that respects ordering (reads as fluency/structure). | f-measure is **recall-dominated**: recall = LCS / len(**source**). Source is 10–50× the summary, so recall (and thus f) is tiny **by construction** — a high score would mean the "summary" is nearly source-length. | **Copying long verbatim spans** from the source. | **BLEU** doesn't rise much from one long span (n-gram precision saturates); **compression ratio** exposes a copy (ratio → 1 = no summarisation). |
-| **BLEU** (n-gram precision + brevity penalty) | How much of the summary's **wording is present in the source** → a grounding / anti-hallucination signal. | **Penalises good abstraction**: a faithful *paraphrase* uses words not literally in the source → low BLEU even when the summary is excellent. Brittle to exact n-grams. | **Extracting verbatim phrases** (parroting). | **ROUGE-L recall** stays low if you only parrot a few phrases; **compression** + **LLM-judge** catch parroting that ignores the rest. |
-| **F1** (token-set overlap) | Bag-of-words **content coverage** — did the summary mention the right things, order-agnostic. | **Ignores order and structure**; rewards keyword presence over coherent prose. | **Keyword stuffing** (dump salient source nouns). | **ROUGE-L** (needs ordered overlap, not a word bag); **compression** (a keyword dump is long & unreadable); **LLM-judge** (rates coherence). |
+| **BLEU** (n-gram precision + brevity penalty) | How much of the summary's **wording is present in the source** → a grounding / anti-hallucination signal. | **Penalises good abstraction**: a faithful *paraphrase* uses words not literally in the source → low BLEU even when the summary is excellent. Brittle to exact n-grams. | **Extracting verbatim phrases** (parroting). | **ROUGE-L recall** stays low if you only parrot a few phrases; **compression** + **embedding cosine** catch parroting that ignores the rest. |
+| **F1** (token-set overlap) | Bag-of-words **content coverage** — did the summary mention the right things, order-agnostic. | **Ignores order and structure**; rewards keyword presence over coherent prose. | **Keyword stuffing** (dump salient source nouns). | **ROUGE-L** (needs ordered overlap, not a word bag); **compression** (a keyword dump is long & unreadable); **embedding cosine** + human review (coherence). |
 
 **The scorecard logic (why three, not one):** the three metrics pull in different directions, so a
 summary that *games* one is exposed by another. A verbatim copy spikes ROUGE-L but the **compression
@@ -85,9 +85,18 @@ with human judgement for open-ended generation, *because* a great abstractive su
 |--------|:---:|:---:|--------------|---------|
 | **Compression-normalised R/B/F + lead/oracle anchors** (§2–3) | ✅ | ✅ (% of achievable) | trivial, deterministic | **Add now** — turns our existing numbers into a located score |
 | **Embedding cosine** (summary vs source) | ✅ | ✅ | cheap; we already have local embedders (`muninn_embed`, `nomic-embed`, `bge-large`) | **Add** — captures paraphrase grounding that BLEU misses |
-| **NLI faithfulness** (SummaC-style: is each summary claim entailed by source?) | ✅ | ✅ | needs an NLI model; targets hallucination specifically | Consider — strong on factuality |
-| **LLM-as-judge** (G-Eval style: rate coverage/faithfulness/coherence 1–5) | ✅ | ✅ | judge-model dependency + bias; **aligns best with humans** | **Add** for the binding absolute verdict — and a great use for a *big* model (judging is easier than generating) |
+| **NLI faithfulness** (SummaC-style: is each summary claim entailed by source?) | ✅ | ✅ (proportion) | needs an NLI model; targets hallucination specifically | Consider — strong on factuality |
+| **LLM-as-classifier — BINARY only** (is this summary faithful to the source? yes/no; or A-vs-B preference) | ✅ | ✅ as a *proportion* (% faithful) | judge-model dependency + bias | Optional, coarse pre-screen of the human gate |
+| ~~LLM-as-judge numeric scale (1–5)~~ | — | ✗ | — | **Rejected** — see note below |
 | Gold reference summaries | ❌ | ✅ | reintroduces the fabricated-gold problem | Rejected (no honest gold) |
+
+> **A numeric LLM-judge scale (1–5) is rejected — it is not evidence-based.** LLM Likert ratings are
+> poorly calibrated, have low inter-rater reliability, and show scale/position biases: a "3.7/5"
+> implies an interval scale the model never grounds, so it is pseudo-quantitative, not a measurement.
+> The only honest LLM-judge use is **binary classification** (faithful / not-faithful, or pairwise
+> A-vs-B), which the model *can* decide and which aggregates to a real proportion. Even then it is a
+> coarse pre-screen — the binding decision is the human gate (T10.7), which is itself binary
+> (PROCEED / ABANDON).
 
 Researched sources: OpenAI summarization-eval cookbook; QuestEval (arXiv 2103.12693); contrastive
 reference-free quality (arXiv 2010.01781); reference-quality/ref-free study (arXiv 2410.10867); AWS
@@ -102,18 +111,20 @@ lexical:     rouge_l, bleu, f1                      (relative screen)
 context:     compression_ratio, rouge_l_normalised  (% of achievable)
 anchors:     lead_combined, oracle_combined         (the band this row sits in)
 semantic:    embed_cosine                           (paraphrase-aware grounding)
-judged:      llm_faithfulness, llm_coverage (1–5)   (human-aligned absolute) — optional/expensive
+faithful?:   binary faithful/not (→ % faithful)     (optional, coarse — NOT a 1–5 scale)
 speed:       seconds
 ```
 
 Then "are we good or great?" reads off three things at once: **(a)** above lead and how close to
 oracle (band position), **(b)** high embed-cosine with *low* BLEU = strong *abstractive* grounding
-(the best outcome the lexical metrics hide), **(c)** LLM-judge ≥ 4/5 on faithfulness = great. Any one
-metric alone is gameable or misleading; the **vector** is not.
+(the best outcome the lexical metrics hide), **(c)** the human taste verdict (T10.7) — a binary
+PROCEED/ABANDON, optionally pre-screened by a binary faithfulness classifier, never a fabricated
+numeric judge score. Any one metric alone is gameable or misleading; the **vector** is not.
 
 ## 6. Plan
 
 This methodology is tracked as **[CR4](./summariser-CR4.md)** (scoring scorecard + calibration):
-implement compression ratio + normalisation, the lead/oracle anchors, embedding cosine, and an
-LLM-as-judge pass — then re-run the 4-project last-week matrix (including the new Qwen3.6 model(s))
-so every strategy×model row carries the full, *located* scorecard instead of a bare lexical triple.
+implement compression ratio + normalisation, the lead/oracle anchors, and embedding cosine —
+optionally a *binary* faithfulness classifier, never a numeric judge scale — then re-run the
+4-project last-week matrix across the expanded model panel so every strategy×model row carries the
+full, *located* scorecard instead of a bare lexical triple.
