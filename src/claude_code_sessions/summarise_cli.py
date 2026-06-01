@@ -60,12 +60,24 @@ MODEL_REGISTRY: dict[str, tuple[str, str, float]] = {
     "Qwen3.5-2B": ("Qwen3.5-2B-Q4_K_M.gguf", "qwen", 2.0),
     "Qwen3.5-4B": ("Qwen3.5-4B-Q4_K_M.gguf", "qwen", 4.0),
     "Qwen3.5-9B": ("Qwen3.5-9B-Q4_K_M.gguf", "qwen", 9.0),
+    "Mistral-7B": ("Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "mistral", 7.0),
+    "Llama-3.1-8B": ("Llama-3.1-8B-Instruct-Q4_K_M.gguf", "llama", 8.0),
 }
 
-# Three sizes of the same Qwen3.5 line so the sweep is a clean apples-to-apples
-# capability ladder (2B → 4B → 9B): the model is held constant per results table
-# and strategies × speed compared head-to-head.
-BENCH_MODELS: tuple[str, ...] = ("Qwen3.5-2B", "Qwen3.5-4B", "Qwen3.5-9B")
+# A cross-family, cross-size panel (CR1, 2026-06-01): the Qwen3.5 capability
+# ladder (2B→4B→9B) plus the two gemma-4 small variants and one each of Mistral
+# and Llama, so the strategy comparison is read across architectures, not one.
+# gemma-4 has no clean dense size in 5-12B (E4B is the largest "small"); the
+# larger gemma-4 / Qwen3.6 are 26-35B MoE (whole model resident) — out of scope.
+BENCH_MODELS: tuple[str, ...] = (
+    "Qwen3.5-2B",
+    "Qwen3.5-4B",
+    "Qwen3.5-9B",
+    "gemma-4-E2B",
+    "gemma-4-E4B",
+    "Mistral-7B",
+    "Llama-3.1-8B",
+)
 
 # Merge strategies swept against each model (G4/G5/G6 registry flags).
 STRATEGIES: tuple[str, ...] = ("strict", "reground", "flat")
