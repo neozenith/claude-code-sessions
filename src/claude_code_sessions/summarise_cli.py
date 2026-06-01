@@ -408,20 +408,16 @@ def save_result(results_dir: Path, perm_id: str, record: dict[str, Any]) -> None
 
 def _combined(record: dict[str, Any]) -> float:
     """Rank by the STRATEGY discriminator — rollup grounding (how well a rollup
-    stays anchored to real source up the hierarchy) — since that is what the
-    T10.7 human verdict judges. Falls back to session grounding when a cell
-    produced no scorable rollup (e.g. reground that overflowed context)."""
-    roll = (
+    stays anchored to real source up the hierarchy), the axis the T10.7 verdict
+    judges. A cell that produced **no** scorable rollup has no strategy signal and
+    scores 0.0 — never the session score (which is identical across a model's
+    cells, so falling back to it would let a zero-output error cell rank first)."""
+    if not record.get("n_rollups_scored", 0):
+        return 0.0
+    return (
         float(record.get("rollup_rouge_l", 0.0))
         + float(record.get("rollup_bleu", 0.0))
         + float(record.get("rollup_f1", 0.0))
-    ) / 3
-    if record.get("n_rollups_scored", 0):
-        return roll
-    return (
-        float(record.get("session_rouge_l", 0.0))
-        + float(record.get("session_bleu", 0.0))
-        + float(record.get("session_f1", 0.0))
     ) / 3
 
 
@@ -635,6 +631,12 @@ def cmd_report(args: argparse.Namespace) -> None:
         vals = (float(r.get(f"{prefix}_{m}", 0.0)) for m in ("rouge_l", "bleu", "f1"))
         return "/".join(f"{v:.3f}" for v in vals)
 
+    def _best(rows: list[dict[str, Any]]) -> dict[str, Any] | None:
+        """Highest combined among the ok cells (only fall back to error cells if
+        none are ok) — a clean cell always beats a partial/zero error cell."""
+        pool = [r for r in rows if r.get("status") == "ok"] or rows
+        return max(pool, key=lambda r: r["combined"], default=None)
+
     models = [m for m in BENCH_MODELS if any(r.get("model") == m for r in ranked)]
     models += [m for m in {r.get("model") for r in ranked} if m and m not in models]
     for model_id in models:
@@ -642,7 +644,7 @@ def cmd_report(args: argparse.Namespace) -> None:
             (r for r in ranked if r.get("model") == model_id),
             key=lambda r: (r.get("strategy", ""), r.get("grain", "")),
         )
-        best = max(rows, key=lambda r: r["combined"], default=None)
+        best = _best(rows)
         lines += [
             "",
             f"## {model_id}",
@@ -674,11 +676,11 @@ def cmd_report(args: argparse.Namespace) -> None:
             for err in extract_errs:
                 lines.append(f"- `{pid}` — {err}")
 
-    lines += ["", "## Best strategy per model (automated screen)", ""]
+    lines += ["", "## Best strategy per model (automated screen, ok cells only)", ""]
     for model_id in models:
         rows = [r for r in ranked if r.get("model") == model_id]
-        if rows:
-            best = max(rows, key=lambda r: r["combined"])
+        best = _best(rows)
+        if best:
             lines.append(
                 f"- **{model_id}**: `{best.get('strategy')}` "
                 f"(grain {best.get('grain')}, combined {best['combined']:.3f})"
