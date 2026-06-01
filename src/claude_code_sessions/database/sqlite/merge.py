@@ -137,6 +137,10 @@ _MERGE_PROMPT_HEADER = (
     '  "task_summary": the combined task + ubiquitous language across the children;\n'
     '  "patterns": the architectural patterns used or reused across the children;\n'
     '  "decisions_values": the decisions and values expressed across the children.\n'
+    "Keep EACH value concise and self-contained: at most 300 characters (~40 words), "
+    "one or two complete sentences. Lead with the most important point and finish "
+    "cleanly — a hard limit truncates anything longer mid-sentence, so never exceed "
+    "it and do not trail off. Prefer dense, specific word choice over filler.\n"
 )
 
 

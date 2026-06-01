@@ -292,11 +292,24 @@ def _session_source_text(conn: sqlite3.Connection, project_id: str, session_id: 
     return "\n".join(str(r[0]) for r in rows)
 
 
+# Every metric score_summary emits, averaged across a permutation's rows.
+_SCORE_METRICS = (
+    "rouge_l",
+    "bleu",
+    "f1",
+    "compression_ratio",
+    "rouge_l_ceiling",
+    "rouge_l_normalised",
+    "lead_combined",
+)
+
+
 def _mean_scores(scores: list[dict[str, float]]) -> dict[str, float]:
-    metrics = ("rouge_l", "bleu", "f1")
     if not scores:
-        return dict.fromkeys(metrics, 0.0)
-    return {m: round(sum(s[m] for s in scores) / len(scores), 4) for m in metrics}
+        return dict.fromkeys(_SCORE_METRICS, 0.0)
+    return {
+        m: round(sum(s.get(m, 0.0) for s in scores) / len(scores), 4) for m in _SCORE_METRICS
+    }
 
 
 def run_permutation(
@@ -381,24 +394,22 @@ def run_permutation(
     sess = _mean_scores(session_scores)
     roll = _mean_scores(rollup_scores)
     status = "ok" if rollup_error is None and not errors else "error"
-    return {
+    record: dict[str, Any] = {
         "permutation_id": permutation_id(model_id, strategy, grain),
         "model": model_id,
         "strategy": strategy,
         "grain": grain,
         "status": status,
         "n_sessions_scored": len(session_scores),
-        "session_rouge_l": sess["rouge_l"],
-        "session_bleu": sess["bleu"],
-        "session_f1": sess["f1"],
         "n_rollups_scored": len(rollup_scores),
         "rollup_rows": rollup_rows,
-        "rollup_rouge_l": roll["rouge_l"],
-        "rollup_bleu": roll["bleu"],
-        "rollup_f1": roll["f1"],
         "rollup_error": rollup_error,
         "extract_errors": errors,
     }
+    for metric in _SCORE_METRICS:
+        record[f"session_{metric}"] = sess[metric]
+        record[f"rollup_{metric}"] = roll[metric]
+    return record
 
 
 def save_result(results_dir: Path, perm_id: str, record: dict[str, Any]) -> None:
@@ -619,12 +630,19 @@ def cmd_report(args: argparse.Namespace) -> None:
         "two fastest models. The model is held constant per table so the **strategies** can be",
         "compared head-to-head on source grounding and speed.",
         "",
-        "Every score is **source grounding** — the generated summary's ROUGE-L/BLEU/F1 overlap",
-        "against the *real* human-prompt text it derives from (the corpus is the reference, no",
-        "fabricated gold). **rollup (r/b/f)** scores a scope's rolled-up summary vs the",
-        "concatenated real source beneath it — the strategy discriminator. Absolute values are",
-        "low by construction; the *relative* ordering ranks. The binding PROCEED/ABANDON call is",
-        "the human taste review of the rollups in the UI (T10.7).",
+        "Every score is **source grounding** — the rolled-up summary's ROUGE-L/BLEU/F1 overlap",
+        "against the *real* source beneath its scope (the corpus is the reference, no fabricated",
+        "gold). Columns (see [SCORING.md](./summariser-SCORING.md)):",
+        "",
+        "- **roll r/b/f** — the lexical triple (relative screen).",
+        "- **comp** — compression ratio (summary tokens / source tokens); the recall ceiling.",
+        "- **norm** — ROUGE-L as a fraction of its compression-bounded ceiling (achievable %).",
+        "- **lead** — combined score of a verbatim first-N-token extract (the extractive ceiling);",
+        "  a good *abstractive* summary sits below it — that gap is abstraction the lexical",
+        "  metrics can't credit (embedding cosine + LLM-judge, CR4, score it).",
+        "",
+        "Absolutes are low by construction; *relative* ordering ranks. The binding PROCEED/ABANDON",
+        "call is the human taste review of the rollups in the UI (T10.7).",
     ]
 
     def _triple(r: dict[str, Any], prefix: str) -> str:
@@ -649,15 +667,17 @@ def cmd_report(args: argparse.Namespace) -> None:
             "",
             f"## {model_id}",
             "",
-            "| strategy | grain | rollups | sess r/b/f | roll r/b/f | combined | sec | status |",
-            "|----------|-------|--------:|------------|------------|---------:|----:|--------|",
+            "| strategy | grain | n | roll r/b/f | comp | norm | lead | combined | sec | status |",
+            "|----------|-------|--:|------------|-----:|-----:|-----:|---------:|----:|--------|",
         ]
         for r in rows:
             star = " ⭐" if r is best else ""
             lines.append(
                 f"| {r.get('strategy', '')}{star} | {r.get('grain', '')} | "
-                f"{r.get('n_rollups_scored', 0)} | {_triple(r, 'session')} | "
-                f"{_triple(r, 'rollup')} | {r['combined']:.3f} | "
+                f"{r.get('n_rollups_scored', 0)} | {_triple(r, 'rollup')} | "
+                f"{float(r.get('rollup_compression_ratio', 0.0)):.3f} | "
+                f"{float(r.get('rollup_rouge_l_normalised', 0.0)):.3f} | "
+                f"{float(r.get('rollup_lead_combined', 0.0)):.3f} | {r['combined']:.3f} | "
                 f"{r.get('seconds', 0):.0f} | {r.get('status', 'ok')} |"
             )
 

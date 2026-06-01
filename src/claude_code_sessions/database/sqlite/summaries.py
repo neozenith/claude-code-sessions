@@ -129,6 +129,11 @@ _PROMPT_HEADER = (
     "systems and their ubiquitous language;\n"
     '  "patterns": which architectural patterns are used or reused;\n'
     '  "decisions_values": which decisions and values are expressed.\n\n'
+    f"Keep EACH value concise and self-contained: at most {_LENS_MAX} characters "
+    "(~40 words), one or two complete sentences. Lead with the most important "
+    "point and finish cleanly — a hard limit truncates anything longer "
+    "mid-sentence, so never exceed it and do not trail off. Prefer dense, "
+    "specific word choice over filler.\n\n"
     "Human prompts:\n"
 )
 
@@ -576,17 +581,40 @@ def _bleu(cand: list[str], ref: list[str], max_n: int = 4) -> float:
     return brevity * geo_mean
 
 
-def score_summary(candidate: str, reference: str) -> dict[str, float]:
-    """Deterministic ROUGE-L / BLEU / F1 of ``candidate`` against ``reference``.
+def _combined3(cand: list[str], ref: list[str]) -> float:
+    """Mean of the three lexical metrics — used to score the anchor baselines."""
+    return (_rouge_l(cand, ref) + _bleu(cand, ref) + _token_f1(cand, ref)) / 3
 
-    All three are token-overlap measures in [0, 1] — identical text scores 1.0,
-    fully disjoint text scores 0.0. The G10 sweep's automated screen (ADR10.1):
-    reproducible and fully local, never a pass/fail verdict (the human gate is).
+
+def score_summary(candidate: str, reference: str) -> dict[str, float]:
+    """Deterministic lexical score of ``candidate`` against ``reference``, plus the
+    context needed to *locate* it on the bad→good→great band (CR4, SCORING.md).
+
+    Lexical (relative screen, [0,1]): ``rouge_l`` / ``bleu`` / ``f1``.
+    Context:
+      * ``compression_ratio`` = len(cand)/len(ref) — how much was distilled away.
+      * ``rouge_l_ceiling`` = 2·cr/(1+cr) — the *theoretical max* ROUGE-L f-measure
+        at this compression (a length-``k`` subsequence has precision 1, recall cr).
+      * ``rouge_l_normalised`` = rouge_l / ceiling — "% of the achievable headroom".
+      * ``lead_combined`` — the combined score of the first ``k`` source tokens (a
+        verbatim extractive baseline). Against the *full source* this is also ≈ the
+        oracle extractive ceiling (any verbatim span scores near-maximally), so a
+        good *abstractive* summary is expected to sit BELOW it — that gap is the
+        abstraction the lexical metrics can't credit (use embedding cosine for it).
     """
     cand_tokens = _tokenize(candidate)
     ref_tokens = _tokenize(reference)
+    n_cand, n_ref = len(cand_tokens), len(ref_tokens)
+    rouge_l = _rouge_l(cand_tokens, ref_tokens)
+    cr = n_cand / n_ref if n_ref else 0.0
+    ceiling = 2 * cr / (1 + cr) if cr > 0 else 0.0
+    lead = ref_tokens[:n_cand]
     return {
-        "rouge_l": _rouge_l(cand_tokens, ref_tokens),
+        "rouge_l": rouge_l,
         "bleu": _bleu(cand_tokens, ref_tokens),
         "f1": _token_f1(cand_tokens, ref_tokens),
+        "compression_ratio": round(cr, 4),
+        "rouge_l_ceiling": round(ceiling, 4),
+        "rouge_l_normalised": round(rouge_l / ceiling, 4) if ceiling > 0 else 0.0,
+        "lead_combined": round(_combined3(lead, ref_tokens), 4),
     }

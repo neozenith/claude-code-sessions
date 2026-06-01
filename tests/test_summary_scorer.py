@@ -7,6 +7,8 @@ model inference — pure token math.
 
 from __future__ import annotations
 
+import pytest
+
 from claude_code_sessions.database.sqlite.summaries import score_summary
 
 
@@ -22,7 +24,29 @@ def test_score_summary_known_pair() -> None:
     assert disjoint["bleu"] == 0.0
     assert disjoint["f1"] == 0.0
 
-    # Every metric stays within [0, 1].
+    # The lexical metrics stay within [0, 1].
     for scores in (identical, disjoint):
-        for value in scores.values():
-            assert 0.0 <= value <= 1.0
+        for key in ("rouge_l", "bleu", "f1"):
+            assert 0.0 <= scores[key] <= 1.0
+
+
+def test_score_summary_locates_on_the_band() -> None:
+    """A short summary vs a long source exposes the context fields (CR4): a small
+    compression ratio, a ceiling below 1, a normalised score = rouge_l/ceiling,
+    and a lead anchor — so the bare lexical value can be located, not guessed."""
+    source = "build a hierarchical summariser with pluggable merge strategies " * 20
+    summary = "build a hierarchical summariser"
+    s = score_summary(summary, source)
+
+    assert 0.0 < s["compression_ratio"] < 0.2  # summary is a few % of the source
+    assert 0.0 < s["rouge_l_ceiling"] < 1.0  # ceiling bounded by compression
+    # normalised = rouge_l / ceiling — the "% of achievable" headroom; lifts the
+    # tiny raw value toward 1 (this summary is ~all subsequence of the source).
+    assert s["rouge_l_normalised"] >= s["rouge_l"]  # normalising can only lift it
+    assert s["rouge_l_normalised"] == pytest.approx(s["rouge_l"] / s["rouge_l_ceiling"], abs=0.01)
+    assert s["lead_combined"] > 0.0  # a verbatim lead extract has real overlap
+
+    # Identical text: full compression (1.0), ceiling 1.0, so normalised == rouge_l.
+    same = score_summary("alpha beta gamma", "alpha beta gamma")
+    assert same["compression_ratio"] == 1.0
+    assert same["rouge_l_normalised"] == 1.0
