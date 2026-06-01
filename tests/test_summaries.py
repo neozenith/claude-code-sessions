@@ -24,6 +24,8 @@ from claude_code_sessions.database.sqlite.merge import (
 )
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.database.sqlite.summaries import (
+    SUMMARY_MAX_TOKENS,
+    THREE_LENS_GBNF,
     MuninnSummaryEngine,
     roll_up_scopes,
     summarise_session,
@@ -287,18 +289,23 @@ def test_muninn_engine_passes_model_name_to_chat() -> None:
     the arguments the engine hands it.
     """
     conn = _make_cache()
-    recorded: list[tuple[str, str]] = []
+    recorded: list[tuple[object, ...]] = []
 
-    def fake_muninn_chat(model_name: str, prompt: str) -> str:
-        recorded.append((model_name, prompt))
+    def fake_muninn_chat(*args: object) -> str:
+        recorded.append(args)
         return json.dumps({"task_summary": "t", "patterns": "p", "decisions_values": "d"})
 
-    conn.create_function("muninn_chat", 2, fake_muninn_chat)
+    # The engine now drives the 4-arg form (model, prompt, grammar, max_tokens).
+    conn.create_function("muninn_chat", -1, fake_muninn_chat)
 
     engine = MuninnSummaryEngine(conn)
     out = engine.summarise("qwen2.5-3b-instruct", "THE_PROMPT_BODY")
 
-    assert recorded == [("qwen2.5-3b-instruct", "THE_PROMPT_BODY")]
+    assert len(recorded) == 1
+    model_name, prompt, grammar, max_tokens = recorded[0]
+    assert (model_name, prompt) == ("qwen2.5-3b-instruct", "THE_PROMPT_BODY")
+    assert grammar == THREE_LENS_GBNF  # 3-lens grammar applied (CR2)
+    assert max_tokens == SUMMARY_MAX_TOKENS  # generation bounded
     assert "task_summary" in out
 
 

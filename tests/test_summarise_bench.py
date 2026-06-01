@@ -115,7 +115,9 @@ def test_run_permutation_is_source_grounded(tmp_path: Path) -> None:
         "patterns": "pluggable mergers",
         "decisions_values": "summariser mergers",
     }
-    conn.create_function("muninn_chat", 2, lambda _m, _p: json.dumps(summary))
+    # muninn_chat is now the 4-arg form (model, prompt, grammar, max_tokens);
+    # the fake ignores the grammar/cap and returns canned JSON (variadic narg=-1).
+    conn.create_function("muninn_chat", -1, lambda *a: json.dumps(summary))
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
@@ -144,12 +146,13 @@ def test_run_permutation_records_rollup_failure_as_data(tmp_path: Path) -> None:
     _seed_session(conn, DOGFOOD_PID, "s1", "build a hierarchical summariser")
     ok = {"task_summary": "build a summariser", "patterns": "p", "decisions_values": "d"}
 
-    def chat(_m: str, prompt: str) -> str:
+    def chat(*a: object) -> str:
+        prompt = str(a[1])
         if "raw source excerpts" in prompt:  # the reground merge folds these in
             raise sqlite3.OperationalError("muninn_chat: prompt exceeds context")
         return json.dumps(ok)
 
-    conn.create_function("muninn_chat", 2, chat)
+    conn.create_function("muninn_chat", -1, chat)
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
@@ -169,7 +172,7 @@ def test_run_permutation_records_non_json_extraction_as_data(tmp_path: Path) -> 
     _index(tmp_path, DOGFOOD_PID, DOGFOOD_PATH)
     _seed_session(conn, DOGFOOD_PID, "s1", "build a summariser")
 
-    conn.create_function("muninn_chat", 2, lambda _m, _p: "I cannot help with that.")
+    conn.create_function("muninn_chat", -1, lambda *a: "I cannot help with that.")
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(

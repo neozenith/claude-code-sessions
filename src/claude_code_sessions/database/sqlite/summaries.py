@@ -73,17 +73,38 @@ class SummaryEngine(Protocol):
     def summarise(self, model: str, prompt: str) -> str: ...
 
 
+# GBNF grammar forcing the 3-lens object, and an output-token cap. Dialed in by
+# CR2 — see examples/muninn/FINDINGS.md for the evidence and the three gotchas
+# (single-line root or segfault; exclude control chars; bound each string's
+# length or a verbose model truncates mid-string past max_tokens). The grammar
+# also suppresses the <think> preamble: a grammar-constrained decode must match
+# `root` from the first token, so no per-model /no_think flag is needed.
+_LENS_MAX = 300
+THREE_LENS_GBNF = (
+    r'root ::= "{" ws "\"task_summary\"" ws ":" ws string ws "," ws '
+    r'"\"patterns\"" ws ":" ws string ws "," ws '
+    r'"\"decisions_values\"" ws ":" ws string ws "}"'
+    "\n"
+    r'string ::= "\"" ( [^"\\\x00-\x1F] | "\\" ["\\/bfnrt] ){0,' + str(_LENS_MAX) + r'} "\""'
+    "\n"
+    r"ws ::= [ \t\n]*"
+)
+SUMMARY_MAX_TOKENS = 512
+
+
 class MuninnSummaryEngine:
     """Production :class:`SummaryEngine` backed by ``sqlite-muninn`` (ADR2.1).
 
-    Drives the in-repo local chat model via the 2-arg ``muninn_chat(model,
-    prompt)`` SQL function — the same engine the KG community-naming pass uses
-    (``kg/community_naming.py``). No external API, key, or network call: the
-    project's 100%-local, fail-loud invariant is preserved.
+    Drives the in-repo local chat model via the 4-arg
+    ``muninn_chat(model, prompt, grammar, max_tokens)`` SQL function — the
+    grammar (:data:`THREE_LENS_GBNF`) constrains output to the 3-lens JSON object
+    and suppresses ``<think>`` runaway; ``max_tokens`` bounds generation time
+    (CR2). No external API, key, or network call: the project's 100%-local,
+    fail-loud invariant is preserved.
 
-    A third ``muninn_chat`` argument is interpreted by llama.cpp as a GBNF
-    grammar, so the system instruction is folded into the single ``prompt``
-    string by :func:`summarise_session` rather than passed separately.
+    The system instruction is folded into the single ``prompt`` string by
+    :func:`summarise_session` / the mergers, so the call stays one positional
+    prompt plus the fixed grammar + cap.
     """
 
     def __init__(self, conn: sqlite3.Connection) -> None:
@@ -91,8 +112,8 @@ class MuninnSummaryEngine:
 
     def summarise(self, model: str, prompt: str) -> str:
         row = self._conn.execute(
-            "SELECT muninn_chat(?, ?)",
-            (model, prompt),
+            "SELECT muninn_chat(?, ?, ?, ?)",
+            (model, prompt, THREE_LENS_GBNF, SUMMARY_MAX_TOKENS),
         ).fetchone()
         return str(row[0]) if row is not None and row[0] is not None else ""
 
