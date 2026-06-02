@@ -25,15 +25,15 @@ Precise and concise: cut any token that doesn't change what the reader *does*; u
 
 | File | Tier | Genre | Loaded |
 |------|------|-------|--------|
-| `tokenometrics.md` | index | navigation + framing + execution plan | loop entry |
-| `tokenometrics-G<n>.md` | gap | explanation + reference + ticket pointers | per-gap work |
-| `tokenometrics-G<n>-T<x.y>.md` | ticket | austere reference — one TDD slice | per-ticket work |
-| `tokenometrics-DISCOVERY.md` | discovery | Current & Desired State | human review only |
-| `tokenometrics-STYLE.md` | style | authoring contract (this file) | when editing the set |
+| `README.md` | index | navigation + framing + execution plan | loop entry |
+| `G<n>.md` | gap | explanation + reference + ticket pointers | per-gap work |
+| `G<n>-T<x.y>.md` | ticket | austere reference — one TDD slice | per-ticket work |
+| `DISCOVERY.md` | discovery | Current & Desired State | human review only |
+| `STYLE.md` | style | authoring contract (this file) | when editing the set |
 
 ---
 
-## Tier 1 — Index (`tokenometrics.md`)
+## Tier 1 — Index (`README.md`)
 
 Genre: navigation + framing. Keep the diagrams and rolled-up tables; everything else is a pointer.
 
@@ -46,14 +46,14 @@ Genre: navigation + framing. Keep the diagrams and rolled-up tables; everything 
 
 ---
 
-## Tier 2 — Gap (`tokenometrics-G<n>.md`)
+## Tier 2 — Gap (`G<n>.md`)
 
 Genre: explanation (why) + reference (what) + pointer (tickets).
 
 ````markdown
 # G<n>: <Title>
 
-> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Index:** [README.md](./README.md)
 > - **Depends on:** [G..](...), … — or none
 > - **Blocks:** [G..](...), … — or none
 > - **Prev:** [G..](...)
@@ -83,22 +83,22 @@ Genre: explanation (why) + reference (what) + pointer (tickets).
 ## Tickets
 | Ticket | Behavior | Depends on |
 |--------|----------|------------|
-| [T<n>.1](./tokenometrics-G<n>-T<n>.1.md) | <behavior> | — |
+| [T<n>.1](./G<n>-T<n>.1.md) | <behavior> | — |
 ````
 
 Cut from the old format: the `**Current:** / **Gap:**` labels (fold into the lead + Context), the ADR Pros/Cons tables, and any Output line that just restates a ticket.
 
 ---
 
-## Tier 3 — Ticket (`tokenometrics-G<n>-T<x.y>.md`)
+## Tier 3 — Ticket (`G<n>-T<x.y>.md`)
 
 Genre: austere reference. One behavior, one test, the implementation target, dependencies.
 
 ```markdown
 # T<x.y>: <actor> <observable outcome>
 
-> - **Gap:** [G<n>: <title>](./tokenometrics-G<n>.md)
-> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Gap:** [G<n>: <title>](./G<n>.md)
+> - **Index:** [README.md](./README.md)
 > - **Prev:** [T..](./..)        ← omit on the first ticket
 > - **Next:** [T..](./..)        ← omit on the last ticket
 
@@ -110,7 +110,7 @@ Genre: austere reference. One behavior, one test, the implementation target, dep
 |--|--|
 | Test | `path::test_name` — <assertion against the public interface> |
 | Implements | `file` <symbol>, `file` |
-| Depends on | [T..](./tokenometrics-G<a>-T<a>.<b>.md), … — or — |
+| Depends on | [T..](./G<a>-T<a>.<b>.md), … — or — |
 | Mocks | <only if not `none`> |
 | Refactor | <only if present> |
 ```
@@ -119,7 +119,7 @@ Cut from the old format: `**Cycle:** RED → GREEN` (every ticket is RGR — it'
 
 ---
 
-## Discovery (`tokenometrics-DISCOVERY.md`)
+## Discovery (`DISCOVERY.md`)
 
 Review/background only — the before/after architecture, not loaded during the implementation loop. Nav is a blockquote-list backlink to the index, followed by a one-line note marking it review-only. Holds `## Current State` and `## Desired State`, each with its Mermaid diagram.
 

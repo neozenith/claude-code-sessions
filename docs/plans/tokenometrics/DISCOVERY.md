@@ -1,57 +1,160 @@
-# Tokenometrics — Discovery (Current & Desired State)
+# Tokenometrics — Discovery (Current, Desired & Increments)
 
-> - **Index:** [tokenometrics.md](./tokenometrics.md)
+> - **Index:** [README.md](./README.md)
 
-Review/background context: the before/after architecture, not loaded during the implementation loop.
+Review/background context: the architecture that motivates the gaps, not loaded during the loop.
+Two lenses (component + data-flow) for each state, then one increment diagram per gap.
 
 ## Current State
 
-The dashboard ingests `~/.claude/projects/**/*.jsonl` into a cached SQLite index. Ingestion is a wave pipeline (`database/sqlite/wave_pipeline.py`) driving a `ParallelIngester` (`parallel_ingester.py`): worker threads parse files (`CacheManager._parse_file` → `_parse_event`, `cache.py:254`/`:445`) and a single writer thread inserts rows (`_write_parsed`, `cache.py:298`). Costs/classification live in `database/sqlite/pricing.py`. Rollups (`rebuild_aggregates`, `cache.py:695`) and the `agg` star-schema feed the API (`database/sqlite/backend.py`, contract in `database/protocol.py`, routes in `main.py`). The React app (`frontend/src/`) reads typed endpoints via `lib/api-client.ts`.
+The dashboard ingests `~/.claude/projects/**/*.jsonl` into a cached SQLite index. A wave pipeline
+(`database/sqlite/wave_pipeline.py`) drives a `ParallelIngester`: worker threads parse files
+(`CacheManager._parse_file` → `_parse_event`, `cache.py:254`/`:445`) and a single writer inserts rows
+(`_write_parsed`, `cache.py:298`). Rollups (`rebuild_aggregates`, `cache.py:695`) feed the API
+(`backend.py`, `main.py`) and the React app (`frontend/src/`).
 
-**Key facts established by investigating the real data:**
+Naive per-event `SUM(output_tokens)` double-counts the N content-blocks of one response (verified
+≈2.44× inflation on the largest session), and there is no occupancy / TPS / idle metric anywhere.
 
-- A single model response (one `requestId`) is logged as **N content-block events** (1 thinking + 1 text + many tool_use). **Every block repeats the same** `output_tokens` / `input_tokens` / `cache_read_input_tokens` / `cache_creation_input_tokens`. Verified on the largest session file: naive per-event `SUM(output_tokens)` = **8,439,850** vs requestId-deduped = **3,462,111** (≈2.44× inflation). `rebuild_aggregates` (`cache.py:719-720`) and the `agg` table sum per event with no dedup, so **all dashboard token + cost totals are inflated**.
-- For an assistant event, `input_tokens + cache_read_tokens + cache_creation_tokens` **is** the live context-window occupancy (the full prompt sent), constant across a requestId's blocks. No occupancy field, ratio, or per-model window exists anywhere today.
-- Observed max occupancy per model: `opus-4-7` 999,948 and `opus-4-6` 970,536 (1M windows), while `sonnet-4-5/4-6`, `opus-4-5`, `haiku-4-5` all stay under ~200k — empirical corroboration that the window is a per-model constant.
-- `msg_kind` is derived by `message_kind(event_type, is_meta, content)` (`pricing.py:64`) into 9 kinds with no subagent awareness. **1,335 events** living in subagent / `agent_root` files are currently classed `human` (plus 16 `user_text`) — the mislabel bug. All such events carry `is_sidechain=1`.
-- There is **no per-assistant `durationMs`** in the JSONL (only on hook/system events), so response duration must be derived from event timestamps.
-
+### Current State — component lens
 ```mermaid
 flowchart TD
-    JSONL["JSONL lines<br/>(N blocks per response,<br/>usage duplicated)"] --> PE["_parse_event<br/>cache.py:445"]
-    PE --> PF["_parse_file<br/>ordered list"]
-    PF --> PI["ParallelIngester<br/>writer thread"]
-    PI --> EV[("events table<br/>per-block rows,<br/>duplicated usage")]
+    ING["Ingestion<br/>wave_pipeline, parallel_ingester"]
+    PRICE["Pricing/classify<br/>pricing.py"]
+    DB[("Cache DB<br/>events, sessions, agg")]
+    BACK["Backend<br/>backend.py, main.py"]
+    FE["Frontend<br/>api-client.ts, pages"]
+    ING --> PRICE --> DB --> BACK --> FE
+    classDef problem fill:#b91c1c,color:#fef2f2
+    classDef neutral fill:#334155,color:#e2e8f0
+    class DB problem
+    class ING,PRICE,BACK,FE neutral
+```
+
+### Current State — data-flow lens
+```mermaid
+flowchart LR
+    JSONL["JSONL lines<br/>(N blocks/response,<br/>usage duplicated)"] --> PE["_parse_event<br/>cache.py:445"]
+    PE --> PF["_parse_file"]
+    PF --> PI["ParallelIngester<br/>writer"]
+    PI --> EV[("events<br/>per-block rows,<br/>duplicated usage")]
     EV --> RB["rebuild_aggregates<br/>SUM() no dedup"]
     RB --> SESS[("sessions / agg<br/>INFLATED ~2.4x")]
     SESS --> API["backend.py / main.py"]
-    API --> FE["React dashboard<br/>(inflated costs,<br/>no TPS/idle/context)"]
-    classDef problem fill:#b91c1c,color:#fff;
+    API --> FE["React dashboard<br/>(no TPS / idle / context)"]
+    classDef problem fill:#b91c1c,color:#fef2f2
+    classDef neutral fill:#334155,color:#e2e8f0
     class EV,SESS problem
+    class JSONL,PE,PF,PI,RB,API,FE neutral
 ```
 
 ## Desired State
 
-A response-aware ingestion pass corrects the counts and annotates each event, new query methods expose the metrics, and the frontend surfaces them.
+A response-aware ingestion pass corrects the counts and annotates each event; new query methods expose
+the metrics; the frontend surfaces them. Same lenses, same node IDs as Current — the diff is what
+changed colour.
 
-- Ingestion gains a per-file post-pass `_annotate_responses` that groups assistant events by `requestId`, marks one **head** per response, **zeroes the duplicated usage on non-heads** (so every existing `SUM()` is correct with no query rewrites), and stamps `response_duration_ms` on the head.
-- Each event carries `context_tokens`, `context_window` (from a curated map), and `context_ratio`. Subagent events carry `subagent-<kind>` msg_kinds.
-- New `sessions` rollups (`avg_tps`, `total_idle_ms`, `total_active_ms`, `peak_context_ratio`, …) and two new endpoints: per-session turn metrics and a cross-session performance summary.
-- Frontend: per-event context-occupancy bar + TPS + idle markers in SessionDetail, a new **Performance** page (TPS by model, context-utilization ratio histogram, idle/active split), sessions-list columns, and a subagent dimension on the message-kind filter.
-
+### Desired State — component lens
 ```mermaid
 flowchart TD
-    JSONL["JSONL lines"] --> PE["_parse_event<br/>+ request_id, stop_reason,<br/>context_tokens/window/ratio,<br/>subagent- prefix"]
-    PE --> PF["_parse_file"]
-    PF --> AR["_annotate_responses<br/>group by requestId →<br/>mark head, zero dups,<br/>response_duration_ms"]
-    AR --> PI["ParallelIngester writer"]
-    PI --> EV[("events table<br/>+7 columns,<br/>accurate per-head usage")]
-    EV --> RB["rebuild_aggregates<br/>+ _compute_session_timing<br/>(LEAD window)"]
-    RB --> SESS[("sessions / agg<br/>ACCURATE + timing rollups")]
-    SESS --> API["backend.py / main.py<br/>+ /metrics + /performance"]
-    API --> FE["SessionDetail (occupancy/TPS/idle)<br/>+ Performance page<br/>+ sessions columns"]
-    classDef good fill:#166534,color:#fff;
-    classDef process fill:#7c3aed,color:#fff;
-    class EV,SESS good
-    class AR process
+    ING["Ingestion<br/>+ _annotate_responses"]
+    PRICE["Pricing/classify<br/>+ subagent prefix, window map"]
+    DB[("Cache DB<br/>+7 columns, timing rollups")]
+    BACK["Backend<br/>+ /metrics + /performance"]
+    FE["Frontend<br/>+ Performance page"]
+    ING --> PRICE --> DB --> BACK --> FE
+    classDef good fill:#166534,color:#dcfce7
+    classDef process fill:#7c3aed,color:#f5f3ff
+    class DB,BACK good
+    class ING,PRICE,FE process
 ```
+
+### Desired State — data-flow lens
+```mermaid
+flowchart LR
+    JSONL["JSONL lines"] --> PE["_parse_event<br/>+ context cols, subagent prefix"]
+    PE --> PF["_parse_file"]
+    PF --> AR["_annotate_responses<br/>mark head, zero dups,<br/>duration_ms"]
+    AR --> PI["ParallelIngester writer"]
+    PI --> EV[("events<br/>+7 cols, accurate<br/>per-head usage")]
+    EV --> RB["rebuild_aggregates<br/>+ session timing (LEAD)"]
+    RB --> SESS[("sessions / agg<br/>ACCURATE + timing")]
+    SESS --> API["backend.py / main.py<br/>+ /metrics + /performance"]
+    API --> FE["SessionDetail + Performance page"]
+    classDef good fill:#166534,color:#dcfce7
+    classDef process fill:#7c3aed,color:#f5f3ff
+    classDef neutral fill:#334155,color:#e2e8f0
+    class EV,SESS good
+    class AR,PE process
+    class JSONL,PF,PI,RB,API,FE neutral
+```
+
+## Gap Increments
+
+One diagram per gap, in dependency order — each builds on the previous baseline (G1 extends Current
+State, G2 extends G1, …). Highlighted nodes are what that gap changes; everything else is the inherited
+baseline. G1 and G2 are drawn in full; G3–G8 layer on identically (each annotated below its heading).
+
+### G1 increment
+**Response-level token accounting** — extends Current State: insert `_annotate_responses` so each
+requestId is counted once.
+```mermaid
+flowchart LR
+    JSONL["JSONL lines"] --> PE["_parse_event"]
+    PE --> PF["_parse_file"]
+    PF --> AR["_annotate_responses<br/>mark head, zero dups"]
+    AR --> PI["writer"]
+    PI --> EV[("events<br/>accurate per-head usage")]
+    EV --> RB["rebuild_aggregates"]
+    RB --> SESS[("sessions / agg<br/>ACCURATE")]
+    classDef good fill:#166534,color:#dcfce7
+    classDef process fill:#7c3aed,color:#f5f3ff
+    classDef neutral fill:#334155,color:#e2e8f0
+    class AR process
+    class EV,SESS good
+    class JSONL,PE,PF,PI,RB neutral
+```
+
+### G2 increment
+**Context-window utilization annotations** — extends G1: `_parse_event` stamps
+`context_tokens`/`context_window`/`context_ratio` from a curated per-model map.
+```mermaid
+flowchart LR
+    JSONL["JSONL lines"] --> PE["_parse_event<br/>+ context_tokens/window/ratio"]
+    PE --> PF["_parse_file"]
+    PF --> AR["_annotate_responses"]
+    AR --> PI["writer"]
+    PI --> EV[("events<br/>+ context columns")]
+    MAP["curated window map<br/>(per-model)"] -.-> PE
+    classDef good fill:#166534,color:#dcfce7
+    classDef process fill:#7c3aed,color:#f5f3ff
+    classDef neutral fill:#334155,color:#e2e8f0
+    class PE,MAP process
+    class EV good
+    class JSONL,PF,AR,PI neutral
+```
+
+### G3 increment
+**Subagent message-kind prefixing** — extends G2: `_parse_event` stamps a `subagent-` prefix on the
+1,335 sidechain events, so they classify correctly instead of as `human`. Same pattern: one changed
+node on the G2 baseline (`PE`).
+
+### G4 increment
+**Response performance (TPS)** — extends G3: derive `tps` on each response head from
+`response_duration_ms` + head output tokens. Changed node: `EV` head rows.
+
+### G5 increment
+**Turn timing (idle / active)** — extends G4: `_compute_session_timing` (LEAD window) fills
+`total_idle_ms` / `total_active_ms` during `rebuild_aggregates`. Changed edge: `RB` → `SESS`.
+
+### G6 increment
+**Query layer & API endpoints** — extends G5: `backend.py` gains per-session `/metrics` and
+cross-session `/performance`. Changed node: `API`.
+
+### G7 increment
+**Frontend surfacing** — extends G6: SessionDetail occupancy/TPS/idle markers + a new Performance page.
+Changed node: `FE`.
+
+### G8 increment
+**Introspect-script parity** — extends G7: mirror the ingestion changes into the standalone introspect
+script and parity-test. Changed node: a second copy of `ING`/`PE`/`AR` in the introspect script.

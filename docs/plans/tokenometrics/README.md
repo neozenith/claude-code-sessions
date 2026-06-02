@@ -8,7 +8,7 @@
 <summary><b>Table of Contents</b></summary>
 <!--TOC-->
 
-- [Tokenometrics: Performance, Idle Time & Context-Window Analytics](#tokenometrics-performance-idle-time--context-window-analytics)
+- [Tokenometrics: Performance, Idle Time & Context-Window Analytics](#performance-idle-time--context-window-analytics)
   - [Execution Plan](#execution-plan)
     - [Loop Runner Prompt](#loop-runner-prompt)
     - [Progress](#progress)
@@ -39,7 +39,7 @@
 ### Loop Runner Prompt
 
 ```
-/loop Read the gap analysis spec at docs/plans/tokenometrics.md.
+/loop Read the gap analysis spec at docs/plans/README.md.
 
 1. Read `.claude/skills/plan-gap/resources/tdd/tdd.md` and apply its red-green-refactor workflow.
 2. Find the next ticket whose status is `[ ]` and whose `Depends on` are all `[x]`.
@@ -50,7 +50,7 @@
    test suite. Confirm the new test passes and no existing tests regressed.
 5. REFACTOR (optional) — apply the ticket's `Refactor candidates` while staying
    green. Re-run the test suite after each refactor step.
-6. Mark the ticket's status checkbox `[x]` in docs/plans/tokenometrics.md.
+6. Mark the ticket's status checkbox `[x]` in docs/plans/README.md.
 7. Update the Progress table in the Execution Plan section.
 8. Commit the changes with message `T<N>.<M>: <ticket title>`.
 9. Return — the loop will fire again for the next eligible ticket.
@@ -68,18 +68,18 @@ loop can resume.
 
 | Gap | Tickets total | `[x]` done | `[ ]` todo | Next eligible | Blocked on |
 |-----|---------------|-----------|-----------|---------------|------------|
-| [G1](./tokenometrics-G1.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G2](./tokenometrics-G2.md) | 6 | 6 | 0 | — _(done)_ | — |
-| [G3](./tokenometrics-G3.md) | 3 | 3 | 0 | — _(done)_ | — |
-| [G4](./tokenometrics-G4.md) | 2 | 2 | 0 | — _(done)_ | — |
-| [G5](./tokenometrics-G5.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G6](./tokenometrics-G6.md) | 3 | 3 | 0 | — _(done)_ | — |
-| [G7](./tokenometrics-G7.md) | 4 | 4 | 0 | — _(done)_ | — |
-| [G8](./tokenometrics-G8.md) | 1 | 1 | 0 | — _(done)_ | — |
+| [G1](./G1.md) | 4 | 4 | 0 | — _(done)_ | — |
+| [G2](./G2.md) | 6 | 6 | 0 | — _(done)_ | — |
+| [G3](./G3.md) | 3 | 3 | 0 | — _(done)_ | — |
+| [G4](./G4.md) | 2 | 2 | 0 | — _(done)_ | — |
+| [G5](./G5.md) | 4 | 4 | 0 | — _(done)_ | — |
+| [G6](./G6.md) | 3 | 3 | 0 | — _(done)_ | — |
+| [G7](./G7.md) | 4 | 4 | 0 | — _(done)_ | — |
+| [G8](./G8.md) | 1 | 1 | 0 | — _(done)_ | — |
 
 **Dropped tickets** (counted as `[x]`, no work required): **T2.5** — the smart/caution/danger zone classifier and its absolute-token override were removed per the G2 ADR "Quantitative ratio only"; **T7.1** — the frontend zone classifier is likewise unnecessary. Context utilization is exposed as the raw `context_ratio` everywhere.
 
-"Next eligible" = lowest-numbered `[ ]` ticket whose `Depends on` are all `[x]`. The leaf tracer bullets (no deps) are **[T1.1](./tokenometrics-G1-T1.1.md), [T2.1](./tokenometrics-G2-T2.1.md), [T3.1](./tokenometrics-G3-T3.1.md)** — any is a valid starting point; [T1.1](./tokenometrics-G1-T1.1.md) is recommended first since the most gaps transitively depend on it.
+"Next eligible" = lowest-numbered `[ ]` ticket whose `Depends on` are all `[x]`. The leaf tracer bullets (no deps) are **[T1.1](./G1-T1.1.md), [T2.1](./G2-T2.1.md), [T3.1](./G3-T3.1.md)** — any is a valid starting point; [T1.1](./G1-T1.1.md) is recommended first since the most gaps transitively depend on it.
 
 ### Done Criteria
 
@@ -104,14 +104,14 @@ Investigating the real cache (`~/.claude/cache/introspect_sessions.db`, 2 GB) su
 
 **Gaps identified:**
 
-- **[G1: Response-level token accounting](./tokenometrics-G1.md)** — dedupe per `requestId`; zero duplicated usage so all existing totals/costs become accurate.
-- **[G2: Context-window utilization annotations](./tokenometrics-G2.md)** — curated `model_id → window` map; per-event `context_tokens` / `context_window` / `context_ratio`.
-- **[G3: Subagent message-kind prefixing](./tokenometrics-G3.md)** — `subagent-<kind>` when the event is in a subagent context.
-- **[G4: Response performance (TPS)](./tokenometrics-G4.md)** — per-response `response_duration_ms` + derived tokens/sec on response heads.
-- **[G5: Turn timing (idle / active)](./tokenometrics-G5.md)** — call-and-response decomposition + "too-fast reply" flag, session rollups.
-- **[G6: Query layer & API endpoints](./tokenometrics-G6.md)** — expose new fields; `get_session_metrics` + `get_performance_summary`.
-- **[G7: Frontend surfacing](./tokenometrics-G7.md)** — SessionDetail occupancy/TPS/idle, new Performance page, sessions-list columns, subagent filter.
-- **[G8: Introspect-script parity](./tokenometrics-G8.md)** — mirror all ingestion changes in the standalone introspect script that shares the schema.
+- **[G1: Response-level token accounting](./G1.md)** — dedupe per `requestId`; zero duplicated usage so all existing totals/costs become accurate.
+- **[G2: Context-window utilization annotations](./G2.md)** — curated `model_id → window` map; per-event `context_tokens` / `context_window` / `context_ratio`.
+- **[G3: Subagent message-kind prefixing](./G3.md)** — `subagent-<kind>` when the event is in a subagent context.
+- **[G4: Response performance (TPS)](./G4.md)** — per-response `response_duration_ms` + derived tokens/sec on response heads.
+- **[G5: Turn timing (idle / active)](./G5.md)** — call-and-response decomposition + "too-fast reply" flag, session rollups.
+- **[G6: Query layer & API endpoints](./G6.md)** — expose new fields; `get_session_metrics` + `get_performance_summary`.
+- **[G7: Frontend surfacing](./G7.md)** — SessionDetail occupancy/TPS/idle, new Performance page, sessions-list columns, subagent filter.
+- **[G8: Introspect-script parity](./G8.md)** — mirror all ingestion changes in the standalone introspect script that shares the schema.
 
 ```mermaid
 flowchart LR
@@ -135,7 +135,7 @@ flowchart LR
     class G8 parity
 ```
 
-> **Background — Current vs Desired State:** the before/after architecture (and the ~2.4× over-count bug that motivates G1) lives in **[tokenometrics-DISCOVERY.md](./tokenometrics-DISCOVERY.md)** — review context, not needed once the implementation loop starts.
+> **Background — Current vs Desired State:** the before/after architecture (and the ~2.4× over-count bug that motivates G1) lives in **[DISCOVERY.md](./DISCOVERY.md)** — review context, not needed once the implementation loop starts.
 
 ## Gap Analysis
 
@@ -225,14 +225,14 @@ Each gap is split into its own spec file with full **Current / Gap / Output(s) /
 
 | Gap | Spec | Tickets | Summary |
 |-----|------|:-------:|---------|
-| G1 | [Response-level token accounting](./tokenometrics-G1.md) | 4 | Dedupe per `requestId`; zero duplicated usage so all existing totals/costs become accurate. |
-| G2 | [Context-window utilization annotations](./tokenometrics-G2.md) | 6 | Curated `model_id → window` map; per-event occupancy + normalized context ratio (raw quantitative, no zone labels). |
-| G3 | [Subagent message-kind prefixing](./tokenometrics-G3.md) | 3 | `subagent-<kind>` prefix whenever the event belongs to a subagent context. |
-| G4 | [Response performance (TPS)](./tokenometrics-G4.md) | 2 | Per-response `response_duration_ms` + derived tokens/sec on response heads. |
-| G5 | [Turn timing (idle / active)](./tokenometrics-G5.md) | 4 | Idle/active call-and-response decomposition + a too-fast-reply flag. |
-| G6 | [Query layer & API endpoints](./tokenometrics-G6.md) | 3 | Expose the new fields; add `get_session_metrics` + `get_performance_summary` endpoints. |
-| G7 | [Frontend surfacing](./tokenometrics-G7.md) | 4 | SessionDetail occupancy/TPS/idle, a Performance page, sessions-list columns, subagent filter. |
-| G8 | [Introspect-script parity](./tokenometrics-G8.md) | 1 | Mirror every ingestion change in the standalone introspect script that shares the schema. |
+| G1 | [Response-level token accounting](./G1.md) | 4 | Dedupe per `requestId`; zero duplicated usage so all existing totals/costs become accurate. |
+| G2 | [Context-window utilization annotations](./G2.md) | 6 | Curated `model_id → window` map; per-event occupancy + normalized context ratio (raw quantitative, no zone labels). |
+| G3 | [Subagent message-kind prefixing](./G3.md) | 3 | `subagent-<kind>` prefix whenever the event belongs to a subagent context. |
+| G4 | [Response performance (TPS)](./G4.md) | 2 | Per-response `response_duration_ms` + derived tokens/sec on response heads. |
+| G5 | [Turn timing (idle / active)](./G5.md) | 4 | Idle/active call-and-response decomposition + a too-fast-reply flag. |
+| G6 | [Query layer & API endpoints](./G6.md) | 3 | Expose the new fields; add `get_session_metrics` + `get_performance_summary` endpoints. |
+| G7 | [Frontend surfacing](./G7.md) | 4 | SessionDetail occupancy/TPS/idle, a Performance page, sessions-list columns, subagent filter. |
+| G8 | [Introspect-script parity](./G8.md) | 1 | Mirror every ingestion change in the standalone introspect script that shares the schema. |
 
 ## Decisions (ADRs)
 
@@ -240,16 +240,16 @@ The design decisions and their values, scoped to the gap that owns them. Full **
 
 | ADR | Decision | Why |
 |-----|----------|-----|
-| [ADR1.1](./tokenometrics-G1.md) | Fix the token over-count everywhere (zero non-head usage) | Accuracy over inflated historicals, with no query rewrites |
-| [ADR1.2](./tokenometrics-G1.md) | Last block is the response head | It carries `stop_reason` + final usage; end-to-end timing |
-| [ADR2.1](./tokenometrics-G2.md) | Accumulated count is live occupancy | Bounded by the window — the only meaningful ratio basis |
-| [ADR2.2](./tokenometrics-G2.md) | Window from a curated per-model map | 1M is GA per model, so window is a pure function of `model_id` |
-| [ADR2.3](./tokenometrics-G2.md) | Expose the raw ratio, no zone labels | "Smart zone" is subjective; % used is quantitative and sufficient |
-| [ADR3.1](./tokenometrics-G3.md) | Detect subagents by sidechain or file type | `is_sidechain` is reliable; file-type union guards a missing flag |
-| [ADR3.2](./tokenometrics-G3.md) | Subagent scope is a separate filter param | Keeps the kind dropdown readable and the URL legible |
-| [ADR4.1](./tokenometrics-G4.md) | TPS is output ÷ response duration | Measures model performance, not wall-clock including idle |
-| [ADR5.1](./tokenometrics-G5.md) | Too-fast flag at an 8 tok/s skim bar | Fires only when a reply was impossible to have read |
-| [ADR6.1](./tokenometrics-G6.md) | Per-model summary plus raw-ratio histogram | Project drilldown comes free from the existing filters |
+| [ADR1.1](./G1.md) | Fix the token over-count everywhere (zero non-head usage) | Accuracy over inflated historicals, with no query rewrites |
+| [ADR1.2](./G1.md) | Last block is the response head | It carries `stop_reason` + final usage; end-to-end timing |
+| [ADR2.1](./G2.md) | Accumulated count is live occupancy | Bounded by the window — the only meaningful ratio basis |
+| [ADR2.2](./G2.md) | Window from a curated per-model map | 1M is GA per model, so window is a pure function of `model_id` |
+| [ADR2.3](./G2.md) | Expose the raw ratio, no zone labels | "Smart zone" is subjective; % used is quantitative and sufficient |
+| [ADR3.1](./G3.md) | Detect subagents by sidechain or file type | `is_sidechain` is reliable; file-type union guards a missing flag |
+| [ADR3.2](./G3.md) | Subagent scope is a separate filter param | Keeps the kind dropdown readable and the URL legible |
+| [ADR4.1](./G4.md) | TPS is output ÷ response duration | Measures model performance, not wall-clock including idle |
+| [ADR5.1](./G5.md) | Too-fast flag at an 8 tok/s skim bar | Fires only when a reply was impossible to have read |
+| [ADR6.1](./G6.md) | Per-model summary plus raw-ratio histogram | Project drilldown comes free from the existing filters |
 
 ## Success Measures
 
@@ -268,14 +268,14 @@ The design decisions and their values, scoped to the gap that owns them. Full **
 
 ### Domain-Specific Measures
 
-- **[G1](./tokenometrics-G1.md):** For the known sample file, post-reingest `SUM(output_tokens)` over a session equals the requestId-deduped value (≈8.44M → 3.46M); exactly one `is_response_head=1` per `requestId`.
-- **[G2](./tokenometrics-G2.md):** `context_window('claude-opus-4-7')==1_000_000`, `('claude-sonnet-4-5-...')==200_000`, `('qwen2.5-coder-7b-instruct')==32_768`, `('<synthetic>')` is `None`; `context_ratio(tokens, window)` returns the raw fraction `tokens/window` ∈ (0,1] for known windows and `None` for an unknown window. No categorical zone labeling exists (dropped per the G2 ADR "Quantitative ratio only").
-- **[G3](./tokenometrics-G3.md):** Zero events in subagent/`agent_root` files retain a bare `human`/`user_text` kind; all are `subagent-*`.
-- **[G4](./tokenometrics-G4.md):** `tps` is `None` when `response_duration_ms` is 0/NULL, else `output_tokens/(ms/1000)`; never negative.
-- **[G5](./tokenometrics-G5.md):** `total_active_ms + total_idle_ms` reconciles to the session wall-clock within tolerance; `too_fast` set only when idle < output/READ_TOKENS_PER_SEC.
-- **[G6](./tokenometrics-G6.md):** `/api/performance` and `/api/sessions/{p}/{s}/metrics` return typed payloads honoring `days`/`project`.
-- **[G7](./tokenometrics-G7.md):** SessionDetail shows occupancy bar + TPS + idle markers; Performance page renders all charts; subagent filter works via `?msg=`.
-- **[G8](./tokenometrics-G8.md):** Backend and introspect script produce byte-identical event rows for a shared fixture and report the **same** `SCHEMA_VERSION` (the current constant, bumped per schema-changing gap — `"15"` after G2).
+- **[G1](./G1.md):** For the known sample file, post-reingest `SUM(output_tokens)` over a session equals the requestId-deduped value (≈8.44M → 3.46M); exactly one `is_response_head=1` per `requestId`.
+- **[G2](./G2.md):** `context_window('claude-opus-4-7')==1_000_000`, `('claude-sonnet-4-5-...')==200_000`, `('qwen2.5-coder-7b-instruct')==32_768`, `('<synthetic>')` is `None`; `context_ratio(tokens, window)` returns the raw fraction `tokens/window` ∈ (0,1] for known windows and `None` for an unknown window. No categorical zone labeling exists (dropped per the G2 ADR "Quantitative ratio only").
+- **[G3](./G3.md):** Zero events in subagent/`agent_root` files retain a bare `human`/`user_text` kind; all are `subagent-*`.
+- **[G4](./G4.md):** `tps` is `None` when `response_duration_ms` is 0/NULL, else `output_tokens/(ms/1000)`; never negative.
+- **[G5](./G5.md):** `total_active_ms + total_idle_ms` reconciles to the session wall-clock within tolerance; `too_fast` set only when idle < output/READ_TOKENS_PER_SEC.
+- **[G6](./G6.md):** `/api/performance` and `/api/sessions/{p}/{s}/metrics` return typed payloads honoring `days`/`project`.
+- **[G7](./G7.md):** SessionDetail shows occupancy bar + TPS + idle markers; Performance page renders all charts; subagent filter works via `?msg=`.
+- **[G8](./G8.md):** Backend and introspect script produce byte-identical event rows for a shared fixture and report the **same** `SCHEMA_VERSION` (the current constant, bumped per schema-changing gap — `"15"` after G2).
 
 ## Negative Measures
 
