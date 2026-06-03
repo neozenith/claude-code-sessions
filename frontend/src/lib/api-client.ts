@@ -62,6 +62,178 @@ export interface ProjectScope {
   ancestor_scopes: string[]
 }
 
+// =========================================================================
+// CR5 — Extractive set-union "Claims Explorer" types
+// =========================================================================
+
+/** A single extractive claim with its provenance (CR5).
+ *
+ * `count` is the number of source sessions the claim was extracted from
+ * (its support); `sessions` are those session ids. Lenses rank claims by
+ * `count` descending. */
+export interface Claim {
+  claim: string
+  count: number
+  sessions: string[]
+}
+
+/** The claim lenses for a scope/session (CR5): tasks, patterns, decisions_values,
+ * and learnings (process/skill improvements + failure modes to avoid). */
+export interface ClaimLenses {
+  tasks: Claim[]
+  patterns: Claim[]
+  decisions_values: Claim[]
+  learnings: Claim[]
+}
+
+/** A roll-up of claims for a scope at a grain+bucket (GET /api/claims/scope).
+ *
+ * Discriminated on `status`: `not_summarised` carries no lenses/provenance,
+ * so the explorer renders an empty state. */
+export type ClaimRollup =
+  | {
+      status: 'summarised'
+      scope_path: string
+      grain: string
+      bucket: string
+      model: string
+      lenses: ClaimLenses
+      failure_count: number
+      failed_sessions: string[]
+    }
+  | { status: 'not_summarised' }
+
+/** One bucket option for a scope/grain (GET /api/claims/buckets). */
+export interface ClaimBucket {
+  bucket: string
+  n_claims: number
+  total_count: number
+}
+
+/** A session's extracted claims under a model (GET /api/claims/session/...).
+ *
+ * The session lenses are flat string arrays (the raw extracted claims, no
+ * counts — counts only exist after set-union roll-up). `failure` is null on
+ * success or carries the extraction failure reason + raw excerpt. */
+export interface SessionClaims {
+  project_id: string
+  session_id: string
+  model: string
+  lenses: {
+    tasks: string[]
+    patterns: string[]
+    decisions_values: string[]
+    learnings: string[]
+  }
+  failure: { reason: string; raw_excerpt: string } | null
+}
+
+/** One roll-up a session is a member of (GET /api/claims/session/.../memberships). */
+export interface RollupMembership {
+  scope_path: string
+  scope_depth: number
+  grain: string
+  bucket: string
+  n_claims: number
+}
+
+/** Per-project claim-extraction coverage row (GET /api/claims/coverage). */
+export interface CoverageProject {
+  project_id: string
+  scope_path: string | null
+  domain: string
+  total: number
+  summarised: number
+  failed: number
+  pending: number
+  pct_complete: number
+}
+
+/** Claim-extraction coverage across all projects (GET /api/claims/coverage). */
+export interface Coverage {
+  model: string
+  overall: {
+    total: number
+    summarised: number
+    failed: number
+    pending: number
+    pct_complete: number
+  }
+  projects: CoverageProject[]
+}
+
+/** One model row from GET /api/claims/models/detail.
+ *
+ * Lists ALL panel models, not just those with extracted claims —
+ * `has_claims:false` rows are still selectable (the explorer shows the
+ * not_summarised empty state when a no-data model is picked). */
+export interface ClaimModelDetail {
+  model: string
+  has_claims: boolean
+}
+
+/** One cell of the coverage pivot (GET /api/claims/coverage-pivot).
+ *
+ * A (scope_path × bucket) intersection with its session/claim/failure counts
+ * and a tri-state `status` rolling those up to done / failed / pending. */
+export interface CoverageCell {
+  scope_path: string
+  bucket: string
+  sessions: number
+  claims: number
+  failures: number
+  status: 'done' | 'failed' | 'pending'
+}
+
+/** The done-vs-pending coverage pivot for a model+grain (GET /api/claims/coverage-pivot).
+ *
+ * `scopes` (y-axis) and `buckets` (x-axis) are the axis label arrays; `cells`
+ * is the sparse list of intersections. Consumers densify into a z-matrix. */
+export interface CoveragePivot {
+  model: string
+  grain: string
+  scopes: string[]
+  buckets: string[]
+  cells: CoverageCell[]
+}
+
+/** Reindex worker state (POST /api/claims/reindex, GET /api/claims/reindex/status).
+ *
+ * A single-flight extractive reindex over one scope slice. `state` drives the
+ * polling loop: the client polls /status while `running`, stops on
+ * `done`/`error`/`idle`. */
+export interface ReindexStatus {
+  state: 'idle' | 'running' | 'done' | 'error'
+  scope_path: string
+  grain: string
+  model: string
+  sessions_total: number
+  sessions_done: number
+  failures: number
+  rollups_written: number
+  message: string
+  error: string | null
+}
+
+/** POST /api/claims/reindex response — the accepted/rejected start signal.
+ *
+ * `already_running` is true when a reindex was in flight and this request was
+ * a no-op (single-flight). Carries the same status fields so the caller can
+ * seed its polling loop immediately. */
+export interface ReindexStart {
+  state: ReindexStatus['state']
+  already_running: boolean
+  scope_path?: string
+  grain?: string
+  model?: string
+  sessions_total?: number
+  sessions_done?: number
+  failures?: number
+  rollups_written?: number
+  message?: string
+  error?: string | null
+}
+
 /**
  * Creates an ApiError from a failed Response
  */
@@ -274,29 +446,18 @@ export class ApiClient {
     return this.get('/performance', params)
   }
 
-  /** The roll-up summary for a scope at a grain+bucket (G7). */
-  async getScopeSummary(params: {
-    path: string
-    grain?: string
-    bucket?: string
-    strategy?: string
-    model?: string
-    days?: number
-    project?: string
-  }): Promise<ApiResult<SummaryResponse>> {
-    return this.get('/summaries/scope', params)
-  }
-
-  /** Immediate child scopes of a scope_path (next trie level) (G7). */
+  /** Immediate child scopes of a scope_path (next trie level) — the explorer
+   * breadcrumb drill-down (CR5; consolidated under /claims with the /summaries page). */
   async listScopeChildren(params: {
     path: string
     days?: number
     project?: string
   }): Promise<ApiResult<ScopeChild[]>> {
-    return this.get('/summaries/scope/children', params)
+    return this.get('/claims/scope/children', params)
   }
 
-  /** The 3-lens summary for a session under a model (G7). */
+  /** The 3-lens abstractive summary for a session under a model (retained for the
+   * SessionDetail comparison card; the abstractive scope explorer was retired). */
   async getSessionSummary(
     projectId: string,
     sessionId: string,
@@ -313,9 +474,10 @@ export class ApiClient {
     return this.get('/summaries/variants')
   }
 
-  /** A project's resolved scope_path + ancestor chain, for the lineage breadcrumb (G9). */
+  /** A project's resolved scope_path + ancestor chain — hard-pins the explorer scope
+   * to the global Project filter, and drives the SessionDetail lineage breadcrumb. */
   async getProjectScope(projectId: string): Promise<ApiResult<ProjectScope>> {
-    return this.get('/summaries/scope/of-project', { project_id: projectId })
+    return this.get('/claims/scope/of-project', { project_id: projectId })
   }
 
   /** Per-turn idle/active/tps/too_fast + a session summary. */
@@ -405,6 +567,123 @@ export class ApiClient {
    */
   async getKgCacheStats(): Promise<ApiResult<KGCacheStats>> {
     return this.get('/kg/cache-stats')
+  }
+
+  // =========================================================================
+  // CR5 — Claims Explorer endpoints
+  // =========================================================================
+
+  /** Distinct models present in the extractive claims table (CR5). */
+  async listClaimModels(): Promise<ApiResult<string[]>> {
+    return this.get('/claims/models')
+  }
+
+  /** Bucket options for a scope at a grain, within the last-N-`days` window (CR5). */
+  async getClaimBuckets(params: {
+    path: string
+    grain?: string
+    model?: string
+    days?: number
+  }): Promise<ApiResult<ClaimBucket[]>> {
+    return this.get('/claims/buckets', params)
+  }
+
+  /** The set-union claim roll-up for a scope at a grain (CR5). Empty `bucket` =
+   * all claims unioned across the last-N-`days` window; a set `bucket` drills down. */
+  async getClaimRollup(params: {
+    path: string
+    grain?: string
+    bucket?: string
+    model?: string
+    days?: number
+  }): Promise<ApiResult<ClaimRollup>> {
+    return this.get('/claims/scope', params)
+  }
+
+  /** A single session's extracted claims under a model (CR5). */
+  async getSessionClaims(
+    projectId: string,
+    sessionId: string,
+    params: { model?: string },
+  ): Promise<ApiResult<SessionClaims>> {
+    return this.get(
+      `/claims/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}`,
+      params,
+    )
+  }
+
+  /** The roll-ups a session is a member of, for the SessionDetail back-link (CR5). */
+  async getSessionMemberships(
+    projectId: string,
+    sessionId: string,
+    params: { model?: string },
+  ): Promise<ApiResult<RollupMembership[]>> {
+    return this.get(
+      `/claims/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/memberships`,
+      params,
+    )
+  }
+
+  /** Claim-extraction coverage (overall + per-project) for a model, scoped + windowed
+   * to the last N `days` (CR5). */
+  async getClaimsCoverage(params?: {
+    model?: string
+    scope?: string
+    days?: number
+  }): Promise<ApiResult<Coverage>> {
+    return this.get('/claims/coverage', params)
+  }
+
+  /** All panel models with a `has_claims` flag (CR5). Unlike `listClaimModels`,
+   * this includes models that have no extracted claims yet, so the selector can
+   * label and still offer them. */
+  async listClaimModelsDetail(): Promise<ApiResult<ClaimModelDetail[]>> {
+    return this.get('/claims/models/detail')
+  }
+
+  /** The done-vs-pending coverage pivot (scopes × buckets) for a model+grain,
+   * restricted to the subtree of `scope` and the last-N-`days` columns (CR5). */
+  async getClaimsCoveragePivot(params: {
+    model?: string
+    grain?: string
+    scope?: string
+    days?: number
+  }): Promise<ApiResult<CoveragePivot>> {
+    return this.get('/claims/coverage-pivot', params)
+  }
+
+  /** Kick off an extractive reindex of one scope slice (single-flight) (CR5). */
+  async startClaimsReindex(params: {
+    path: string
+    grain: string
+    model: string
+    limit?: number
+  }): Promise<ApiResult<ReindexStart>> {
+    const query: Record<string, string | number | undefined> = {
+      path: params.path,
+      grain: params.grain,
+      model: params.model,
+      limit: params.limit ?? 25,
+    }
+    return this.post(`/claims/reindex${this.queryString(query)}`)
+  }
+
+  /** Live status of the reindex worker, for the polling loop (CR5). */
+  async getClaimsReindexStatus(): Promise<ApiResult<ReindexStatus>> {
+    return this.get('/claims/reindex/status')
+  }
+
+  /** Encode a query object as a leading-`?` string (reused by POST endpoints
+   * that carry their params in the query string, not the body). */
+  private queryString(params: Record<string, string | number | undefined>): string {
+    const search = new URLSearchParams()
+    Object.entries(params).forEach(([key, value]) => {
+      if (value !== undefined && value !== null && value !== '') {
+        search.set(key, String(value))
+      }
+    })
+    const qs = search.toString()
+    return qs ? `?${qs}` : ''
   }
 }
 

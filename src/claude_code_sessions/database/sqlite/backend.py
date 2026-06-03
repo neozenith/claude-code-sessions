@@ -7,6 +7,7 @@ JSONL session files and serves queries from pre-computed aggregates.
 
 from __future__ import annotations
 
+import json
 import statistics
 from datetime import UTC, datetime
 from pathlib import Path
@@ -44,6 +45,8 @@ from claude_code_sessions.database.sqlite.pricing import (
     TOO_FAST_MIN_TOKENS,
 )
 from claude_code_sessions.database.sqlite.schema import CACHE_DB_PATH
+from claude_code_sessions.database.sqlite.summary_json import LENS_LIST_KEYS
+from claude_code_sessions.database.sqlite.time_buckets import bucket_expr as _bucket_expr
 from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes, scope_path_of
 
 
@@ -678,6 +681,395 @@ class SQLiteDatabase:
             "SELECT DISTINCT strategy, model FROM rollup_summaries ORDER BY strategy, model"
         )
         return [{"strategy": r["strategy"], "model": r["model"]} for r in rows]
+
+    # -- Extractive set-union claims (CR5) -----------------------------------
+
+    def list_claim_models(self) -> list[str]:
+        """Distinct models that have extractive claim roll-ups (CR5 explorer picker)."""
+        if not self._table_exists("rollup_claims"):
+            return []
+        rows = self._q("SELECT DISTINCT model FROM rollup_claims ORDER BY model")
+        return [r["model"] for r in rows]
+
+    def _window_cutoff_bucket(self, grain: str, days: int | None) -> str | None:
+        """The earliest ``time_bucket`` (inclusive) that intersects the last-N-days
+        window, truncated to ``grain`` so a coarse bucket whose period overlaps the
+        window is kept whole (matches the app-wide grain⊥days convention). ``None``
+        when no window (days ``0``/``None`` = All time)."""
+        if not days or days <= 0:
+            return None
+        expr = _bucket_expr(grain, f"datetime('now','-{int(days)} days')")
+        row = self._cache.conn.execute(f"SELECT {expr}").fetchone()  # noqa: S608 — int-only
+        return str(row[0]) if row and row[0] is not None else None
+
+    def list_claim_buckets(
+        self, scope_path: str, grain: str, model: str, days: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Time buckets present for a scope×grain×model, with claim + failure counts —
+        the explorer's bucket selector for one scope (CR5). ``days`` restricts to
+        buckets intersecting the last-N-days window."""
+        if not self._table_exists("rollup_claims"):
+            return []
+        cutoff = self._window_cutoff_bucket(grain, days)
+        window = " AND time_bucket >= ?" if cutoff else ""
+        params: list[Any] = [scope_path, grain, model]
+        if cutoff:
+            params.append(cutoff)
+        rows = self._q(
+            f"""SELECT time_bucket AS bucket, COUNT(*) AS n_claims, SUM(count) AS total_count
+               FROM rollup_claims
+               WHERE scope_path=? AND time_granularity=? AND model=?{window}
+               GROUP BY time_bucket ORDER BY time_bucket DESC""",
+            tuple(params),
+        )
+        return rows
+
+    @staticmethod
+    def _aggregate_claim_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
+        """Set-union claim rows across buckets: group by (lens, normalised claim),
+        union provenance sessions, COUNT = distinct sessions (a session lives in one
+        bucket, so the union is exact). Ranked by count desc within each lens."""
+        # key = (lens, casefolded claim) — mirrors the exact stage of dedup_claims.
+        agg: dict[tuple[str, str], dict[str, Any]] = {}
+        for r in rows:
+            key = (r["lens"], r["claim"].strip().casefold())
+            sessions = json.loads(r["source_session_ids"])
+            slot = agg.get(key)
+            if slot is None:
+                agg[key] = {"lens": r["lens"], "claim": r["claim"],
+                            "count": int(r["count"]), "sessions": set(sessions)}
+            else:
+                # Keep the text of the higher-count variant as the representative.
+                if int(r["count"]) > slot["count"]:
+                    slot["claim"] = r["claim"]
+                slot["sessions"].update(sessions)
+        lenses: dict[str, list[dict[str, Any]]] = {k: [] for k in LENS_LIST_KEYS}
+        for slot in agg.values():
+            sessions = sorted(slot["sessions"])
+            lenses.setdefault(slot["lens"], []).append(
+                {"claim": slot["claim"], "count": len(sessions), "sessions": sessions}
+            )
+        for items in lenses.values():
+            items.sort(key=lambda c: (-c["count"], c["claim"]))
+        return lenses
+
+    def get_claim_rollup(
+        self, scope_path: str, grain: str, bucket: str, model: str, days: int | None = None
+    ) -> dict[str, Any]:
+        """The extractive roll-up for a scope×grain: each lens's claims ranked by COUNT
+        (salience) with provenance, plus the parallel failure count (CR5).
+
+        ``bucket`` empty = **all claims at this grain**, set-unioned across every bucket
+        intersecting the last-``days``-days window (the default explorer view). A specific
+        ``bucket`` is a deliberate drill-down and wins over the window. Returns
+        ``status='not_summarised'`` when nothing is present (never fabricates)."""
+        if not self._table_exists("rollup_claims"):
+            return {"status": "not_summarised", "scope_path": scope_path, "grain": grain,
+                    "bucket": bucket, "model": model, "lenses": {}, "failure_count": 0,
+                    "failed_sessions": []}
+        if bucket:
+            # Drill-down: one exact bucket (the window does not apply).
+            bucket_clause, bparams = "AND time_bucket=?", [bucket]
+        else:
+            cutoff = self._window_cutoff_bucket(grain, days)
+            bucket_clause = "AND time_bucket >= ?" if cutoff else ""
+            bparams = [cutoff] if cutoff else []
+        rows = self._q(
+            f"""SELECT lens, claim_index, claim, count, source_session_ids
+               FROM rollup_claims
+               WHERE scope_path=? AND time_granularity=? AND model=? {bucket_clause}
+               ORDER BY lens, claim_index""",
+            (scope_path, grain, model, *bparams),
+        )
+        if bucket:
+            lenses: dict[str, list[dict[str, Any]]] = {k: [] for k in LENS_LIST_KEYS}
+            for r in rows:
+                lenses.setdefault(r["lens"], []).append(
+                    {"claim": r["claim"], "count": r["count"],
+                     "sessions": json.loads(r["source_session_ids"])}
+                )
+        else:
+            lenses = self._aggregate_claim_rows(rows)
+        failure_count = 0
+        failed: set[str] = set()
+        if self._table_exists("rollup_claim_failures"):
+            for frow in self._cache.conn.execute(
+                f"""SELECT failure_count, source_session_ids FROM rollup_claim_failures
+                   WHERE scope_path=? AND time_granularity=? AND model=? {bucket_clause}""",
+                (scope_path, grain, model, *bparams),
+            ).fetchall():
+                failed.update(json.loads(frow[1]))
+            failure_count = len(failed)
+        failed_sessions = sorted(failed)
+        status = "summarised" if rows or failure_count else "not_summarised"
+        return {
+            "status": status, "scope_path": scope_path, "grain": grain, "bucket": bucket,
+            "model": model, "lenses": lenses,
+            "failure_count": failure_count, "failed_sessions": failed_sessions,
+        }
+
+    def get_session_claims(
+        self, project_id: str, session_id: str, model: str
+    ) -> dict[str, Any]:
+        """One session's L1 extracted claims per lens, or its recorded failure (CR5)."""
+        out: dict[str, Any] = {
+            "project_id": project_id, "session_id": session_id, "model": model,
+            "lenses": {k: [] for k in LENS_LIST_KEYS},
+            "failure": None,
+        }
+        if self._table_exists("session_claims"):
+            for r in self._q(
+                """SELECT lens, claim FROM session_claims
+                   WHERE project_id=? AND session_id=? AND model=? ORDER BY lens, claim_index""",
+                (project_id, session_id, model),
+            ):
+                out["lenses"].setdefault(r["lens"], []).append(r["claim"])
+        if self._table_exists("session_claim_failures"):
+            frow = self._cache.conn.execute(
+                """SELECT reason, raw_excerpt FROM session_claim_failures
+                   WHERE project_id=? AND session_id=? AND model=?""",
+                (project_id, session_id, model),
+            ).fetchone()
+            if frow is not None:
+                out["failure"] = {"reason": frow[0], "raw_excerpt": frow[1]}
+        return out
+
+    def get_session_rollup_memberships(
+        self, project_id: str, session_id: str, model: str
+    ) -> list[dict[str, Any]]:
+        """Reverse provenance: which roll-up buckets this session contributes to —
+        the SessionDetail cross-reference (CR5). Uses json_each over source_session_ids."""
+        if not self._table_exists("rollup_claims"):
+            return []
+        return self._q(
+            """SELECT scope_path, scope_depth, time_granularity AS grain, time_bucket AS bucket,
+                      COUNT(*) AS n_claims
+               FROM rollup_claims rc, json_each(rc.source_session_ids)
+               WHERE rc.model=? AND json_each.value=?
+               GROUP BY scope_path, time_granularity, time_bucket
+               ORDER BY scope_depth, scope_path, grain, bucket""",
+            (model, session_id),
+        )
+
+    def get_summarisation_coverage(
+        self, model: str, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Cache-summarisation completeness per project: sessions {summarised, failed,
+        pending} vs total-with-human-prompts (CR5 coverage panel).
+
+        ``scope`` restricts to projects under that scope_path prefix — driven by the
+        explorer's current scope (the page-level filter), so the table reflects the
+        slice being viewed rather than a redundant table-local control. ``None``/``''``
+        (root) = all projects. ``days`` windows completeness to sessions whose activity
+        falls in the last N days (the global Last-N-days filter)."""
+        # In-window sessions = those whose human-prompt activity is within the window.
+        # session_claims/failures carry no timestamp, so membership is resolved via the
+        # events table and applied as an IN-subquery to the done/failed counts.
+        dc = days_clause(days, col="timestamp")
+        in_window = (
+            f"""AND session_id IN (SELECT session_id FROM events
+                   WHERE msg_kind='human' AND session_id IS NOT NULL {dc})"""
+            if dc
+            else ""
+        )
+        totals = {
+            r["project_id"]: r["n"]
+            for r in self._q(
+                f"""SELECT project_id, COUNT(DISTINCT session_id) AS n FROM events
+                   WHERE msg_kind='human' AND session_id IS NOT NULL {dc} GROUP BY project_id"""
+            )
+        }
+        done = (
+            {
+                r["project_id"]: r["n"]
+                for r in self._q(
+                    f"""SELECT project_id, COUNT(DISTINCT session_id) AS n FROM session_claims
+                       WHERE model=? {in_window} GROUP BY project_id""",
+                    (model,),
+                )
+            }
+            if self._table_exists("session_claims")
+            else {}
+        )
+        failed = (
+            {
+                r["project_id"]: r["n"]
+                for r in self._q(
+                    f"""SELECT project_id, COUNT(DISTINCT session_id) AS n
+                       FROM session_claim_failures WHERE model=? {in_window} GROUP BY project_id""",
+                    (model,),
+                )
+            }
+            if self._table_exists("session_claim_failures")
+            else {}
+        )
+        try:
+            resolver: ProjectResolver | None = ProjectResolver(self.projects_path)
+        except (FileNotFoundError, ValueError):
+            resolver = None
+
+        def _scope_chain(pid: str) -> tuple[str | None, str, list[str]]:
+            """Resolved scope_path, its top-level domain segment, and the full ancestor
+            chain (for the page-scope filter). Unresolvable → (None, '(unresolved)', [])."""
+            if resolver is None:
+                return None, "(unresolved)", []
+            try:
+                sp = scope_path_of(resolver, pid)
+                chain = ancestor_scopes(resolver, pid)
+            except (KeyError, ValueError):
+                return None, "(unresolved)", []
+            domain = sp.split("/", 1)[0] if sp else "(root)"
+            return sp, domain, chain
+
+        scope_filter = scope or ""  # '' (root) matches every project
+        rows: list[dict[str, Any]] = []
+        for pid, total in sorted(totals.items()):
+            sp, domain, chain = _scope_chain(pid)
+            if scope_filter and scope_filter not in chain:
+                continue  # outside the explorer's current scope slice
+            d, f = done.get(pid, 0), failed.get(pid, 0)
+            pending = max(0, total - d - f)
+            rows.append(
+                {
+                    "project_id": pid, "scope_path": sp, "domain": domain,
+                    "total": total, "summarised": d, "failed": f,
+                    "pending": pending, "pct_complete": round(100 * d / total, 1) if total else 0.0,
+                }
+            )
+        agg: dict[str, Any] = {
+            "total": sum(r["total"] for r in rows),
+            "summarised": sum(r["summarised"] for r in rows),
+            "failed": sum(r["failed"] for r in rows),
+            "pending": sum(r["pending"] for r in rows),
+        }
+        agg["pct_complete"] = (
+            round(100 * agg["summarised"] / agg["total"], 1) if agg["total"] else 0.0
+        )
+        return {"model": model, "overall": agg, "projects": rows}
+
+    def list_summary_buckets(
+        self, scope_path: str, grain: str, strategy: str | None = None, model: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Time buckets present in the abstractive ``rollup_summaries`` for a
+        scope×grain (+ optional strategy/model) — the /summaries bucket selector,
+        whose absence left that page defaulting to an empty bucket (no data)."""
+        if not self._table_exists("rollup_summaries"):
+            return []
+        sql = ["SELECT DISTINCT time_bucket AS bucket FROM rollup_summaries",
+               "WHERE scope_path=? AND time_granularity=?"]
+        params: list[Any] = [scope_path, grain]
+        if strategy:
+            sql.append("AND strategy=?")
+            params.append(strategy)
+        if model:
+            sql.append("AND model=?")
+            params.append(model)
+        sql.append("ORDER BY time_bucket DESC")
+        return self._q(" ".join(sql), tuple(params))
+
+    def list_claim_models_detail(self) -> list[dict[str, Any]]:
+        """Models offerable in the claims explorer: those WITH roll-up data plus the
+        on-disk chat-model registry (so Llama-3.1-8B etc. are selectable to trigger).
+        ``has_claims`` flags which already have extracted data (CR5)."""
+        have = (
+            [r["model"] for r in self._q("SELECT DISTINCT model FROM rollup_claims ORDER BY model")]
+            if self._table_exists("rollup_claims")
+            else []
+        )
+        registry: list[str] = []
+        try:  # lazy — avoid importing the heavy summariser module at server import time
+            from claude_code_sessions.summarise_cli import MODEL_REGISTRY, gguf_path
+
+            registry = [m for m in MODEL_REGISTRY if gguf_path(m) is not None]
+        except Exception:  # noqa: BLE001 — registry is best-effort; data models still listed
+            registry = []
+        have_set = set(have)
+        ordered = list(dict.fromkeys([*have, *registry]))
+        return [{"model": m, "has_claims": m in have_set} for m in ordered]
+
+    def get_claims_coverage_pivot(
+        self, model: str, grain: str, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Done-vs-pending pivot for the heatmap: every (scope × time-bucket) that has
+        sessions, marked done (claims committed) / failed / pending, at one grain (CR5).
+
+        Rows = scopes (depth-sorted), cols = buckets; each cell carries session/claim/
+        failure counts and a status, so the UI can render the hierarchy sliced by grain.
+        ``scope`` restricts to the subtree rooted at that scope_path (the explorer's
+        page-level filter); ``None``/``''`` (root) = the whole trie. ``days`` restricts
+        the bucket columns to those intersecting the last-N-days window."""
+        scope_filter = scope or ""
+        cutoff = self._window_cutoff_bucket(grain, days)
+
+        def _in_subtree(sc: str) -> bool:
+            return not scope_filter or sc == scope_filter or sc.startswith(scope_filter + "/")
+
+        bucket_sql = _bucket_expr(grain, "MIN(e.timestamp)")
+        sess = self._q(
+            f"""SELECT project_id AS pid, session_id AS sid, {bucket_sql} AS bucket
+                FROM events e WHERE msg_kind='human' AND session_id IS NOT NULL
+                  AND timestamp IS NOT NULL
+                GROUP BY project_id, session_id"""
+        )
+        try:
+            resolver = ProjectResolver(self.projects_path)
+        except (FileNotFoundError, ValueError):
+            return {"model": model, "grain": grain, "scopes": [], "buckets": [], "cells": []}
+        expected: dict[tuple[str, str], int] = {}
+        scopes_seen: dict[str, int] = {}
+        buckets_seen: set[str] = set()
+        for r in sess:
+            try:
+                chain = ancestor_scopes(resolver, r["pid"])
+            except KeyError:
+                continue
+            bucket = str(r["bucket"])
+            if cutoff and bucket < cutoff:
+                continue  # outside the last-N-days window
+            for sc in chain:
+                if not _in_subtree(sc):
+                    continue  # outside the explorer's current scope subtree
+                expected[(sc, bucket)] = expected.get((sc, bucket), 0) + 1
+                scopes_seen[sc] = sc.count("/") + 1 if sc else 0
+                buckets_seen.add(bucket)
+        done = (
+            {
+                (r["scope_path"], r["bucket"]): r["n"]
+                for r in self._q(
+                    """SELECT scope_path, time_bucket AS bucket, COUNT(*) AS n FROM rollup_claims
+                       WHERE model=? AND time_granularity=? GROUP BY scope_path, time_bucket""",
+                    (model, grain),
+                )
+            }
+            if self._table_exists("rollup_claims")
+            else {}
+        )
+        failed = (
+            {
+                (r["scope_path"], r["bucket"]): r["n"]
+                for r in self._q(
+                    """SELECT scope_path, time_bucket AS bucket, failure_count AS n
+                       FROM rollup_claim_failures WHERE model=? AND time_granularity=?""",
+                    (model, grain),
+                )
+            }
+            if self._table_exists("rollup_claim_failures")
+            else {}
+        )
+        cells: list[dict[str, Any]] = []
+        for (scope, bucket), n_sessions in expected.items():
+            claims = done.get((scope, bucket), 0)
+            fails = failed.get((scope, bucket), 0)
+            status = "done" if claims else ("failed" if fails else "pending")
+            cells.append(
+                {"scope_path": scope, "bucket": bucket, "sessions": n_sessions,
+                 "claims": claims, "failures": fails, "status": status}
+            )
+        scopes = sorted(scopes_seen, key=lambda s: (scopes_seen[s], s))
+        return {
+            "model": model, "grain": grain,
+            "scopes": scopes, "buckets": sorted(buckets_seen), "cells": cells,
+        }
 
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.

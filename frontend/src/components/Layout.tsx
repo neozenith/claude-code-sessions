@@ -19,7 +19,7 @@ import {
   Search as SearchIcon,
   Network,
   Database,
-  BookOpen,
+  ListChecks,
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { useFilters, TIME_RANGE_OPTIONS } from '@/hooks/useFilters'
@@ -47,7 +47,7 @@ const navItems = [
   { path: '/monthly', label: 'Monthly', icon: CalendarRange },
   { path: '/sessions', label: 'Sessions', icon: History },
   { path: '/performance', label: 'Performance', icon: Gauge },
-  { path: '/summaries', label: 'Summaries', icon: BookOpen },
+  { path: '/claims', label: 'Claims', icon: ListChecks },
   { path: '/timeline', label: 'Timeline', icon: Activity },
   { path: '/schema-timeline', label: 'Schema Timeline', icon: GitBranch },
   { path: '/kg', label: 'Knowledge Graph', icon: Network },

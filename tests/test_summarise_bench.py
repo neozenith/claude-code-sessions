@@ -121,8 +121,13 @@ def test_run_permutation_is_source_grounded(tmp_path: Path) -> None:
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
-        conn, "gemma-4-E2B", "strict", "day", resolver=resolver,
-        session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
+        conn,
+        "gemma-4-E2B",
+        "strict",
+        "day",
+        resolver=resolver,
+        session_keys=[(DOGFOOD_PID, "s1")],
+        embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["permutation_id"] == "gemma-4-E2B__strict__day"
@@ -134,9 +139,56 @@ def test_run_permutation_is_source_grounded(tmp_path: Path) -> None:
     assert record["n_rollups_scored"] >= 1  # leaf + ancestor scopes scored for real
     assert record["rollup_bleu"] > 0
     # The session summary was actually written for this model.
-    assert conn.execute(
-        "SELECT COUNT(*) FROM session_summaries WHERE model = 'gemma-4-E2B'"
-    ).fetchone()[0] == 1
+    assert (
+        conn.execute(
+            "SELECT COUNT(*) FROM session_summaries WHERE model = 'gemma-4-E2B'"
+        ).fetchone()[0]
+        == 1
+    )
+
+
+def _add_human_event(conn: sqlite3.Connection, pid: str, sid: str, text: str, line: int) -> None:
+    """Append one more real human event to an already-seeded session."""
+    sf = conn.execute(
+        "SELECT id FROM source_files WHERE project_id = ? AND session_id = ?", (pid, sid)
+    ).fetchone()[0]
+    conn.execute(
+        """INSERT INTO events
+               (event_type, msg_kind, message_content, timestamp, session_id, project_id,
+                source_file_id, line_number, raw_json)
+           VALUES ('user', 'human', ?, '2026-01-01T00:02:00Z', ?, ?, ?, ?, '')""",
+        (text, sid, pid, sf, line),
+    )
+    conn.commit()
+
+
+def test_run_permutation_emits_source_corpus_stats(tmp_path: Path) -> None:
+    """The record reports how many sessions/human-events/source-tokens actually fed
+    the summariser — the corpus stats the report surfaces per model."""
+    conn = _cache()
+    _index(tmp_path, DOGFOOD_PID, DOGFOOD_PATH)
+    _seed_session(conn, DOGFOOD_PID, "s1", "build a hierarchical summariser")
+    _add_human_event(conn, DOGFOOD_PID, "s1", "with pluggable mergers and re-grounding", line=2)
+    ok = {"task_summary": "build a summariser", "patterns": "mergers", "decisions_values": "values"}
+    conn.create_function("muninn_chat", -1, lambda *a: json.dumps(ok))
+    resolver = ProjectResolver(tmp_path / "projects")
+
+    record = bench.run_permutation(
+        conn,
+        "gemma-4-E2B",
+        "strict",
+        "day",
+        resolver=resolver,
+        session_keys=[(DOGFOOD_PID, "s1")],
+        embed_cosine=lambda _c, _r: 0.5,
+    )
+
+    assert record["source_sessions"] == 1
+    assert record["source_events_total"] == 2  # both human events folded into the source
+    assert record["source_events_per_session"] == 2.0
+    # "build a hierarchical summariser with pluggable mergers and re-grounding" → >0 word tokens.
+    assert record["source_tokens_total"] > 0
+    assert record["source_tokens_per_session"] == record["source_tokens_total"]
 
 
 def test_run_permutation_records_rollup_failure_as_data(tmp_path: Path) -> None:
@@ -158,8 +210,13 @@ def test_run_permutation_records_rollup_failure_as_data(tmp_path: Path) -> None:
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
-        conn, "gemma-4-E2B", "reground", "day",
-        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
+        conn,
+        "gemma-4-E2B",
+        "reground",
+        "day",
+        resolver=resolver,
+        session_keys=[(DOGFOOD_PID, "s1")],
+        embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["n_sessions_scored"] == 1  # extraction still happened and scored
@@ -178,8 +235,13 @@ def test_run_permutation_records_non_json_extraction_as_data(tmp_path: Path) -> 
     resolver = ProjectResolver(tmp_path / "projects")
 
     record = bench.run_permutation(
-        conn, "Qwen3.5-2B", "strict", "day",
-        resolver=resolver, session_keys=[(DOGFOOD_PID, "s1")], embed_cosine=lambda _c, _r: 0.5,
+        conn,
+        "Qwen3.5-2B",
+        "strict",
+        "day",
+        resolver=resolver,
+        session_keys=[(DOGFOOD_PID, "s1")],
+        embed_cosine=lambda _c, _r: 0.5,
     )
 
     assert record["n_sessions_scored"] == 0  # nothing scorable — extraction failed to parse

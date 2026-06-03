@@ -5,20 +5,28 @@ all files, *then* chunk, *then* embed, *then* run the KG. For a fresh
 build over a multi-GB corpus that meant nothing was queryable until the
 whole pipeline finished — and any failure threw away all progress.
 
-The wave pipeline reshapes that work into bounded batches:
+The wave pipeline runs in **two serial passes** — ingest is fast and must always
+bring the cache up to date first; the embedding/KG work is slow and is drained
+afterwards in bounded waves so it never holds a write lock while ingest is writing:
 
+    # PASS 1 — ingest (fast): get every event into the cache, all waves first.
     while files_remaining and not stop.is_set():
         wave = next_wave(WAVE_SIZE)
         ingest_wave(wave)        # phase 3 — JSON parse + SQL insert
-        sync_chunks(conn)        # phase 5 — only NEW event_ids
-        sync_embeddings(conn)    # phase 6 — only NEW chunks
-        sync_kg_synchronously()  # phase 7 — only NEW chunks/entities
-        log_wave_summary()
+        rebuild_aggregates()     # phase 4
+
+    # PASS 2 — slow downstream, AFTER ingest, in bounded waves:
+    sync_chunks(conn)            # phase 5 — only NEW event_ids
+    sync_embeddings(conn)        # phase 6 — only NEW chunks
+    while pending_ner_chunks():  # phase 7 — NER/RE is capped per run
+        run_kg_pipeline()        #   (dedicated connection; commits per wave)
 
 Each wave commits as it completes, so the dashboard sees data appear
-incrementally and a crash mid-build leaves wave-1..N-1 intact. The
+incrementally and a crash mid-build leaves earlier work intact. The
 sync_* functions are already incremental (they key off per-phase log
-tables) so this works without changes inside them.
+tables) so this works without changes inside them. Serialising ingest
+ahead of KG removes the ingest-write vs KG-write lock contention that
+previously crashed the boot indexer with "database is locked".
 
 Cooperative cancellation: a ``threading.Event`` is checked at every
 wave boundary and once again before each phase inside the wave. The
@@ -150,7 +158,7 @@ class WavePipeline:
             # on a warm cache — coverage would stall permanently. Run them
             # once so the backlog can complete.
             log.info("wave pipeline: no files need ingest — running downstream catch-up")
-            result["chunks_added"] += self._run_downstream_syncs()
+            result["chunks_added"] += self._drain_downstream()
             return result
 
         # Slice the to-do list into waves. The slice is materialised
@@ -163,6 +171,9 @@ class WavePipeline:
         total_waves = len(waves)
         log.info("wave pipeline: %d wave(s) queued", total_waves)
 
+        # ── PASS 1: ingest + aggregate every wave first (fast) ─────────
+        # No downstream work here — get all events into the cache before any
+        # KG write opens, so ingest and KG never contend for the write lock.
         for wave_idx, wave in enumerate(waves, 1):
             if self.stop_event.is_set():
                 log.info(
@@ -173,18 +184,23 @@ class WavePipeline:
                 result["cancelled"] = True
                 break
 
-            wave_summary = self._run_one_wave(wave_idx, total_waves, wave)
+            wave_summary = self._ingest_one_wave(wave_idx, total_waves, wave)
             result["files_processed"] += wave_summary["files_processed"]
             result["events_added"] += wave_summary["events_added"]
-            result["chunks_added"] += wave_summary["chunks_added"]
             result["waves_completed"] += 1
 
             if self.on_wave_done is not None:
                 self.on_wave_done(wave_idx, wave_summary)
 
+        # ── PASS 2: slow downstream (chunk → embed → KG) in bounded waves ──
+        # Runs only after all ingest is committed, so the KG connection's
+        # writes never collide with an ingest write.
+        if not self.stop_event.is_set():
+            result["chunks_added"] += self._drain_downstream()
+
         elapsed = time.monotonic() - t0
         log.info(
-            "wave pipeline: done — %d wave(s), %d files, %d events, %d chunks in %.1f s%s",
+            "wave pipeline: done — %d ingest wave(s), %d files, %d events, %d chunks in %.1f s%s",
             result["waves_completed"],
             result["files_processed"],
             result["events_added"],
@@ -198,13 +214,16 @@ class WavePipeline:
     # Internals
     # ------------------------------------------------------------------
 
-    def _run_one_wave(
+    def _ingest_one_wave(
         self,
         wave_idx: int,
         total: int,
         wave: list[dict[str, Any]],
     ) -> dict[str, int]:
-        log.info("──────── wave %d/%d (%d files) ────────", wave_idx, total, len(wave))
+        """Ingest + aggregate a single wave (phases 3-4 only). The slow downstream
+        phases (chunk/embed/KG) are deferred to :meth:`_drain_downstream` so they run
+        after *all* ingest, never interleaved with it."""
+        log.info("──────── ingest wave %d/%d (%d files) ────────", wave_idx, total, len(wave))
         t_wave = time.monotonic()
 
         # Phase 3: parallel ingest. ParallelIngester forks the file list
@@ -238,79 +257,79 @@ class WavePipeline:
                 if window is not None:
                     self.cache.refresh_aggregates_for_range(window[0], window[1])
 
-        # Phases 5-7 (chunk → embed → KG) are global-incremental and
-        # shared with the warm-cache catch-up path, so they live in one
-        # helper. After phase 3 above, the chunk phase picks up exactly
-        # this wave's new events.
-        chunks_added = self._run_downstream_syncs()
-
         elapsed = time.monotonic() - t_wave
         summary = {
             "files_processed": files_processed,
             "events_added": events_added,
-            "chunks_added": chunks_added,
+            "chunks_added": 0,  # chunking is deferred to the downstream drain
         }
         log.info(
-            "──── wave %d/%d done — %d files, %d events, %d chunks in %.1f s ────",
+            "──── ingest wave %d/%d done — %d files, %d events in %.1f s ────",
             wave_idx,
             total,
             summary["files_processed"],
             summary["events_added"],
-            summary["chunks_added"],
             elapsed,
         )
         return summary
 
-    def _run_downstream_syncs(self) -> int:
-        """Run the global-incremental downstream phases: chunk → embed → KG.
+    @staticmethod
+    def _flag(name: str) -> bool:
+        return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
 
-        Each phase keys off a per-phase log table (events without chunks,
-        chunks without vectors, chunks without NER/RE entries…), so calling
-        them when nothing is pending is cheap — a ``COUNT(*)`` that returns
-        0. Running them unconditionally is what lets a backlog stranded by
-        an interrupted or crashed wave finally drain; see the catch-up call
-        in ``run()``.
+    def _drain_downstream(self) -> int:
+        """Run the slow downstream phases (chunk → embed → KG) AFTER all ingest, in
+        bounded waves.
+
+        chunk + embed are global-incremental and drain in one pass each. KG NER/RE is
+        capped per run (``CLAUDE_SESSIONS_KG_NER_RE_BATCH``), so we call
+        ``run_kg_pipeline`` repeatedly until the NER backlog clears — each call commits
+        and the KG connection's lock is released between waves, so a long build never
+        holds one giant write lock against the request threads. KG runs at least once
+        so a warm-cache catch-up of stranded entity-resolution/community work drains too.
 
         Honours the cancellation event between phases and the same
-        ``CLAUDE_SESSIONS_DISABLE_{EMBEDDINGS,KG}`` test-isolation flags a
-        normal wave does. Returns the number of chunks added this pass.
+        ``CLAUDE_SESSIONS_DISABLE_{EMBEDDINGS,KG}`` test-isolation flags. Returns the
+        number of chunks added this pass (matching the historical return contract).
         """
         if self.stop_event.is_set():
             return 0
 
         chunks_added = sync_chunks(self.cache.conn)
 
-        # Phase 6 (embeddings) — gated inside CacheManager.sync_embeddings
-        # on CLAUDE_SESSIONS_DISABLE_EMBEDDINGS. This is also what loads the
-        # sqlite-muninn extension + embedding model onto the connection.
-        def _flag(name: str) -> bool:
-            return os.environ.get(name, "").strip().lower() in {"1", "true", "yes", "on"}
+        # Phase 6 (embeddings) — gated on CLAUDE_SESSIONS_DISABLE_EMBEDDINGS. This also
+        # loads the sqlite-muninn extension + embedding model onto the connection, which
+        # KG depends on (entity embeddings call muninn_embed(); ER/communities use the
+        # muninn graph modules) — so if embeddings are disabled, KG is skipped too.
+        if self._flag("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS"):
+            log.info("downstream: embeddings disabled — skipping embed + KG (KG depends on them)")
+            return chunks_added
 
-        embeddings_disabled = _flag("CLAUDE_SESSIONS_DISABLE_EMBEDDINGS")
-
-        if not embeddings_disabled and not self.stop_event.is_set():
+        if not self.stop_event.is_set():
             self.cache.sync_embeddings()
 
-        # Phase 7 (KG) depends on the muninn runtime AND embedding model that
-        # sync_embeddings loads — entity embeddings call muninn_embed(), and
-        # community detection / resolution query the muninn ``graph_leiden`` /
-        # ``muninn_extract_er`` modules. So KG CANNOT run without embeddings:
-        # if embeddings are disabled we must skip KG too, otherwise it crashes
-        # with "no such table: graph_leiden". Honour the explicit KG flag as
-        # well. Runs inline so we don't pile up overlapping background runs.
-        if (
-            not embeddings_disabled
-            and not _flag("CLAUDE_SESSIONS_DISABLE_KG")
-            and not self.stop_event.is_set()
-        ):
-            # Runs on a DEDICATED connection (see CacheManager.run_kg_pipeline):
-            # KG issues schema-mutating DDL (DROP temp.entities, rebuild
-            # nodes/edges) that would raise SQLITE_LOCKED if it shared
-            # ``self.cache.conn`` with the request threads polling
-            # /api/kg/cache-stats. Chunks + embeddings were already committed
-            # above, so the separate connection sees them under WAL.
+        if self._flag("CLAUDE_SESSIONS_DISABLE_KG") or self.stop_event.is_set():
+            return chunks_added
+
+        # Phase 7 (KG) in bounded waves. run_kg_pipeline uses a DEDICATED connection
+        # (schema-mutating DDL would raise SQLITE_LOCKED on the shared conn the request
+        # threads read through). Loop until NER/RE has no pending chunks, with a
+        # no-progress guard so a chunk GLiNER can't process never spins forever.
+        prev_pending: int | None = None
+        kg_wave = 0
+        while not self.stop_event.is_set():
+            kg_wave += 1
             self.cache.run_kg_pipeline()
-        elif embeddings_disabled:
-            log.info("downstream: embeddings disabled — skipping embed + KG (KG depends on them)")
+            pending = self.cache.pending_ner_chunks()
+            if pending == 0:
+                break
+            if prev_pending is not None and pending >= prev_pending:
+                log.warning(
+                    "downstream KG drain stalled at %d chunk(s) pending NER/RE — stopping",
+                    pending,
+                )
+                break
+            log.info("downstream KG wave %d done — %d chunk(s) still pending", kg_wave, pending)
+            prev_pending = pending
 
         return chunks_added

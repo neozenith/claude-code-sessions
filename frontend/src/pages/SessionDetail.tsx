@@ -16,6 +16,8 @@ import type {
   SummaryResponse,
   SummaryVariant,
   ProjectScope,
+  RollupMembership,
+  SessionClaims,
 } from '@/lib/api-client'
 import { MSG_KIND_OPTIONS, baseKind, matchesKind } from '@/lib/message-kinds'
 import {
@@ -580,10 +582,44 @@ export default function SessionDetail() {
   const summaryLenses: SummaryLenses | null =
     sessionSummary?.status === 'summarised' ? sessionSummary.lenses : null
 
+  // CR5 — Claims memberships + this session's own extracted claims. The model
+  // is the first available from /api/claims/models (or an explicit ?model=);
+  // until extraction has run the card shows an empty state.
+  const claimsModelParam = new URLSearchParams(location.search).get('model')
+  const { data: claimModels } = useApi<string[]>('/claims/models')
+  const claimsModel = claimsModelParam ?? claimModels?.[0]
+  const membershipsUrl = useMemo(() => {
+    if (!projectId || !sessionId || !claimsModel) return null
+    return (
+      `/claims/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}` +
+      `/memberships?model=${encodeURIComponent(claimsModel)}`
+    )
+  }, [projectId, sessionId, claimsModel])
+  const { data: memberships } = useApi<RollupMembership[]>(membershipsUrl)
+  const sessionClaimsUrl = useMemo(() => {
+    if (!projectId || !sessionId || !claimsModel) return null
+    return (
+      `/claims/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}` +
+      `?model=${encodeURIComponent(claimsModel)}`
+    )
+  }, [projectId, sessionId, claimsModel])
+  const { data: sessionClaims } = useApi<SessionClaims>(sessionClaimsUrl)
+
+  // Build a deep-link from a membership back into the Claims Explorer scope.
+  const membershipLinkTo = (m: RollupMembership): string => {
+    const params = new URLSearchParams()
+    if (m.scope_path) params.set('path', m.scope_path)
+    params.set('grain', m.grain)
+    if (m.bucket) params.set('bucket', m.bucket)
+    if (claimsModel) params.set('model', claimsModel)
+    const qs = params.toString()
+    return `/claims${qs ? `?${qs}` : ''}`
+  }
+
   // Scope lineage (G9/ADR9.2): the session's project scope_path drives a shared
   // ScopeBreadcrumb whose crumbs link UP to the explorer scope summaries.
   const { data: projectScope } = useApi<ProjectScope>(
-    projectId ? `/summaries/scope/of-project?project_id=${encodeURIComponent(projectId)}` : null,
+    projectId ? `/claims/scope/of-project?project_id=${encodeURIComponent(projectId)}` : null,
   )
   const sessionScopePath = projectScope?.scope_path ?? ''
   const breadcrumbLinkTo = (scope: string): string => {
@@ -593,7 +629,7 @@ export default function SessionDetail() {
     if (scope) params.set('path', scope)
     else params.delete('path')
     const qs = params.toString()
-    return `/summaries${qs ? `?${qs}` : ''}`
+    return `/claims${qs ? `?${qs}` : ''}`
   }
   const turnsByUuid = useMemo(() => {
     const map = new Map<string, SessionMetricsTurn>()
@@ -734,6 +770,81 @@ export default function SessionDetail() {
               </p>
             </div>
           ))}
+        </CardContent>
+      </Card>
+
+      {/* Included in these summaries (CR5) — roll-ups this session contributed
+          claims to, each deep-linking back into the Claims Explorer scope. */}
+      <Card data-testid="session-summary-memberships">
+        <CardHeader>
+          <CardTitle className="text-base">Included in these summaries</CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-4">
+          {memberships && memberships.length > 0 ? (
+            <ul className="space-y-1 text-sm">
+              {memberships.map((m) => (
+                <li key={`${m.scope_path}-${m.grain}-${m.bucket}`}>
+                  <Link
+                    data-testid="membership-link"
+                    to={membershipLinkTo(m)}
+                    className="text-blue-600 hover:underline dark:text-blue-400"
+                  >
+                    <span className="font-mono">{m.scope_path || '(root)'}</span>
+                    <span className="mx-1.5 text-muted-foreground">·</span>
+                    {m.grain}
+                    <span className="mx-1.5 text-muted-foreground">·</span>
+                    {m.bucket}
+                    <span className="mx-1.5 text-muted-foreground">·</span>
+                    <span className="text-muted-foreground">{m.n_claims} claims</span>
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          ) : (
+            <p className="text-sm text-muted-foreground">
+              This session is not yet part of any summarised roll-up.
+            </p>
+          )}
+
+          {/* This session's own extracted claims (CR5). */}
+          {sessionClaims && sessionClaims.failure === null ? (
+            <div className="grid gap-4 border-t pt-4 md:grid-cols-2 lg:grid-cols-4">
+              {(
+                [
+                  { label: 'Tasks', key: 'tasks', testid: 'session-claims-tasks' },
+                  { label: 'Patterns', key: 'patterns', testid: 'session-claims-patterns' },
+                  {
+                    label: 'Decisions & Values',
+                    key: 'decisions_values',
+                    testid: 'session-claims-decisions',
+                  },
+                  { label: 'Learnings', key: 'learnings', testid: 'session-claims-learnings' },
+                ] as { label: string; key: keyof SessionClaims['lenses']; testid: string }[]
+              ).map((lens) => (
+                <div key={lens.key} data-testid={lens.testid}>
+                  <p className="text-xs font-semibold uppercase text-muted-foreground">
+                    {lens.label}
+                  </p>
+                  <ul className="mt-1 list-disc space-y-1 pl-4 text-sm">
+                    {sessionClaims.lenses[lens.key].map((claim, i) => (
+                      <li key={i} className="whitespace-pre-wrap">
+                        {claim}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              ))}
+            </div>
+          ) : null}
+
+          {sessionClaims && sessionClaims.failure !== null ? (
+            <p
+              data-testid="session-claims-failure"
+              className="border-t pt-4 text-sm text-rose-600 dark:text-rose-400"
+            >
+              Claim extraction failed: {sessionClaims.failure.reason}
+            </p>
+          ) : null}
         </CardContent>
       </Card>
 

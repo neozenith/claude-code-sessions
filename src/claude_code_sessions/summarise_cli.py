@@ -45,6 +45,9 @@ from claude_code_sessions.database.sqlite.summaries import (
     score_summary,
     summarise_session,
 )
+from claude_code_sessions.database.sqlite.summaries import (
+    _tokenize as _source_tokens,  # canonical tokenizer — keeps source-token counts
+)  # consistent with the compression_ratio denominator (SCORING.md)
 from claude_code_sessions.project_resolver import ProjectResolver, ancestor_scopes
 
 log = logging.getLogger(__name__)
@@ -71,7 +74,10 @@ MODEL_REGISTRY: dict[str, tuple[str, str, float]] = {
     "Qwen3.5-4B": ("Qwen3.5-4B-Q4_K_M.gguf", "qwen", 4.0),
     "Qwen3.5-9B": ("Qwen3.5-9B-Q4_K_M.gguf", "qwen", 9.0),
     "Mistral-7B": ("Mistral-7B-Instruct-v0.3-Q4_K_M.gguf", "mistral", 7.0),
+    "Ministral-3B": ("Ministral-3B-Instruct-Q4_K_M.gguf", "mistral", 3.0),
+    "Ministral-8B": ("Ministral-8B-Instruct-2410-Q4_K_M.gguf", "mistral", 8.0),
     "Llama-3.1-8B": ("Llama-3.1-8B-Instruct-Q4_K_M.gguf", "llama", 8.0),
+    "Phi-4": ("Phi-4-Q4_K_M.gguf", "phi", 14.7),
 }
 
 # The two models the ADR3.2 follow-up runs on (2026-06-01): Qwen3.5-2B (≈2× the
@@ -103,6 +109,13 @@ BENCH_SCOPES: tuple[str, ...] = (
 # Default window in days. The ADR3.2 follow-up overrides with --since 2025-11-01
 # (~7 months) to capture clients/nine's engagement (ended 2026-01-21).
 BENCH_SINCE_DAYS = 7
+
+# Default chat-model context window. Sized from measured prompt-token
+# distributions over the real corpus (scripts/ctx_sizing.py): 64k holds ~99% of
+# session-extraction prompts AND ~99-100% of reground merges across day/week/month,
+# while 128k adds <1% coverage at ~2x the KV-cache RAM. The extension's own default
+# (~16384) silently overflows reground — n_ctx MUST be set explicitly at registration.
+DEFAULT_N_CTX = 65536
 
 
 def _iter_session_keys(
@@ -297,8 +310,10 @@ def bench_session_keys(
     return keys
 
 
-def _session_source_text(conn: sqlite3.Connection, project_id: str, session_id: str) -> str:
-    """A session's real human-prompt text, chronological — the grounding reference."""
+def _session_source(conn: sqlite3.Connection, project_id: str, session_id: str) -> tuple[str, int]:
+    """A session's real human-prompt text (chronological) and the number of human
+    events it folds in — the grounding reference plus the count of source events
+    that actually wound up in the summarisation input."""
     rows = conn.execute(
         """SELECT message_content FROM events
            WHERE project_id = ? AND session_id = ? AND msg_kind = 'human'
@@ -306,7 +321,7 @@ def _session_source_text(conn: sqlite3.Connection, project_id: str, session_id: 
            ORDER BY timestamp, line_number""",
         (project_id, session_id),
     ).fetchall()
-    return "\n".join(str(r[0]) for r in rows)
+    return "\n".join(str(r[0]) for r in rows), len(rows)
 
 
 # Every metric score_summary emits, averaged across a permutation's rows.
@@ -367,9 +382,7 @@ def make_embed_cosine(conn: sqlite3.Connection) -> Callable[[str, str], float]:
 def _mean_scores(scores: list[dict[str, float]]) -> dict[str, float]:
     if not scores:
         return dict.fromkeys(_SCORE_METRICS, 0.0)
-    return {
-        m: round(sum(s.get(m, 0.0) for s in scores) / len(scores), 4) for m in _SCORE_METRICS
-    }
+    return {m: round(sum(s.get(m, 0.0) for s in scores) / len(scores), 4) for m in _SCORE_METRICS}
 
 
 def run_permutation(
@@ -393,15 +406,19 @@ def run_permutation(
         that scope at this grain (screens the strategy's drift up the hierarchy).
     Model-boundary failures (context overflow, non-JSON) are recorded as data."""
     engine = MuninnSummaryEngine(conn)
-    # Per-session real source + ancestor chain (grounding reference + scope map).
+    # Per-session real source + ancestor chain (grounding reference + scope map),
+    # plus the human-event count folded into each session's source.
     sources: dict[tuple[str, str], str] = {}
+    source_events: dict[tuple[str, str], int] = {}
     chains: dict[tuple[str, str], set[str]] = {}
     for pid, sid in session_keys:
         try:
             chains[(pid, sid)] = set(ancestor_scopes(resolver, pid))
         except KeyError:
             continue  # unresolvable project — can't place it in the hierarchy
-        sources[(pid, sid)] = _session_source_text(conn, pid, sid)
+        text, n_events = _session_source(conn, pid, sid)
+        sources[(pid, sid)] = text
+        source_events[(pid, sid)] = n_events
 
     # --- session grounding: each summary vs its own real human prompts ---
     session_scores: list[dict[str, float]] = []
@@ -461,6 +478,16 @@ def run_permutation(
     sess = _mean_scores(session_scores)
     roll = _mean_scores(rollup_scores)
     status = "ok" if rollup_error is None and not errors else "error"
+
+    # Source-corpus stats: across the sessions whose real human text actually fed
+    # the summariser (non-empty source), how many human events and how many source
+    # tokens wound up in the summarisation input. Constant across a model's cells
+    # (session source is grain/strategy-independent), surfaced per the user ask.
+    in_source = [k for k in sources if sources[k].strip()]
+    source_sessions = len(in_source)
+    source_events_total = sum(source_events[k] for k in in_source)
+    source_tokens_total = sum(len(_source_tokens(sources[k])) for k in in_source)
+
     record: dict[str, Any] = {
         "permutation_id": permutation_id(model_id, strategy, grain),
         "model": model_id,
@@ -472,6 +499,15 @@ def run_permutation(
         "rollup_rows": rollup_rows,
         "rollup_error": rollup_error,
         "extract_errors": errors,
+        "source_sessions": source_sessions,
+        "source_events_total": source_events_total,
+        "source_events_per_session": (
+            round(source_events_total / source_sessions, 2) if source_sessions else 0.0
+        ),
+        "source_tokens_total": source_tokens_total,
+        "source_tokens_per_session": (
+            round(source_tokens_total / source_sessions, 1) if source_sessions else 0.0
+        ),
     }
     for metric in _SCORE_METRICS:
         record[f"session_{metric}"] = sess[metric]
@@ -524,13 +560,26 @@ def _help(p: argparse.ArgumentParser):  # type: ignore[no-untyped-def]
     return _print_help
 
 
-def _open_chat_connection(model: str, model_path: Path | None = None) -> sqlite3.Connection:
+def _open_chat_connection(
+    model: str, model_path: Path | None = None, n_ctx: int = DEFAULT_N_CTX
+) -> sqlite3.Connection:
     """Open the cache with ``sqlite-muninn`` loaded and ``model`` registered as a
     chat model, so :class:`MuninnSummaryEngine` can call ``muninn_chat``.
 
     ``model_path`` is the GGUF to register under the name ``model``; when omitted
     it falls back to the KG default chat model (``ensure_chat_model_downloaded``).
-    The benchmark passes the registry-resolved path for a specific model id."""
+    The benchmark passes the registry-resolved path for a specific model id.
+
+    ``n_ctx`` is the context window the GGUF is loaded with. It MUST be passed as
+    the **second argument to ``muninn_chat_model(path, n_ctx)``** — the value is
+    consumed at load time (``llama_chat.c`` ``fn_chat_model``); the table's own
+    ``n_ctx`` column is post-load metadata and does NOT size the context. Without
+    an explicit n_ctx the extension uses a dynamic default of
+    ``max(8K, n_ctx_train / 8)``, which gives a 128K-trained model (Llama-3.1-8B)
+    only 16384 tokens — far too small, silently overflowing reground merges. The
+    default here (:data:`DEFAULT_N_CTX`) was sized from measured prompt-token
+    distributions (see ``scripts/ctx_sizing.py``); it is capped at the model's
+    ``n_ctx_train`` by the extension."""
     conn = sqlite3.connect(str(CACHE_DB_PATH), check_same_thread=False)
     conn.row_factory = sqlite3.Row
     conn.enable_load_extension(True)
@@ -539,8 +588,9 @@ def _open_chat_connection(model: str, model_path: Path | None = None) -> sqlite3
     path = model_path if model_path is not None else ensure_chat_model_downloaded()
     try:
         conn.execute(
-            "INSERT INTO temp.muninn_chat_models(name, model) SELECT ?, muninn_chat_model(?)",
-            (model, str(path)),
+            "INSERT INTO temp.muninn_chat_models(name, model) "
+            "SELECT ?, muninn_chat_model(?, ?)",
+            (model, str(path), n_ctx),
         )
     except sqlite3.OperationalError as exc:
         if "already loaded" not in str(exc).lower():
@@ -647,21 +697,27 @@ def cmd_run(args: argparse.Namespace) -> None:
     model_id, strategy, grain = perm["model"], perm["strategy"], perm["grain"]
     scopes = tuple(args.scope) if args.scope else BENCH_SCOPES
     since = args.since or (datetime.now(UTC) - timedelta(days=args.since_days)).date().isoformat()
-    conn = _open_chat_connection(model_id, gguf_path(model_id))
+    conn = _open_chat_connection(model_id, gguf_path(model_id), n_ctx=args.n_ctx)
     try:
         resolver = ProjectResolver(PROJECTS_PATH)
         session_keys = bench_session_keys(conn, resolver, scopes, since=since)
         if not session_keys:
-            raise SystemExit(
-                f"no sessions under {scopes} since {since} (nothing to summarise)"
-            )
+            raise SystemExit(f"no sessions under {scopes} since {since} (nothing to summarise)")
         log.info(
             "run %s: %d real sessions under %s since %s",
-            args.id, len(session_keys), ", ".join(scopes), since,
+            args.id,
+            len(session_keys),
+            ", ".join(scopes),
+            since,
         )
         t0 = time.monotonic()
         record = run_permutation(
-            conn, model_id, strategy, grain, resolver=resolver, session_keys=session_keys,
+            conn,
+            model_id,
+            strategy,
+            grain,
+            resolver=resolver,
+            session_keys=session_keys,
             embed_cosine=make_embed_cosine(conn),
         )
         record["seconds"] = round(time.monotonic() - t0, 2)
@@ -694,13 +750,17 @@ def cmd_report(args: argparse.Namespace) -> None:
     lines = [
         "# G10 Benchmark Report",
         "",
-        "Scoped real sweep: the four benchmark projects (two `play`, two `work`), last week,",
-        "two fastest models. The model is held constant per table so the **strategies** can be",
+        f"Real source-grounded sweep over the configured corpus: **{len(BENCH_SCOPES)} projects** "
+        f"({', '.join(BENCH_SCOPES)}) across the resolved scope trie, models "
+        f"{', '.join(BENCH_MODELS)}, strategies {', '.join(STRATEGIES)}, grains "
+        f"{', '.join(GRAINS)}. The model is held constant per table so the **strategies** can be",
         "compared head-to-head on source grounding and speed.",
         "",
         "Every score is **source grounding** — the rolled-up summary's ROUGE-L/BLEU/F1 overlap",
         "against the *real* source beneath its scope (the corpus is the reference, no fabricated",
-        "gold). Columns (see [SCORING.md](./summariser-SCORING.md)):",
+        "gold). Each per-model table is preceded by its **source corpus** line (sessions, human",
+        "events folded in, and total source tokens summarised). Columns (see "
+        "[SCORING.md](./summariser-SCORING.md)):",
         "",
         "- **roll r/b/f** — the lexical triple (relative screen).",
         "- **comp** — compression ratio (summary tokens / source tokens); the recall ceiling.",
@@ -733,9 +793,19 @@ def cmd_report(args: argparse.Namespace) -> None:
             key=lambda r: (r.get("strategy", ""), r.get("grain", "")),
         )
         best = _best(rows)
+        # Source corpus is grain/strategy-independent — take the richest cell that
+        # actually fed sessions (errors that scored 0 sessions report 0 source).
+        src = max(rows, key=lambda r: r.get("source_sessions", 0), default=None)
+        lines += ["", f"## {model_id}"]
+        if src and src.get("source_sessions"):
+            lines.append(
+                f"_Source corpus: {src['source_sessions']} sessions · "
+                f"{src['source_events_total']} human events "
+                f"({src['source_events_per_session']}/session) · "
+                f"{src['source_tokens_total']} source tokens "
+                f"({src['source_tokens_per_session']}/session)._"
+            )
         lines += [
-            "",
-            f"## {model_id}",
             "",
             "| strategy | grain | n | roll r/b/f | comp | norm | lead | cos | combined | sec | "
             "status |",
@@ -897,6 +967,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     run_p.add_argument(
         "--since-days", type=int, default=BENCH_SINCE_DAYS, help="Window in days when --since unset"
+    )
+    run_p.add_argument(
+        "--n-ctx",
+        type=int,
+        default=DEFAULT_N_CTX,
+        help=f"Chat-model context window (default {DEFAULT_N_CTX}; see scripts/ctx_sizing.py)",
     )
     run_p.add_argument("--results-dir", type=Path, default=DEFAULT_RESULTS_DIR)
     run_p.set_defaults(func=cmd_run)

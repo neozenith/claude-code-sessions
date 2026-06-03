@@ -147,6 +147,60 @@ class CacheManager:
             self._kg_conn.close()
             self._kg_conn = None
 
+    def close_kg_connection(self) -> None:
+        """Close the dedicated KG connection (if open), rolling back first. Idempotent.
+
+        Called at the end of every ``update()`` so the KG connection's WAL write lock
+        is released before the final metadata commit — and on the failure path so a
+        crashed pipeline never strands that lock. The connection is lazily re-opened
+        (re-loading the GGUF) on the next ``run_kg_pipeline``; reuse within a single
+        run's drain loop still loads it only once."""
+        conn, self._kg_conn = self._kg_conn, None
+        if conn is None:
+            return
+        try:
+            conn.rollback()
+        except Exception:  # noqa: BLE001 — best-effort lock release, never raise
+            log.debug("KG connection rollback on close failed", exc_info=True)
+        try:
+            conn.close()
+        except Exception:  # noqa: BLE001
+            log.debug("KG connection close failed", exc_info=True)
+
+    def abort_pending_writes(self) -> None:
+        """Release locks stranded by a failed/cancelled pipeline run.
+
+        Rolls back any open write transaction on the **shared** connection (kept open,
+        since request threads read through it) and closes the KG connection. Best-effort
+        and never raises — it runs on the indexer's failure path, where a leaked write
+        lock would otherwise wedge every subsequent writer (the boot-race symptom)."""
+        try:
+            self.conn.rollback()
+        except Exception:  # noqa: BLE001 — best-effort; the failure is already recorded
+            log.warning("rollback of shared cache connection failed", exc_info=True)
+        self.close_kg_connection()
+
+    def pending_ner_chunks(self) -> int:
+        """Count chunks not yet processed by the KG NER/RE phase — the progress signal
+        the downstream drain loops on (each KG pass clears up to a per-run cap)."""
+        if not self._table_exists("event_message_chunks"):
+            return 0
+        if not self._table_exists("ner_chunks_log"):
+            # KG schema not created yet → every chunk is still pending.
+            row = self.conn.execute("SELECT COUNT(*) FROM event_message_chunks").fetchone()
+            return int(row[0]) if row else 0
+        row = self.conn.execute(
+            """SELECT COUNT(*) FROM event_message_chunks
+               WHERE chunk_id NOT IN (SELECT chunk_id FROM ner_chunks_log)"""
+        ).fetchone()
+        return int(row[0]) if row else 0
+
+    def _table_exists(self, name: str) -> bool:
+        row = self.conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type IN ('table','view') AND name=?", (name,)
+        ).fetchone()
+        return row is not None
+
     # ------------------------------------------------------------------
     # Cooperative cancellation
     # ------------------------------------------------------------------
@@ -1091,7 +1145,13 @@ class CacheManager:
         self.reset_stop()
 
         pipeline = WavePipeline(self)
-        wave_result = pipeline.run(projects_path)
+        try:
+            wave_result = pipeline.run(projects_path)
+        finally:
+            # Release the KG connection's WAL write lock before the shared
+            # connection's final metadata commit — otherwise a lingering KG
+            # connection blocks it with "database is locked" (the crash we hit).
+            self.close_kg_connection()
 
         self.conn.execute(
             "INSERT OR REPLACE INTO cache_metadata (key, value) VALUES (?, ?)",

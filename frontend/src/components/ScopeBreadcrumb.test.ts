@@ -40,7 +40,7 @@ describe('ScopeBreadcrumb', () => {
     render(
       createElement(
         MemoryRouter,
-        { initialEntries: ['/summaries?path=clients/acme'] },
+        { initialEntries: ['/claims?path=clients/acme'] },
         createElement(ScopeBreadcrumb, {
           scopePath: 'clients/acme',
           childScopes: [{ scope_path: 'clients/acme/app', scope_depth: 3 }],

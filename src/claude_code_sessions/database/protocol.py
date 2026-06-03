@@ -162,6 +162,63 @@ class Database(Protocol):
         when unresolved."""
         ...
 
+    # -- Extractive set-union claims (CR5) -----------------------------------
+
+    def list_claim_models(self) -> list[str]:
+        """Distinct models with extractive claim roll-ups (CR5)."""
+        ...
+
+    def list_claim_buckets(
+        self, scope_path: str, grain: str, model: str, days: int | None = None
+    ) -> list[dict[str, Any]]:
+        """Time buckets for a scope×grain×model with claim/failure counts, restricted
+        to the last-N-``days`` window (CR5)."""
+        ...
+
+    def get_claim_rollup(
+        self, scope_path: str, grain: str, bucket: str, model: str, days: int | None = None
+    ) -> dict[str, Any]:
+        """Extractive roll-up for a scope×grain: per-lens claims ranked by COUNT +
+        provenance, plus the parallel failure count (CR5). ``bucket`` empty = all claims
+        set-unioned across buckets in the last-N-``days`` window; a set ``bucket`` drills
+        down to that one bucket."""
+        ...
+
+    def get_session_claims(self, project_id: str, session_id: str, model: str) -> dict[str, Any]:
+        """One session's L1 claims per lens, or its recorded failure (CR5)."""
+        ...
+
+    def get_session_rollup_memberships(
+        self, project_id: str, session_id: str, model: str
+    ) -> list[dict[str, Any]]:
+        """Reverse provenance: roll-up buckets this session contributes to (CR5)."""
+        ...
+
+    def get_summarisation_coverage(
+        self, model: str, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Cache-summarisation completeness per project, optionally scoped to the
+        explorer's current scope_path prefix and windowed to the last N ``days`` (CR5)."""
+        ...
+
+    def list_summary_buckets(
+        self, scope_path: str, grain: str, strategy: str | None = None, model: str | None = None
+    ) -> list[dict[str, Any]]:
+        """Time buckets in the abstractive roll-up for a scope×grain (+ variant) (CR5)."""
+        ...
+
+    def list_claim_models_detail(self) -> list[dict[str, Any]]:
+        """Models with claim data + on-disk registry models, flagged ``has_claims`` (CR5)."""
+        ...
+
+    def get_claims_coverage_pivot(
+        self, model: str, grain: str, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Done-vs-pending pivot (scope × bucket) at one grain, restricted to the
+        subtree of ``scope`` (the explorer's page filter) and the last-N-``days``
+        bucket columns, for the heatmap (CR5)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

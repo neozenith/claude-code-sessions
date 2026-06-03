@@ -1,10 +1,19 @@
-# ADR3.2 — Production merge strategy (RESOLVED)
+# ADR3.2 — Production merge strategy (TENTATIVE — leaning reground, scaling unconfirmed)
 
-> - **Status:** Accepted (2026-06-01) — resolves the `<!-- UNRESOLVED -->` placeholder in
->   [summariser-G3.md](./summariser-G3.md) via the [G10](./summariser-G10.md) empirical gate (T10.7).
-> - **Decision owner:** human verdict on the benchmark evidence below (ADR3.1 deferred this to G10).
-> - **Evidence:** [summariser-G10-REPORT.md](./summariser-G10-REPORT.md) (42 cells) · scoring method
->   [summariser-SCORING.md](./summariser-SCORING.md) · scorecard rationale [CR4](./summariser-CR4.md).
+> - **Status:** **TENTATIVE / leaning (2026-06-02)** — *not* Accepted. Round-1 evidence favours
+>   reground, but the production *scaling regime* is unconfirmed: round-1 was a single week over a
+>   shallow 3-level trie, so it cannot tell us whether reground holds up at **month-grain rollups
+>   across many projects** versus only **daily grain on a single project**. The `<!-- UNRESOLVED -->`
+>   placeholder in [summariser-G3.md](./summariser-G3.md) therefore **stays open** and the T10.7
+>   `/loop` gate stays shut until the round-2 deep/coarse sweep settles it.
+> - **Decision owner:** human verdict on the benchmark evidence (ADR3.1 deferred this to G10); the
+>   verdict below is **provisional**, recorded as the current lean, not a binding PROCEED.
+> - **Round-1 evidence:** [summariser-G10-REPORT.md](./summariser-G10-REPORT.md) (42 cells, 7 models,
+>   1 week, day/week) · scoring [summariser-SCORING.md](./summariser-SCORING.md) · scorecard [CR4](./summariser-CR4.md).
+> - **Round-2 evidence (in flight):** [summariser-G10-REPORT-adr32.md](./summariser-G10-REPORT-adr32.md)
+>   — 2 models (Qwen3.5-2B speed, Llama-3.1-8B 128k) × 3 strategies × **day/week/month** over **~7
+>   months** across **6 projects / 3 domains** incl. a depth-3 client branch. This is the slice that
+>   confirms (or refutes) the reasoned regime prediction before the lean becomes a decision.
 
 ## Context
 
@@ -68,11 +77,14 @@ What the numbers establish:
    prompt); **deeper tries** make reground's advantage *grow* (more layers to re-anchor) while
    strict's drift compounds harder.
 
-## Decision
+## Decision (PROVISIONAL — current lean, pending round-2)
 
-**PROCEED — reground is the production strategy, applied grain/height-aware:**
+**Leaning toward reground as the production strategy, applied grain/height-aware** — but this is
+**not yet a binding PROCEED**. The open question round-2 must answer: does this lean survive at
+**month-grain, multi-project** scale, or is reground only safely the winner at **daily grain on a
+single project** (overflowing or losing its edge once buckets span many projects over months)?
 
-1. **reground @ daily** is the default and the proven winner.
+1. **reground @ daily** is the default and the round-1 winner.
 2. **reground at week/month and for multi-height domain refinement is preferred *where the context
    budget holds*** — its advantage increases with depth. This makes it **contingent on a large
    context window** (Llama-3.1-8B's 128k, or a 32k model with [CR3](./summariser-CR3.md) map-reduce
@@ -99,8 +111,36 @@ What the numbers establish:
   sessions). Before committing reground at *month* grain and *deep* domains, a confirming slice is
   warranted (see Follow-up) — the mechanics predict reground re-separates from strict with depth, but
   that is reasoned, not yet measured.
-- **The G10 gate is satisfied** with real, quantitative, multi-model evidence — the executable bar
-  CR1 was raised to restore after the stubbed-benchmark detour.
+- **The G10 gate is NOT yet satisfied.** Round-1 gives real, quantitative, multi-model evidence and
+  a clear lean, but the binding PROCEED is withheld until the round-2 deep/coarse sweep confirms the
+  scaling regime. T10.7 stays `[ ]`; the collapse (T10.8) must not run on the round-1 lean alone.
+
+## ⚠️ Methodology caveat — per-model context is confounded (discovered 2026-06-02)
+
+**Round-1's cross-model comparison is not apples-to-apples and must not be read as a fair model
+ranking.** `sqlite-muninn`'s `muninn_chat_model(path)` was being called *without* an explicit
+`n_ctx`, so each model silently loaded at the extension's dynamic default
+`max(8192, n_ctx_train / 8)` — i.e. **a different context per model, set by its training window, not
+by us**:
+
+| Model | `n_ctx_train` | silently loaded `n_ctx` |
+|-------|--------------:|------------------------:|
+| Qwen3.5-2B | 256K | 32768 |
+| Qwen3.5-4B / 9B | 32K | 4096→8192 (floor) |
+| Llama-3.1-8B | 128K | 16384 |
+| gemma-4 E2B/E4B | 8–32K | 8192 |
+| Mistral-7B | 32K | 8192 |
+
+Because **reground's merge prompts are 28–74k tokens**, a model's *context* — not its quality —
+largely determined whether reground could complete at all. So round-1 conclusions like "reground
+overflows" and any reground-based model ranking are **context artifacts**, not model verdicts. (Root
+cause + fix write-up: `sqlite-vector-graph/docs/plans/summariser_ctx_bug.md`.)
+
+**Correction:** the consumer now passes an explicit, evidence-sized `n_ctx=65536` (the 2nd arg to
+`muninn_chat_model(path, n_ctx)`; `scripts/ctx_sizing.py` showed 64k holds ~99–100% of extraction
+prompts and reground merges). The round-2 re-runs put **every model at the same 64k context** —
+Llama-3.1-8B@64k (in flight) and a queued **Qwen3.5-2B@64k** re-run — so the reground comparison is
+finally fair. Until those land, **no model-axis decision (ADR2.1) should cite round-1 numbers.**
 
 ## Follow-up (to confirm the coarse/deep regime empirically)
 

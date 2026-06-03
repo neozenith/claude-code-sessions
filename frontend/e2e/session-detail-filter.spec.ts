@@ -100,10 +100,11 @@ test.describe('Session Detail - Message Kind Filter', () => {
     const breadcrumb = page.getByTestId('session-scope-breadcrumb')
     await expect(breadcrumb).toBeVisible()
 
-    // A crumb links UP to the explorer scope route (/summaries?…path=…).
+    // A crumb links UP to the explorer scope route (/claims?…path=…) — the
+    // Summaries explorer was consolidated into the Claims Explorer (CR5).
     const crumb = breadcrumb.locator('[data-testid="scope-crumb"]').first()
     const href = await crumb.getAttribute('href')
-    expect(href).toContain('/summaries')
+    expect(href).toContain('/claims')
     expect(href).toContain('path=')
   })
 

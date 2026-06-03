@@ -91,6 +91,25 @@ THREE_LENS_GBNF = (
 )
 SUMMARY_MAX_TOKENS = 512
 
+# CR5 extractive L1 grammar: each lens is a JSON ARRAY of 0..N short atomic claims
+# (empty array valid). Same three gotchas as the single-string grammar — root on one
+# line, no control chars in strings, bounded claim length so a verbose model can't
+# truncate mid-claim past max_tokens. Four lenses (tasks / patterns / decisions_values
+# / learnings); keep in sync with summary_json.LENS_LIST_KEYS.
+_CLAIM_MAX = 200
+CLAIM_LENS_GBNF = (
+    r'root ::= "{" ws "\"tasks\"" ws ":" ws arr ws "," ws '
+    r'"\"patterns\"" ws ":" ws arr ws "," ws '
+    r'"\"decisions_values\"" ws ":" ws arr ws "," ws '
+    r'"\"learnings\"" ws ":" ws arr ws "}"'
+    "\n"
+    r'arr ::= "[" ws ( string ( ws "," ws string )* )? ws "]"'
+    "\n"
+    r'string ::= "\"" ( [^"\\\x00-\x1F] | "\\" ["\\/bfnrt] ){0,' + str(_CLAIM_MAX) + r'} "\""'
+    "\n"
+    r"ws ::= [ \t\n]*"
+)
+
 
 class MuninnSummaryEngine:
     """Production :class:`SummaryEngine` backed by ``sqlite-muninn`` (ADR2.1).

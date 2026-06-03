@@ -61,3 +61,34 @@ def parse_lenses(raw: str) -> dict[str, str]:
     if missing:
         raise KeyError(f"model output JSON missing lens keys {missing}: {obj!r}")
     return {k: str(obj[k]) for k in LENS_KEYS}
+
+
+# CR5 extractive path: each lens is a LIST of 0..N atomic claims, not one string.
+# An empty list is a valid, first-class result (a session may express no decisions).
+# ``learnings`` (4th lens, added 2026-06-03): process/skill improvements + failure
+# modes to systematically avoid — the retrospective signal for getting better.
+LENS_LIST_KEYS = ("tasks", "patterns", "decisions_values", "learnings")
+
+
+def parse_lens_lists(raw: str) -> dict[str, list[str]]:
+    """Parse a model reply into the three lens **lists** of atomic claims (fail-loud).
+
+    Like :func:`parse_lenses` but each lens is a JSON array (0..N items) rather than a
+    single string. Tolerates ``<think>`` traces / prose / code fences via the same
+    balanced-object extraction. Raises ``KeyError`` if a lens key is missing and
+    ``ValueError`` if a lens value is not a JSON array (never silently coerces — the
+    project's fail-loud rule)."""
+    obj: dict[str, Any] = json.loads(_first_json_object(raw))
+    missing = [k for k in LENS_LIST_KEYS if k not in obj]
+    if missing:
+        raise KeyError(f"model output JSON missing lens keys {missing}: {obj!r}")
+    out: dict[str, list[str]] = {}
+    for key in LENS_LIST_KEYS:
+        value = obj[key]
+        if not isinstance(value, list):
+            raise ValueError(
+                f"lens {key!r} must be a JSON array of claims, "
+                f"got {type(value).__name__}: {value!r}"
+            )
+        out[key] = [str(item) for item in value]
+    return out

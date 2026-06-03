@@ -159,6 +159,15 @@ class IndexerService:
                 finished_at=datetime.now(UTC).isoformat(),
                 error=f"{type(exc).__name__}: {exc}",
             )
+            # Release any locks the crashed run was holding (an open write txn on
+            # the shared connection, the KG connection) so the failure doesn't
+            # wedge every subsequent writer with "database is locked". Without
+            # this, a crashed boot ingest strands its write lock until the whole
+            # process is restarted.
+            try:
+                self._db.cache.abort_pending_writes()
+            except Exception:  # noqa: BLE001 — cleanup is best-effort
+                log.exception("failed to release locks after indexer crash")
             return
 
         if self._stop.is_set():

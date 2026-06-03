@@ -17,13 +17,24 @@ interface ScopeBreadcrumbProps {
   /**
    * Override the crumb/child href for a scope_path. Defaults to an in-place
    * `?path=` on the current route (explorer). SessionDetail (G9) passes a builder
-   * that targets the explorer route `/summaries?path=…` carrying only the global
+   * that targets the explorer route `/claims?path=…` carrying only the global
    * filters, so the session links up to the explorer scope (ADR9.2).
    */
   linkTo?: (scopePath: string) => string
+  /**
+   * Hard-pin mode: render the lineage as static text (no up/down navigation).
+   * Used when the global Project filter pins the explorer to one project's scope —
+   * drilling away would contradict the pin (the user clears the filter to regain it).
+   */
+  disabled?: boolean
 }
 
-export default function ScopeBreadcrumb({ scopePath, childScopes, linkTo }: ScopeBreadcrumbProps) {
+export default function ScopeBreadcrumb({
+  scopePath,
+  childScopes,
+  linkTo,
+  disabled = false,
+}: ScopeBreadcrumbProps) {
   const [searchParams] = useSearchParams()
 
   // Build a `?path=` href that sets path (or clears it at root) while
@@ -45,6 +56,27 @@ export default function ScopeBreadcrumb({ scopePath, childScopes, linkTo }: Scop
     label,
     path: segments.slice(0, i + 1).join('/'),
   }))
+
+  if (disabled) {
+    return (
+      <nav
+        aria-label="scope lineage"
+        data-testid="scope-breadcrumb-pinned"
+        className="flex flex-wrap items-center gap-1 text-sm text-muted-foreground"
+      >
+        <span data-testid="scope-crumb-root">All</span>
+        {crumbs.map((crumb) => (
+          <span key={crumb.path} className="flex items-center gap-1">
+            <span>/</span>
+            <span data-testid="scope-crumb" className="font-medium text-foreground">
+              {crumb.label}
+            </span>
+          </span>
+        ))}
+        <span className="ml-2 rounded-full bg-muted px-2 py-0.5 text-xs">pinned</span>
+      </nav>
+    )
+  }
 
   return (
     <div className="space-y-2">

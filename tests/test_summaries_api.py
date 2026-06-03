@@ -27,22 +27,6 @@ def _fixture_db(tmp_path: Path) -> SQLiteDatabase:
     )
 
 
-def _fixture_db_with_project(tmp_path: Path, pid: str, project_path: str) -> SQLiteDatabase:
-    """A fixture DB whose projects dir makes ``scope_path_of(pid)`` a valid scope."""
-    projects = tmp_path / "projects"
-    pdir = projects / pid
-    pdir.mkdir(parents=True, exist_ok=True)
-    (pdir / "sessions-index.json").write_text(
-        json.dumps({"version": 1, "entries": [{"projectPath": project_path}]}),
-        encoding="utf-8",
-    )
-    return SQLiteDatabase(
-        local_projects_path=projects,
-        home_projects_path=projects,
-        db_path=tmp_path / "cache.db",
-    )
-
-
 def _seed_session_summary(db: SQLiteDatabase, project_id: str, session_id: str, model: str) -> None:
     db.cache.conn.execute(
         """INSERT INTO session_summaries
@@ -91,93 +75,11 @@ def test_session_summary_returns_three_lenses(tmp_path: Path, monkeypatch: pytes
     assert data["lenses"]["decisions_values"] == "DECISION_LENS"
 
 
-def test_scope_summary_returns_rollup_for_grain_and_bucket(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """GET /api/summaries/scope returns the rollup matching path+grain+bucket."""
-    db = _fixture_db(tmp_path)
-    _seed_rollup(db, "clients/acme/app", strategy="stub", model="model-a")
-    monkeypatch.setattr(app.state, "db", db)
-    client = TestClient(app)
-
-    resp = client.get(
-        "/api/summaries/scope",
-        params={
-            "path": "clients/acme/app",
-            "grain": "day",
-            "bucket": "2026-01-01",
-            "strategy": "stub",
-            "model": "model-a",
-        },
-    )
-    assert resp.status_code == 200
-    data = resp.json()
-    assert data["status"] == "summarised"
-    assert data["scope_path"] == "clients/acme/app"
-    assert data["scope_depth"] == 3
-    assert data["strategy"] == "stub"
-    assert data["lenses"]["task_summary"] == "RT"
-    assert data["child_count"] == 3
-
-
-def test_scope_summary_selects_matching_strategy_model_variant(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """When variants coexist for one scope/grain/bucket, the requested
-    strategy+model selects the right row (ADR7.2)."""
-    db = _fixture_db(tmp_path)
-    _seed_rollup(db, "play/foo", strategy="strict", model="model-a")
-    _seed_rollup(db, "play/foo", strategy="reground", model="model-b")
-    monkeypatch.setattr(app.state, "db", db)
-    client = TestClient(app)
-
-    for strat, mdl in [("strict", "model-a"), ("reground", "model-b")]:
-        resp = client.get(
-            "/api/summaries/scope",
-            params={"path": "play/foo", "grain": "day", "bucket": "2026-01-01", "strategy": strat, "model": mdl},
-        )
-        assert resp.status_code == 200
-        data = resp.json()
-        assert data["status"] == "summarised"
-        assert data["strategy"] == strat
-        assert data["model"] == mdl
-
-
-def test_unsummarised_scope_returns_not_summarised_status(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A valid scope (a real ancestor_scopes path) with no rollup row returns
-    200 {status:"not_summarised"} — not a fabricated summary (ADR7.1)."""
-    db = _fixture_db_with_project(tmp_path, "-Users-dev-play-foo", "/Users/dev/play/foo")
-    monkeypatch.setattr(app.state, "db", db)
-    client = TestClient(app)
-
-    resp = client.get(
-        "/api/summaries/scope",
-        params={"path": "play/foo", "grain": "day", "bucket": "2026-01-01", "strategy": "strict", "model": "model-a"},
-    )
-    assert resp.status_code == 200
-    assert resp.json() == {"status": "not_summarised"}
-
-
-def test_unknown_scope_returns_404(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    """A scope_path absent from the G1 hierarchy (and with no rollup) returns 404
-    — distinguishing 'missing' from 'not yet computed' (ADR7.1)."""
-    db = _fixture_db(tmp_path)  # an unresolvable project dir, no rollups
-    monkeypatch.setattr(app.state, "db", db)
-    client = TestClient(app)
-
-    resp = client.get(
-        "/api/summaries/scope",
-        params={
-            "path": "no-such-domain/nope",
-            "grain": "day",
-            "bucket": "2026-01-01",
-            "strategy": "strict",
-            "model": "model-a",
-        },
-    )
-    assert resp.status_code == 404
+# NOTE: the abstractive `/api/summaries/scope` scope-explorer route was retired when
+# the Summaries page was consolidated into the Claims Explorer (CR5). Its db method
+# (`get_rollup_summary`) is retained (frozen, ADR3.2) but no longer HTTP-surfaced, so
+# the former route tests were removed. The shared children/of-project resolvers now
+# live under `/api/claims/scope/*` (see test_claims_api.py).
 
 
 def _add_project_with_event(db: SQLiteDatabase, tmp_path: Path, pid: str, project_path: str) -> None:
@@ -220,13 +122,13 @@ def test_scope_children_returns_next_trie_level(tmp_path: Path, monkeypatch: pyt
     client = TestClient(app)
 
     # Immediate children of 'clients' — not the depth-3 grandchild clients/acme/app.
-    resp = client.get("/api/summaries/scope/children", params={"path": "clients"})
+    resp = client.get("/api/claims/scope/children", params={"path": "clients"})
     assert resp.status_code == 200
     assert {c["scope_path"] for c in resp.json()} == {"clients/acme", "clients/beta"}
 
     # Project filter narrows the root's children to just that project's domain.
     resp2 = client.get(
-        "/api/summaries/scope/children",
+        "/api/claims/scope/children",
         params={"path": "", "project": "-Users-dev-play-foo"},
     )
     assert resp2.status_code == 200

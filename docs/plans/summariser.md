@@ -137,6 +137,63 @@ flowchart LR
 
 > **Background — Current vs Desired State:** the before/after architecture (and the in-repo `muninn_chat` engine that makes local summarisation possible) lives in **[summariser-DISCOVERY.md](./summariser-DISCOVERY.md)** — review context, not needed once the implementation loop starts.
 
+## ✅ Final Verdict & Forward Plan (2026-06-03)
+
+**Adopted approach: extractive set-union ([CR5](./summariser-CR5-extractive-setunion.md)).** The
+empirical G10 detour (abstractive strict/reground/flat, [ADR3.2](./summariser-ADR3.2-merge-strategy.md))
+is **superseded** — frozen as a proof-of-concept, not the production path. The verdict rests on a
+structural argument the benchmark numbers ended up pointing at:
+
+- **L1 = per-session list extraction** — four lists of 0..N atomic claims (`tasks`, `patterns`,
+  `decisions_values`, `learnings`); empty is valid. Fixes the bug where the old grammar forced
+  exactly one item per lens. The `learnings` lens captures process/skill improvements and failure
+  modes to avoid, so the COUNT rollup surfaces recurring learnings as retrospective signal.
+- **L2+ = extractive set-union** — every coarser scope×grain is the **union** of descendant claim
+  lists, deduped (exact → embedding-cosine, mirroring `muninn_extract_er`), with a **COUNT** per
+  cluster (salience = repetition) + provenance. **Associative** → correct at any depth, composes with
+  map-reduce, and needs **zero LLM calls at L2** (vs the abstractive path's call-per-merge). Grounded
+  by construction — claims are extracted, never re-summarised, so the drift/overflow that sank the
+  abstractive family cannot occur.
+
+**Evidence (this is not a paper design):** implemented additively in `database/sqlite/claims.py` +
+`summary_json.parse_lens_lists` + `summaries.THREE_LENS_LIST_GBNF`; **455 backend tests green**;
+first real run in [summariser-CR5-RESULTS.md](./summariser-CR5-RESULTS.md) (lens lists confirmed
+variable: 43/36/47; L2 = 0 LLM calls). Also fixed en route: the silent `muninn_chat` context
+auto-trim (`train_ctx/8`) documented in `sqlite-vector-graph/docs/plans/summariser_ctx_bug.md`.
+
+### Committed forward scope (the remaining build, in order)
+
+1. **Parallel failure-tracking stream.** L1 parse failures are *first-class data*, not just raised:
+   a `session_claim_failures` table records `(project_id, session_id, model, reason, raw_excerpt,
+   content_hash)`, and a **failure roll-up** runs *parallel* to the claim roll-up (per scope×grain
+   counts). Rationale: the operator triages whether a failure is a **"correct failure"** (the session
+   genuinely has nothing → an empty list is right) or a **prompt-refinement** case — so the 25%
+   first-run failure rate is a tracked, reviewable signal, not silent loss. (No graceful degradation:
+   the failure is *recorded*, never papered over with a fake summary.)
+2. **Full web interface — trace every level & slice.** A Summaries explorer over the variable-depth
+   scope trie × {day, week, month}: navigate every scope and bucket, see each lens's claims **ranked
+   by COUNT**, and **drill all the way down** to the contributing sessions → redirect to that
+   **SessionDetail** page. Every level deep-linkable (URL-as-state).
+3. **SessionDetail cross-reference (provenance back-links).** Each SessionDetail page shows **which
+   roll-up summaries this session is included in** (the reverse of `rollup_claims.source_session_ids`)
+   across scopes/grains — closing the loop both directions.
+4. **Cache Summarisation visualisation.** A coverage panel showing session-summarisation
+   **completeness vs pending-ness** (summarised / failed / not-yet-attempted per scope & model) —
+   the same spirit as an ingest indicator, so the operator sees how current the knowledge base is.
+
+### Success measures (forward scope)
+
+- A session that fails L1 appears in `session_claim_failures` AND in the failure roll-up counts;
+  re-running an unchanged failed session does not duplicate it; the UI lets the operator see failures
+  per scope and open the offending session.
+- From the explorer, a user navigates root → domain → project → bucket, opens a high-COUNT claim, sees
+  its provenance sessions, clicks through to a SessionDetail page; that page lists the roll-ups the
+  session contributes to and links back. All states deep-link.
+- The Cache Summarisation panel reports, per scope×model, counts of sessions {summarised, failed,
+  pending} and a % complete; numbers reconcile with `session_claims` / `session_claim_failures` / `events`.
+- `make ci` green; new e2e specs in `frontend/e2e/` exercise the explorer drill-down + the SessionDetail
+  cross-reference + the cache panel; screenshots captured to `frontend/e2e-screenshots/`.
+
 ## Gap Analysis
 
 ### Gap Map
@@ -252,6 +309,7 @@ which is a pending *decision*). Each CR names the gap/ticket where it was discov
 | [CR2](./summariser-CR2.md) | Dial in the base muninn LLM invocation (grammar / `max_tokens` / thinking control) in small focused prototypes | [CR1](./summariser-CR1.md) (G2/G3 generation path) | done (2026-06-01) — recipe `muninn_chat(model, prompt, THREE_LENS_GBNF, 512)`: bounded valid 3-lens JSON on all 4 bench models; grammar suppresses `<think>`. See [`examples/muninn/`](../../examples/muninn/FINDINGS.md) |
 | [CR3](./summariser-CR3.md) | Map-reduce batching for over-context inputs (batch → summarise each → combine) | [CR1](./summariser-CR1.md) (large-session / busy-scope tail) | proposed (2026-06-01) — not blocking the scoped run (~21 small sessions fit); for the large-scope tail |
 | [CR4](./summariser-CR4.md) | Located, gaming-resistant scorecard — compression ratio + lead/oracle anchors + embedding cosine (binary faithfulness optional; **no numeric LLM-judge**) | [CR1](./summariser-CR1.md) (bare lexical triple is uninterpretable) | proposed (2026-06-01) — analysis in [summariser-SCORING.md](./summariser-SCORING.md); answers "good vs great" by anchoring the spectrum |
+| [CR5](./summariser-CR5-extractive-setunion.md) | **Extractive set-union rollup** — claims-as-array-elements, union + ER-dedup (`muninn_extract_er` cascade: exact→cosine→fractional LLM) + **COUNT as salience**; an associative, grounded alternative to abstractive merging | ADR3.2 round-2 (abstractive merges overflow/drift/lose info at high compression) | proposed/queued (2026-06-02) — build after the 64k abstractive baseline lands; composes with [CR3](./summariser-CR3.md) |
 
 ## Decisions (ADRs)
 
@@ -265,7 +323,7 @@ which is a pending *decision*). Each CR names the gap/ticket where it was discov
 | [ADR2.3](./summariser-G2.md) | Content-hash guard; cache-resident summaries; recompute only changed sessions (once per schema bump) | Consistent with rebuildable-from-source; cheap incremental updates; local inference makes recompute free |
 | [ADR2.4](./summariser-G2.md) | Summarisation is decoupled from ingest — manual CLI runners per `(strategy, model, level)`, eventually consistent | Lets each tier bind to its own external cadence; one call surface shared with the G10 benchmark |
 | [ADR3.1](./summariser-G3.md) | Defer merge-strategy selection to the G10 empirical benchmark; build all three behind a flag, collapse after | The fidelity/speed trade-off is corpus- and model-dependent; measure on this data before committing production |
-| [**ADR3.2**](./summariser-ADR3.2-merge-strategy.md) | **RESOLVED (PROCEED): reground is production, applied grain/height-aware** — reground@daily default; reground at week/month/deep where context fits (128k model or CR3 batching); **strict** the deterministic fallback; flat deprecated to shallow scopes; Mistral-7B rejected (8k ctx). Collapse keeps **two** strategies (reground + strict), not one | Empirical G10 verdict over 7 models × 3 strategies: reground is the only strategy visibly working (BLEU ~6–10×); strict≈flat; reground's edge grows with depth, overflows without context budget |
+| [**ADR3.2**](./summariser-ADR3.2-merge-strategy.md) | **TENTATIVE (leaning reground, not PROCEED)** — round-1 leans reground@daily, strict fallback, flat→shallow, Mistral-7B rejected (8k ctx); collapse *would* keep **two** strategies. **Held open**: scaling regime (month-grain multi-project vs daily single-project) unconfirmed → T10.7 gate stays shut pending the round-2 deep/coarse sweep | Round-1 G10 (7 models × 3 strategies, 1 week): reground the only strategy visibly working (BLEU ~6–10×); strict≈flat; edge grows with depth, overflows without context budget — but 1 week / shallow trie can't confirm month/multi-project scaling |
 | [ADR3.3](./summariser-G3.md) | Rollups + freshness are keyed/scoped by `(strategy, model_id)`; a child merges only into a same-model parent | The benchmark rolls up every `(strategy, model)` at once; without it they clobber or false-skip |
 | [ADR3.4](./summariser-G3.md) | Roll-ups run per level band (leaf…root) on an external cadence, off `session_summaries` to date | Match cadence to volatility (leaf daily, domain/root weekly); eventual consistency, no ingest coupling |
 | [ADR5.1](./summariser-G5.md) | Re-grounding uses a bounded, deterministic top-K excerpt sample (recency then length) | Determinism keeps the benchmark reproducible; the cap bounds prompt size at high tiers |

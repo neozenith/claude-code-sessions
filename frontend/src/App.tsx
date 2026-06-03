@@ -1,4 +1,4 @@
-import { Routes, Route } from 'react-router-dom'
+import { Routes, Route, Navigate } from 'react-router-dom'
 import Layout from './components/Layout'
 import Dashboard from './pages/Dashboard'
 import DailyUsage from './pages/DailyUsage'
@@ -8,7 +8,7 @@ import HourlyUsage from './pages/HourlyUsage'
 import HourOfDay from './pages/HourOfDay'
 import SessionsList from './pages/SessionsList'
 import Performance from './pages/Performance'
-import Summaries from './pages/Summaries'
+import ClaimsExplorer from './pages/ClaimsExplorer'
 import ProjectSessions from './pages/ProjectSessions'
 import SessionDetail from './pages/SessionDetail'
 import Timeline from './pages/Timeline'
@@ -29,7 +29,9 @@ export default function App() {
         <Route path="/hour-of-day" element={<HourOfDay />} />
         <Route path="/sessions" element={<SessionsList />} />
         <Route path="/performance" element={<Performance />} />
-        <Route path="/summaries" element={<Summaries />} />
+        {/* /summaries retired — abstractive explorer consolidated into Claims (CR5). */}
+        <Route path="/summaries" element={<Navigate to="/claims" replace />} />
+        <Route path="/claims" element={<ClaimsExplorer />} />
         <Route path="/sessions/:projectId" element={<ProjectSessions />} />
         <Route path="/sessions/:projectId/:sessionId" element={<SessionDetail />} />
         <Route path="/timeline" element={<Timeline />} />

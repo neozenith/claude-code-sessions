@@ -36,6 +36,7 @@ logging.basicConfig(
     datefmt="%H:%M:%S",
 )
 
+from claude_code_sessions.claims_reindex import ClaimsReindexManager, default_runner  # noqa: E402
 from claude_code_sessions.database import Database, SQLiteDatabase  # noqa: E402
 from claude_code_sessions.database.sqlite.indexer import IndexerService  # noqa: E402
 
@@ -256,46 +257,97 @@ async def get_session_summary(project_id: str, session_id: str, model: str) -> d
     return get_db().get_session_summary(project_id, session_id, model=model)
 
 
-@app.get("/api/summaries/scope")
-async def get_scope_summary(
-    path: str,
-    grain: str,
-    bucket: str,
-    strategy: str | None = None,
-    model: str | None = None,
-    days: int | None = None,
-    project: str | None = None,
-) -> dict[str, Any]:
-    """The roll-up summary for a ``scope_path`` at a grain+bucket (G7).
-
-    Optional ``strategy``/``model`` select a benchmark variant; returns the
-    ADR7.1 discriminated payload."""
-    return get_db().get_rollup_summary(
-        path, grain, bucket, strategy=strategy, model=model, days=days, project=project
-    )
-
-
-@app.get("/api/summaries/scope/children")
-async def list_scope_children(
-    path: str,
-    days: int | None = None,
-    project: str | None = None,
-) -> list[dict[str, Any]]:
-    """Immediate child scopes of ``path`` (next trie level), honoring days/project."""
-    return get_db().list_scope_children(path, days=days, project=project)
-
-
 @app.get("/api/summaries/variants")
 async def list_summary_variants() -> list[dict[str, Any]]:
-    """Distinct (strategy, model) pairs present in the roll-up table (eval picker)."""
+    """Distinct (strategy, model) pairs present in the roll-up table (eval picker).
+    Retained for the SessionDetail abstractive session-summary card; the abstractive
+    scope-explorer endpoints were retired with the /summaries page (CR5 consolidation)."""
     return get_db().list_summary_variants()
 
 
-@app.get("/api/summaries/scope/of-project")
-async def get_project_scope(project_id: str) -> dict[str, Any]:
-    """A project's resolved scope_path + ancestor chain, for the SessionDetail
-    lineage breadcrumb (G9)."""
+# -- Extractive set-union claims (CR5) ---------------------------------------
+
+
+@app.get("/api/claims/models")
+async def list_claim_models() -> list[str]:
+    """Models that have extractive claim roll-ups (CR5 explorer picker)."""
+    return get_db().list_claim_models()
+
+
+@app.get("/api/claims/buckets")
+async def list_claim_buckets(
+    path: str, grain: str, model: str, days: int | None = None
+) -> list[dict[str, Any]]:
+    """Time buckets for a scope×grain×model, with claim + failure counts, restricted
+    to the last-N-days window (CR5)."""
+    return get_db().list_claim_buckets(path, grain, model, days=days)
+
+
+@app.get("/api/claims/scope")
+async def get_claim_rollup(
+    path: str, grain: str, bucket: str, model: str, days: int | None = None
+) -> dict[str, Any]:
+    """Extractive roll-up for a scope×grain — per-lens claims ranked by COUNT (salience)
+    + provenance + the parallel failure count (CR5). Empty ``bucket`` = all claims
+    set-unioned across the last-N-days window; a set ``bucket`` drills into that bucket."""
+    return get_db().get_claim_rollup(path, grain, bucket, model, days=days)
+
+
+@app.get("/api/claims/scope/children")
+async def list_claim_scope_children(
+    path: str, days: int | None = None, project: str | None = None
+) -> list[dict[str, Any]]:
+    """Immediate child scopes of ``path`` (next trie level) for the explorer
+    breadcrumb, honoring days/project (CR5; canonical home of the shared resolver)."""
+    return get_db().list_scope_children(path, days=days, project=project)
+
+
+@app.get("/api/claims/scope/of-project")
+async def get_claim_project_scope(project_id: str) -> dict[str, Any]:
+    """A project's resolved scope_path + ancestor chain — used to hard-pin the explorer
+    scope to the global Project filter, and for the SessionDetail lineage breadcrumb."""
     return get_db().get_project_scope(project_id)
+
+
+@app.get("/api/claims/session/{project_id}/{session_id}")
+async def get_session_claims(project_id: str, session_id: str, model: str) -> dict[str, Any]:
+    """A session's L1 extracted claims per lens, or its recorded failure (CR5)."""
+    return get_db().get_session_claims(project_id, session_id, model=model)
+
+
+@app.get("/api/claims/session/{project_id}/{session_id}/memberships")
+async def get_session_rollup_memberships(
+    project_id: str, session_id: str, model: str
+) -> list[dict[str, Any]]:
+    """Reverse provenance — the roll-up buckets this session contributes to, for the
+    SessionDetail cross-reference (CR5)."""
+    return get_db().get_session_rollup_memberships(project_id, session_id, model=model)
+
+
+@app.get("/api/claims/coverage")
+async def get_summarisation_coverage(
+    model: str, scope: str | None = None, days: int | None = None
+) -> dict[str, Any]:
+    """Cache-summarisation completeness per project, scoped to the explorer's current
+    scope_path (the page-level filter) and windowed to the last N days — `scope`
+    omitted/empty = all projects, `days` omitted/0 = all time (CR5)."""
+    return get_db().get_summarisation_coverage(model, scope=scope, days=days)
+
+
+@app.get("/api/claims/models/detail")
+async def list_claim_models_detail() -> list[dict[str, Any]]:
+    """Models offerable in the explorer: data-backed + on-disk registry (CR5)."""
+    return get_db().list_claim_models_detail()
+
+
+@app.get("/api/claims/coverage-pivot")
+async def get_claims_coverage_pivot(
+    model: str, grain: str, scope: str | None = None, days: int | None = None
+) -> dict[str, Any]:
+    """Done-vs-pending pivot (scope × bucket) at a grain, restricted to the subtree of
+    the explorer's current `scope` (page-level filter) and the last-N-days bucket
+    columns — the heatmap source (CR5)."""
+    return get_db().get_claims_coverage_pivot(model, grain, scope=scope, days=days)
 
 
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")
@@ -490,6 +542,27 @@ async def kg_reindex() -> dict[str, Any]:
     status = indexer.status()
     status["already_running"] = already_running
     return status
+
+
+# CR5 manual claims (re)indexation of a scope×grain slice (background thread).
+_claims_reindex = ClaimsReindexManager()
+
+
+@app.post("/api/claims/reindex")
+async def claims_reindex(
+    path: str, grain: str, model: str, limit: int = 25
+) -> dict[str, Any]:
+    """(Re)index the currently-viewed claims slice: extract claims for the scope's
+    sessions under ``model`` + roll up that grain + the failure stream, on a
+    background thread (CR5). Idempotent — a run already in flight is a no-op. Poll
+    ``/api/claims/reindex/status``."""
+    return _claims_reindex.start(path, grain, model, limit, default_runner)
+
+
+@app.get("/api/claims/reindex/status")
+async def claims_reindex_status() -> dict[str, Any]:
+    """Live status of the manual claims (re)index job (CR5)."""
+    return _claims_reindex.status()
 
 
 # Serve frontend static files in production
