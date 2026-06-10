@@ -77,13 +77,29 @@ export interface Claim {
   sessions: string[]
 }
 
-/** The claim lenses for a scope/session (CR5): tasks, patterns, decisions_values,
- * and learnings (process/skill improvements + failure modes to avoid). */
+/** A node in a lens's coarse→fine→leaf cluster tree (CR6 EVoC clustering).
+ *
+ * A node carries EITHER `children` (a coarse cluster, whose children are finer
+ * clusters) OR `members` (a fine / single-level cluster, whose members are the
+ * verbatim leaf claims) — never both. `name` is the LLM "common-thread" label;
+ * `count` is the distinct-session salience (union over descendants). */
+export interface ClusterNode {
+  cluster_id: number
+  layer: number
+  name: string
+  count: number
+  sessions: string[]
+  children?: ClusterNode[]
+  members?: Claim[]
+}
+
+/** The claim lenses for a scope (CR6): each lens is a tree of named EVoC clusters
+ * (tasks, patterns, decisions_values, and learnings). */
 export interface ClaimLenses {
-  tasks: Claim[]
-  patterns: Claim[]
-  decisions_values: Claim[]
-  learnings: Claim[]
+  tasks: ClusterNode[]
+  patterns: ClusterNode[]
+  decisions_values: ClusterNode[]
+  learnings: ClusterNode[]
 }
 
 /** A roll-up of claims for a scope at a grain+bucket (GET /api/claims/scope).
@@ -100,6 +116,9 @@ export type ClaimRollup =
       lenses: ClaimLenses
       failure_count: number
       failed_sessions: string[]
+      /** session_id → project_id, for building working SessionDetail back-links
+       * (provenance session_ids alone can't address /sessions/:projectId/:sessionId). */
+      session_projects: Record<string, string>
     }
   | { status: 'not_summarised' }
 
@@ -110,20 +129,28 @@ export interface ClaimBucket {
   total_count: number
 }
 
+/** One of a session's raw extracted claims, tagged with the fine cluster it belongs
+ * to (CR6). `cluster_name`/`cluster_id` are null until the taxonomy is built. */
+export interface SessionClaim {
+  claim: string
+  cluster_id: number | null
+  cluster_name: string | null
+}
+
 /** A session's extracted claims under a model (GET /api/claims/session/...).
  *
- * The session lenses are flat string arrays (the raw extracted claims, no
- * counts — counts only exist after set-union roll-up). `failure` is null on
- * success or carries the extraction failure reason + raw excerpt. */
+ * The session lenses are the raw extracted claims (no counts — counts only exist
+ * after the cluster roll-up), each carrying its cluster attribution. `failure` is
+ * null on success or carries the extraction failure reason + raw excerpt. */
 export interface SessionClaims {
   project_id: string
   session_id: string
   model: string
   lenses: {
-    tasks: string[]
-    patterns: string[]
-    decisions_values: string[]
-    learnings: string[]
+    tasks: SessionClaim[]
+    patterns: SessionClaim[]
+    decisions_values: SessionClaim[]
+    learnings: SessionClaim[]
   }
   failure: { reason: string; raw_excerpt: string } | null
 }
@@ -195,6 +222,25 @@ export interface CoveragePivot {
   scopes: string[]
   buckets: string[]
   cells: CoverageCell[]
+}
+
+/** One systematic failure mode rolled up from the parallel failure stream
+ * (GET /api/claims/failures) — counts + a representative sample for triage (CR5). */
+export interface FailureCategory {
+  category: string
+  count: number
+  pct: number
+  sample_reason: string
+  sample_excerpt_tail: string
+  sample_sessions: { project_id: string; session_id: string }[]
+}
+
+/** The categorised failure-mode roll-up for a model/scope/days slice (CR5 distillation). */
+export interface FailureAnalysis {
+  model: string | null
+  total: number
+  categories: FailureCategory[]
+  by_model: Record<string, number>
 }
 
 /** Reindex worker state (POST /api/claims/reindex, GET /api/claims/reindex/status).
@@ -650,6 +696,16 @@ export class ApiClient {
     days?: number
   }): Promise<ApiResult<CoveragePivot>> {
     return this.get('/claims/coverage-pivot', params)
+  }
+
+  /** Categorised failure-mode roll-up of the parallel failure stream, filtered by
+   * model/scope/days — the failure-distillation panel (CR5). */
+  async getClaimFailures(params?: {
+    model?: string
+    scope?: string
+    days?: number
+  }): Promise<ApiResult<FailureAnalysis>> {
+    return this.get('/claims/failures', params)
   }
 
   /** Kick off an extractive reindex of one scope slice (single-flight) (CR5). */

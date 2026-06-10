@@ -51,6 +51,7 @@ class ClaimsReindexManager:
             self._status = {
                 "state": "running", "scope_path": scope_path, "grain": grain, "model": model,
                 "sessions_total": 0, "sessions_done": 0, "failures": 0, "rollups_written": 0,
+                "embeddings_done": 0, "clusters_named": 0,
                 "message": "starting", "started_at": datetime.now(UTC).isoformat(),
                 "finished_at": None, "error": None,
             }
@@ -89,24 +90,21 @@ def default_runner(
         MuninnClaimsEngine,
         ensure_claims_schema,
         extract_session_claims,
-        rollup_failures,
-        set_union_rollup,
     )
     from claude_code_sessions.project_resolver import ProjectResolver
     from claude_code_sessions.summarise_cli import (
-        DEFAULT_N_CTX,
-        GRAINS,
-        _embed,
         _open_chat_connection,
         bench_session_keys,
+        cluster_and_name_pipeline,
         gguf_path,
-        make_embed_cosine,
+        model_n_ctx,
     )
 
     path = gguf_path(model)
     if path is None:
         raise RuntimeError(f"no GGUF on disk for model {model!r} (cannot reindex)")
-    conn = _open_chat_connection(model, path, n_ctx=DEFAULT_N_CTX)
+    # Per-model context cap — some models (gemma-4-12B) can't decode at the default 65536.
+    conn = _open_chat_connection(model, path, n_ctx=model_n_ctx(model))
     try:
         conn.execute("PRAGMA busy_timeout=30000")  # tolerate the server's concurrent writes
         ensure_claims_schema(conn)
@@ -123,16 +121,12 @@ def default_runner(
                 fails += 1
             progress(sessions_done=done, failures=fails)
         # L1 (extraction) is grain-independent — one session_claims set serves every
-        # grain. L2 (set-union) is the only grain-sensitive layer and is cheap (no
-        # muninn_chat). So a single reindex rebuilds ALL grains' roll-ups, not just the
-        # one the user happened to be viewing — otherwise day/week stay empty after a
-        # month reindex. INSERT OR REPLACE makes each grain rebuild idempotent.
-        progress(message=f"rolling up all grains (viewing {grain})")
-        make_embed_cosine(conn)  # register the embedder for the cosine dedup tier
-        written = 0
-        for g in GRAINS:
-            written += set_union_rollup(conn, model, g, resolver, embed=lambda t: _embed(conn, t))
-            rollup_failures(conn, model, g, resolver)
-            progress(rollups_written=written)
+        # grain. The CR6 clustering is GLOBAL per model (it reads ALL of the model's
+        # session_claims, not just this scope's), and the leaf rollup is grain-sensitive
+        # but cheap (no muninn_chat). So a single reindex re-clusters + rebuilds ALL grains'
+        # roll-ups, not just the one being viewed — otherwise day/week stay empty after a
+        # month reindex. Every stage is a full idempotent rebuild.
+        progress(message=f"clustering + rolling up all grains (viewing {grain})")
+        cluster_and_name_pipeline(conn, model, resolver, progress=progress)
     finally:
         conn.close()

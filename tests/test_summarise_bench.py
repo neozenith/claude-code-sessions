@@ -73,6 +73,14 @@ def test_gguf_path_and_inventory(tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     assert inv["Qwen3.5-2B"] is False
 
 
+def test_model_n_ctx_caps_gemma_4_12b_below_its_decode_ceiling() -> None:
+    """gemma-4-12B can't decode at the default 65536 (rc=-3); it must load at ≤49152.
+    Other models keep the default."""
+    assert bench.model_n_ctx("gemma-4-12B") <= 49152
+    assert bench.model_n_ctx("gemma-4-12B") < bench.DEFAULT_N_CTX
+    assert bench.model_n_ctx("Qwen3.5-2B") == bench.DEFAULT_N_CTX
+
+
 def test_manifest_grid_is_models_x_strategies_x_grains(tmp_path: Path) -> None:
     results = tmp_path / "results"
     results.mkdir()

@@ -20,6 +20,7 @@ from claude_code_sessions.config import (
 )
 from claude_code_sessions.database.raw_json import read_jsonl_line
 from claude_code_sessions.database.sqlite.cache import CacheManager, _delta_ms
+from claude_code_sessions.database.sqlite.claim_clustering import assemble_cluster_tree
 from claude_code_sessions.database.sqlite.embeddings import (
     EMBED_MAX_CHARS,
     EMBEDDED_MSG_KINDS,
@@ -685,10 +686,10 @@ class SQLiteDatabase:
     # -- Extractive set-union claims (CR5) -----------------------------------
 
     def list_claim_models(self) -> list[str]:
-        """Distinct models that have extractive claim roll-ups (CR5 explorer picker)."""
-        if not self._table_exists("rollup_claims"):
+        """Distinct models that have extractive claim roll-ups (CR5/CR6 explorer picker)."""
+        if not self._table_exists("rollup_clusters"):
             return []
-        rows = self._q("SELECT DISTINCT model FROM rollup_claims ORDER BY model")
+        rows = self._q("SELECT DISTINCT model FROM rollup_clusters ORDER BY model")
         return [r["model"] for r in rows]
 
     def _window_cutoff_bucket(self, grain: str, days: int | None) -> str | None:
@@ -706,9 +707,9 @@ class SQLiteDatabase:
         self, scope_path: str, grain: str, model: str, days: int | None = None
     ) -> list[dict[str, Any]]:
         """Time buckets present for a scope×grain×model, with claim + failure counts —
-        the explorer's bucket selector for one scope (CR5). ``days`` restricts to
+        the explorer's bucket selector for one scope (CR5/CR6). ``days`` restricts to
         buckets intersecting the last-N-days window."""
-        if not self._table_exists("rollup_claims"):
+        if not self._table_exists("rollup_clusters"):
             return []
         cutoff = self._window_cutoff_bucket(grain, days)
         window = " AND time_bucket >= ?" if cutoff else ""
@@ -717,7 +718,7 @@ class SQLiteDatabase:
             params.append(cutoff)
         rows = self._q(
             f"""SELECT time_bucket AS bucket, COUNT(*) AS n_claims, SUM(count) AS total_count
-               FROM rollup_claims
+               FROM rollup_clusters
                WHERE scope_path=? AND time_granularity=? AND model=?{window}
                GROUP BY time_bucket ORDER BY time_bucket DESC""",
             tuple(params),
@@ -725,48 +726,82 @@ class SQLiteDatabase:
         return rows
 
     @staticmethod
-    def _aggregate_claim_rows(rows: list[dict[str, Any]]) -> dict[str, list[dict[str, Any]]]:
-        """Set-union claim rows across buckets: group by (lens, normalised claim),
-        union provenance sessions, COUNT = distinct sessions (a session lives in one
-        bucket, so the union is exact). Ranked by count desc within each lens."""
-        # key = (lens, casefolded claim) — mirrors the exact stage of dedup_claims.
+    def _leaves_from_rows(
+        rows: list[dict[str, Any]], *, aggregate: bool
+    ) -> dict[str, list[dict[str, Any]]]:
+        """Build per-lens leaf-claim lists from ``rollup_clusters`` rows, carrying the fine
+        ``cluster_id`` tag through for tree assembly. ``aggregate`` (windowed view across
+        buckets) set-unions by (lens, normalised claim) — a session lives in one bucket so
+        the union is exact; a claim's cluster_id is stable so any row's tag is correct."""
+        lenses: dict[str, list[dict[str, Any]]] = {k: [] for k in LENS_LIST_KEYS}
+        if not aggregate:
+            for r in rows:
+                lenses.setdefault(r["lens"], []).append(
+                    {"claim": r["claim"], "count": int(r["count"]),
+                     "sessions": json.loads(r["source_session_ids"]),
+                     "cluster_id": int(r["cluster_id"])}
+                )
+            return lenses
         agg: dict[tuple[str, str], dict[str, Any]] = {}
         for r in rows:
             key = (r["lens"], r["claim"].strip().casefold())
             sessions = json.loads(r["source_session_ids"])
             slot = agg.get(key)
             if slot is None:
-                agg[key] = {"lens": r["lens"], "claim": r["claim"],
-                            "count": int(r["count"]), "sessions": set(sessions)}
+                agg[key] = {"lens": r["lens"], "claim": r["claim"], "count": int(r["count"]),
+                            "sessions": set(sessions), "cluster_id": int(r["cluster_id"])}
             else:
-                # Keep the text of the higher-count variant as the representative.
-                if int(r["count"]) > slot["count"]:
+                if int(r["count"]) > slot["count"]:  # keep the higher-count text variant
                     slot["claim"] = r["claim"]
                 slot["sessions"].update(sessions)
-        lenses: dict[str, list[dict[str, Any]]] = {k: [] for k in LENS_LIST_KEYS}
         for slot in agg.values():
             sessions = sorted(slot["sessions"])
             lenses.setdefault(slot["lens"], []).append(
-                {"claim": slot["claim"], "count": len(sessions), "sessions": sessions}
+                {"claim": slot["claim"], "count": len(sessions), "sessions": sessions,
+                 "cluster_id": slot["cluster_id"]}
             )
-        for items in lenses.values():
-            items.sort(key=lambda c: (-c["count"], c["claim"]))
         return lenses
+
+    def _cluster_taxonomy(
+        self, model: str
+    ) -> tuple[dict[str, tuple[int, int]], dict[tuple[str, int], dict[int, dict[str, Any]]]]:
+        """Load the global cluster taxonomy for ``model``: ``meta[lens] = (fine, coarse)``
+        surfaced-layer indices, and ``by_layer[(lens, layer)][cid] = {name, parent}``."""
+        meta: dict[str, tuple[int, int]] = {}
+        if self._table_exists("claim_cluster_meta"):
+            for r in self._q(
+                "SELECT lens, fine_layer, coarse_layer FROM claim_cluster_meta WHERE model=?",
+                (model,),
+            ):
+                meta[r["lens"]] = (int(r["fine_layer"]), int(r["coarse_layer"]))
+        by_layer: dict[tuple[str, int], dict[int, dict[str, Any]]] = {}
+        if self._table_exists("claim_clusters"):
+            for r in self._q(
+                "SELECT lens, layer, cluster_id, parent_cluster_id, name "
+                "FROM claim_clusters WHERE model=?",
+                (model,),
+            ):
+                parent_raw = r["parent_cluster_id"]
+                by_layer.setdefault((r["lens"], int(r["layer"])), {})[int(r["cluster_id"])] = {
+                    "name": r["name"],
+                    "parent": None if parent_raw is None else int(parent_raw),
+                }
+        return meta, by_layer
 
     def get_claim_rollup(
         self, scope_path: str, grain: str, bucket: str, model: str, days: int | None = None
     ) -> dict[str, Any]:
-        """The extractive roll-up for a scope×grain: each lens's claims ranked by COUNT
-        (salience) with provenance, plus the parallel failure count (CR5).
+        """The clustered roll-up for a scope×grain: each lens is a coarse→fine→leaf tree of
+        named EVoC clusters (salience COUNT + provenance), plus the parallel failure count.
 
         ``bucket`` empty = **all claims at this grain**, set-unioned across every bucket
         intersecting the last-``days``-days window (the default explorer view). A specific
         ``bucket`` is a deliberate drill-down and wins over the window. Returns
         ``status='not_summarised'`` when nothing is present (never fabricates)."""
-        if not self._table_exists("rollup_claims"):
+        if not self._table_exists("rollup_clusters"):
             return {"status": "not_summarised", "scope_path": scope_path, "grain": grain,
                     "bucket": bucket, "model": model, "lenses": {}, "failure_count": 0,
-                    "failed_sessions": []}
+                    "failed_sessions": [], "session_projects": {}}
         if bucket:
             # Drill-down: one exact bucket (the window does not apply).
             bucket_clause, bparams = "AND time_bucket=?", [bucket]
@@ -775,21 +810,26 @@ class SQLiteDatabase:
             bucket_clause = "AND time_bucket >= ?" if cutoff else ""
             bparams = [cutoff] if cutoff else []
         rows = self._q(
-            f"""SELECT lens, claim_index, claim, count, source_session_ids
-               FROM rollup_claims
+            f"""SELECT lens, claim_index, claim, count, cluster_id, source_session_ids
+               FROM rollup_clusters
                WHERE scope_path=? AND time_granularity=? AND model=? {bucket_clause}
                ORDER BY lens, claim_index""",
             (scope_path, grain, model, *bparams),
         )
-        if bucket:
-            lenses: dict[str, list[dict[str, Any]]] = {k: [] for k in LENS_LIST_KEYS}
-            for r in rows:
-                lenses.setdefault(r["lens"], []).append(
-                    {"claim": r["claim"], "count": r["count"],
-                     "sessions": json.loads(r["source_session_ids"])}
-                )
-        else:
-            lenses = self._aggregate_claim_rows(rows)
+        leaves_by_lens = self._leaves_from_rows(rows, aggregate=not bucket)
+        meta, by_layer = self._cluster_taxonomy(model)
+        lenses: dict[str, list[dict[str, Any]]] = {}
+        for lens in LENS_LIST_KEYS:
+            fine_layer, coarse_layer = meta.get(lens, (0, 0))
+            fine_clusters = by_layer.get((lens, fine_layer), {})
+            coarse_names = {
+                cid: c["name"] for cid, c in by_layer.get((lens, coarse_layer), {}).items()
+            }
+            lenses[lens] = assemble_cluster_tree(
+                leaves_by_lens.get(lens, []),
+                fine_layer=fine_layer, coarse_layer=coarse_layer,
+                fine_clusters=fine_clusters, coarse_names=coarse_names,
+            )
         failure_count = 0
         failed: set[str] = set()
         if self._table_exists("rollup_claim_failures"):
@@ -801,29 +841,98 @@ class SQLiteDatabase:
                 failed.update(json.loads(frow[1]))
             failure_count = len(failed)
         failed_sessions = sorted(failed)
+        # Provenance session_ids carry no project_id, but SessionDetail lives at
+        # /sessions/:projectId/:sessionId — so resolve each referenced session to its
+        # project for working back-links (a session_id maps to exactly one project). The
+        # leaf claims (pre-assembly) carry every referenced session across the trees.
+        referenced = {
+            s for leaves in leaves_by_lens.values() for leaf in leaves for s in leaf["sessions"]
+        }
+        referenced.update(failed_sessions)
+        session_projects = self._session_project_map(referenced)
         status = "summarised" if rows or failure_count else "not_summarised"
         return {
             "status": status, "scope_path": scope_path, "grain": grain, "bucket": bucket,
             "model": model, "lenses": lenses,
             "failure_count": failure_count, "failed_sessions": failed_sessions,
+            "session_projects": session_projects,
         }
+
+    def _session_project_map(self, session_ids: set[str]) -> dict[str, str]:
+        """Resolve ``session_id → project_id`` for the given sessions (for SessionDetail
+        back-links). Queries the full ``source_files`` map rather than an IN-list to
+        dodge SQLite's 999-variable limit on a root/all-time roll-up with thousands of
+        sessions; the result is filtered to the referenced set."""
+        if not session_ids or not self._table_exists("source_files"):
+            return {}
+        return {
+            r["session_id"]: r["project_id"]
+            for r in self._q(
+                "SELECT DISTINCT session_id, project_id FROM source_files "
+                "WHERE session_id IS NOT NULL"
+            )
+            if r["session_id"] in session_ids
+        }
+
+    def get_session_claim_models(self, project_id: str, session_id: str) -> list[str]:
+        """Models that have actually processed THIS session — extracted claims or
+        recorded a failure for it (CR5). SessionDetail defaults its claims/memberships
+        view to one of these, rather than the global alphabetical-first model (which may
+        have no data for the session and render an empty 'not linking anywhere' card)."""
+        models: set[str] = set()
+        for table in ("session_claims", "session_claim_failures"):
+            if self._table_exists(table):
+                models.update(
+                    r["model"]
+                    for r in self._q(
+                        f"SELECT DISTINCT model FROM {table} "  # noqa: S608 — fixed table names
+                        "WHERE project_id=? AND session_id=?",
+                        (project_id, session_id),
+                    )
+                )
+        return sorted(models)
 
     def get_session_claims(
         self, project_id: str, session_id: str, model: str
     ) -> dict[str, Any]:
-        """One session's L1 extracted claims per lens, or its recorded failure (CR5)."""
+        """One session's L1 extracted claims per lens (each tagged with the fine cluster it
+        belongs to, CR6), or its recorded failure (CR5)."""
         out: dict[str, Any] = {
             "project_id": project_id, "session_id": session_id, "model": model,
             "lenses": {k: [] for k in LENS_LIST_KEYS},
             "failure": None,
         }
         if self._table_exists("session_claims"):
-            for r in self._q(
-                """SELECT lens, claim FROM session_claims
-                   WHERE project_id=? AND session_id=? AND model=? ORDER BY lens, claim_index""",
-                (project_id, session_id, model),
-            ):
-                out["lenses"].setdefault(r["lens"], []).append(r["claim"])
+            # Enrich each claim with its fine-layer cluster (name) when the taxonomy exists,
+            # so SessionDetail can show "this claim → cluster X". LEFT JOINs keep claims
+            # whose cluster isn't built yet (cluster_name NULL).
+            enriched = self._table_exists("claim_cluster_membership")
+            sql = (
+                """SELECT sc.lens AS lens, sc.claim AS claim,
+                          m.cluster_id AS cluster_id, cc.name AS cluster_name
+                   FROM session_claims sc
+                   LEFT JOIN claim_cluster_meta cm
+                          ON cm.model=sc.model AND cm.lens=sc.lens
+                   LEFT JOIN claim_cluster_membership m
+                          ON m.model=sc.model AND m.lens=sc.lens
+                         AND m.claim_id=sc.rowid AND m.layer=cm.fine_layer
+                   LEFT JOIN claim_clusters cc
+                          ON cc.model=sc.model AND cc.lens=sc.lens
+                         AND cc.layer=cm.fine_layer AND cc.cluster_id=m.cluster_id
+                   WHERE sc.project_id=? AND sc.session_id=? AND sc.model=?
+                   ORDER BY sc.lens, sc.claim_index"""
+                if enriched
+                else """SELECT lens, claim, NULL AS cluster_id, NULL AS cluster_name
+                        FROM session_claims
+                        WHERE project_id=? AND session_id=? AND model=?
+                        ORDER BY lens, claim_index"""
+            )
+            for r in self._q(sql, (project_id, session_id, model)):
+                out["lenses"].setdefault(r["lens"], []).append(
+                    {"claim": r["claim"],
+                     "cluster_id": None if r["cluster_id"] is None else int(r["cluster_id"]),
+                     "cluster_name": r["cluster_name"]}
+                )
         if self._table_exists("session_claim_failures"):
             frow = self._cache.conn.execute(
                 """SELECT reason, raw_excerpt FROM session_claim_failures
@@ -838,13 +947,14 @@ class SQLiteDatabase:
         self, project_id: str, session_id: str, model: str
     ) -> list[dict[str, Any]]:
         """Reverse provenance: which roll-up buckets this session contributes to —
-        the SessionDetail cross-reference (CR5). Uses json_each over source_session_ids."""
-        if not self._table_exists("rollup_claims"):
+        the SessionDetail cross-reference (CR5/CR6). Uses json_each over
+        source_session_ids."""
+        if not self._table_exists("rollup_clusters"):
             return []
         return self._q(
             """SELECT scope_path, scope_depth, time_granularity AS grain, time_bucket AS bucket,
                       COUNT(*) AS n_claims
-               FROM rollup_claims rc, json_each(rc.source_session_ids)
+               FROM rollup_clusters rc, json_each(rc.source_session_ids)
                WHERE rc.model=? AND json_each.value=?
                GROUP BY scope_path, time_granularity, time_bucket
                ORDER BY scope_depth, scope_path, grain, bucket""",
@@ -972,8 +1082,9 @@ class SQLiteDatabase:
         on-disk chat-model registry (so Llama-3.1-8B etc. are selectable to trigger).
         ``has_claims`` flags which already have extracted data (CR5)."""
         have = (
-            [r["model"] for r in self._q("SELECT DISTINCT model FROM rollup_claims ORDER BY model")]
-            if self._table_exists("rollup_claims")
+            [r["model"]
+             for r in self._q("SELECT DISTINCT model FROM rollup_clusters ORDER BY model")]
+            if self._table_exists("rollup_clusters")
             else []
         )
         registry: list[str] = []
@@ -1036,12 +1147,12 @@ class SQLiteDatabase:
             {
                 (r["scope_path"], r["bucket"]): r["n"]
                 for r in self._q(
-                    """SELECT scope_path, time_bucket AS bucket, COUNT(*) AS n FROM rollup_claims
+                    """SELECT scope_path, time_bucket AS bucket, COUNT(*) AS n FROM rollup_clusters
                        WHERE model=? AND time_granularity=? GROUP BY scope_path, time_bucket""",
                     (model, grain),
                 )
             }
-            if self._table_exists("rollup_claims")
+            if self._table_exists("rollup_clusters")
             else {}
         )
         failed = (
@@ -1070,6 +1181,93 @@ class SQLiteDatabase:
             "model": model, "grain": grain,
             "scopes": scopes, "buckets": sorted(buckets_seen), "cells": cells,
         }
+
+    def get_claim_failure_analysis(
+        self, model: str | None = None, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Distil systematic failure modes from the parallel failure stream (CR5).
+
+        Every recorded session-extraction failure is categorised into the fixed
+        ``FAILURE_CATEGORIES`` taxonomy, with counts, a representative reason + the tail
+        of a sample truncated output, and up to a few sample sessions to drill into — so
+        a run's failures roll up into *actionable modes* (e.g. "12 truncated_json") rather
+        than a pile of one-off exception strings. Optional ``model``/``scope``/``days``
+        match the explorer's filters."""
+        from claude_code_sessions.database.sqlite.claims import (
+            FAILURE_CATEGORIES,
+            categorise_claim_failure,
+        )
+
+        empty: dict[str, Any] = {"model": model, "total": 0, "categories": [], "by_model": {}}
+        if not self._table_exists("session_claim_failures"):
+            return empty
+
+        dc = days_clause(days, col="timestamp")
+        in_window = (
+            f"""AND session_id IN (SELECT session_id FROM events
+                   WHERE msg_kind='human' AND session_id IS NOT NULL {dc})"""
+            if dc
+            else ""
+        )
+        sql = (
+            "SELECT project_id, session_id, model, reason, raw_excerpt "
+            f"FROM session_claim_failures WHERE 1=1 {in_window}"
+        )
+        params: list[Any] = []
+        if model:
+            sql += " AND model = ?"
+            params.append(model)
+        rows = self._q(sql, tuple(params))
+
+        resolver: ProjectResolver | None = None
+        if scope:
+            try:
+                resolver = ProjectResolver(self.projects_path)
+            except (FileNotFoundError, ValueError):
+                resolver = None
+
+        def _in_scope(pid: str) -> bool:
+            if not scope:
+                return True
+            if resolver is None:
+                return False
+            try:
+                return scope in ancestor_scopes(resolver, pid)
+            except (KeyError, ValueError):
+                return False
+
+        cat_rows: dict[str, list[dict[str, Any]]] = {c: [] for c in FAILURE_CATEGORIES}
+        by_model: dict[str, int] = {}
+        total = 0
+        for r in rows:
+            if not _in_scope(r["project_id"]):
+                continue
+            cat = categorise_claim_failure(r["reason"], r["raw_excerpt"])
+            cat_rows.setdefault(cat, []).append(r)
+            by_model[r["model"]] = by_model.get(r["model"], 0) + 1
+            total += 1
+
+        categories: list[dict[str, Any]] = []
+        for cat in FAILURE_CATEGORIES:
+            items = cat_rows.get(cat, [])
+            if not items:
+                continue
+            sample = items[0]
+            tail = sample["raw_excerpt"][-160:]
+            categories.append(
+                {
+                    "category": cat,
+                    "count": len(items),
+                    "pct": round(100 * len(items) / total, 1) if total else 0.0,
+                    "sample_reason": sample["reason"][:200],
+                    "sample_excerpt_tail": tail,
+                    "sample_sessions": [
+                        {"project_id": it["project_id"], "session_id": it["session_id"]}
+                        for it in items[:5]
+                    ],
+                }
+            )
+        return {"model": model, "total": total, "categories": categories, "by_model": by_model}
 
     def get_session_metrics(self, project_id: str, session_id: str) -> list[dict[str, Any]]:
         """Per-turn idle timing for a session's main thread.

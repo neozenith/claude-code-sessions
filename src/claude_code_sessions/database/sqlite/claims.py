@@ -1,16 +1,18 @@
-"""CR5 extractive set-union summariser — L1 claim extraction + L2 set-union rollup.
+"""CR5/CR6 extractive summariser — L1 claim extraction + the parallel failure stream.
 
 The abstractive path (``summaries.py`` + ``merge.py``) rewrites child summaries into
 new prose at every tier, which drifts and forces exactly one item per lens. This
 module is the **extractive** alternative:
 
-* **L1** (``extract_session_claims``) — each session's human prompts → three LISTS of
-  atomic claims (``tasks`` / ``patterns`` / ``decisions_values``), 0..N each (empty is
-  valid), one row per claim in ``session_claims``.
-* **L2+** (``set_union_rollup``) — every coarser scope×grain is the **union** of its
-  descendants' claims, deduped (tiered: exact → embedding-cosine), with a **COUNT**
-  per cluster (salience = how many sessions expressed it) and provenance. No
-  re-summarisation; union is associative so it is correct at any depth.
+* **L1** (``extract_session_claims``) — each session's human prompts → four LISTS of
+  atomic claims (``tasks`` / ``patterns`` / ``decisions_values`` / ``learnings``), 0..N
+  each (empty is valid), one row per claim in ``session_claims``.
+* **Failure stream** (``rollup_failures``) — L1 parse failures are recorded as
+  first-class data and rolled up per scope×grain, parallel to the claims roll-up.
+
+The **L2 reduce** lives in ``claim_clustering.py`` now (CR6 EVoC clustering →
+``rollup_clusters``); the original CR5 ``set_union_rollup`` greedy-cosine reducer is
+retired — see the note above ``rollup_failures`` and ``tmp/archived/``.
 
 Built additively beside the abstractive tables — nothing here mutates them.
 """
@@ -20,17 +22,14 @@ from __future__ import annotations
 import hashlib
 import json
 import logging
-import math
-import re
 import sqlite3
 from collections import defaultdict
-from collections.abc import Callable, Sequence
 from datetime import UTC, datetime
 from typing import Protocol
 
 from claude_code_sessions.database.sqlite.summaries import (
     CLAIM_LENS_GBNF,
-    SUMMARY_MAX_TOKENS,
+    CLAIM_LENS_MAX_TOKENS,
     _gather_human_text,
     _resolve_scopes,
 )
@@ -149,7 +148,7 @@ class MuninnClaimsEngine:
     def extract(self, model: str, prompt: str) -> str:
         row = self._conn.execute(
             "SELECT muninn_chat(?, ?, ?, ?)",
-            (model, prompt, CLAIM_LENS_GBNF, SUMMARY_MAX_TOKENS),
+            (model, prompt, CLAIM_LENS_GBNF, CLAIM_LENS_MAX_TOKENS),
         ).fetchone()
         return str(row[0]) if row is not None and row[0] is not None else ""
 
@@ -160,6 +159,61 @@ def _content_hash(human_texts: list[str]) -> str:
         digest.update(text.encode("utf-8"))
         digest.update(b"\x00")
     return digest.hexdigest()
+
+
+# Failure taxonomy (CR5 distillation). A fixed, ordered set of categories so the
+# failure stream's freeform exception strings roll up into systematic modes the
+# operator can act on — rather than counting one-off messages. Derived purely from the
+# recorded ``reason`` + ``raw_excerpt`` (no schema change; classifies existing rows too).
+FAILURE_CATEGORIES = (
+    "truncated_json",  # well-formed prefix cut off mid-structure → output cap too small
+    "malformed_json",  # JSON syntax error mid-stream (often truncation-adjacent)
+    "missing_lens_key",  # parsed object lacks one of the four lens keys
+    "non_array_lens",  # a lens value was a string/obj, not the required array
+    "empty_or_refusal",  # model emitted nothing parseable / a prose refusal, no JSON
+    "context_overflow",  # muninn_chat decode failure (prompt too long / model ctx limit)
+    "other",  # uncategorised — a new mode worth a human look
+)
+
+
+def _is_decode_error(exc: Exception) -> bool:
+    """True for a ``muninn_chat`` decode failure (e.g. ``prompt decode failed (rc=-3)``)
+    — distinct from a real DB error like ``database is locked``. Used to route an
+    over-long prompt into the split-and-union retry instead of crashing the run."""
+    msg = str(exc).lower()
+    return "muninn_chat" in msg or "decode failed" in msg
+
+
+def categorise_claim_failure(reason: str, raw_excerpt: str) -> str:
+    """Map a recorded failure (``reason`` exception string + ``raw_excerpt``) to one of
+    :data:`FAILURE_CATEGORIES`. Pure + deterministic so it classifies historical rows.
+
+    The discriminator between *truncation* and *no output* is the excerpt: a balanced
+    open brace with array content that never closes is truncation (the dominant mode,
+    fixed by a larger output cap / split-and-union); an empty/short non-JSON excerpt is
+    an empty response or refusal."""
+    r = reason.lower()
+    if "muninn_chat" in r or "decode failed" in r:
+        return "context_overflow"
+    if "must be a json array" in r:
+        return "non_array_lens"
+    if "missing lens keys" in r:
+        return "missing_lens_key"
+    excerpt = raw_excerpt.strip()
+    if "no balanced json object found" in r:
+        # Truncation vs genuinely-no-JSON: did the model start emitting the object?
+        if "{" in excerpt and ('"' in excerpt or "[" in excerpt):
+            return "truncated_json"
+        return "empty_or_refusal"
+    # json.JSONDecodeError messages (a ValueError subclass).
+    if any(
+        s in r
+        for s in ("expecting", "unterminated", "delimiter", "invalid control", "extra data")
+    ):
+        return "truncated_json" if "unterminated" in r else "malformed_json"
+    if not excerpt:
+        return "empty_or_refusal"
+    return "other"
 
 
 def _record_failure(
@@ -179,6 +233,74 @@ def _record_failure(
         (project_id, session_id, model, reason, raw[:2000], content_hash,
          datetime.now(UTC).isoformat()),
     )
+
+
+def _clear_session_claims(
+    conn: sqlite3.Connection, project_id: str, session_id: str, model: str
+) -> None:
+    conn.execute(
+        "DELETE FROM session_claims WHERE project_id = ? AND session_id = ? AND model = ?",
+        (project_id, session_id, model),
+    )
+
+
+# Below this prompt size a parse failure is treated as a *genuine* failure, not
+# truncation — there's nothing left to usefully split, so we stop and record it.
+_MIN_SPLIT_CHARS = 400
+
+
+def _split_for_retry(texts: list[str]) -> tuple[list[str], list[str]] | None:
+    """Halve a batch for the truncation retry, returning ``None`` when it can't be
+    split usefully (→ a genuine, non-truncation failure).
+
+    Two cases: a multi-prompt session splits **by prompt count**; a single over-long
+    prompt splits **internally** at a newline near its midpoint (so each half is
+    independently extractable). The single-prompt case is essential — splitting only by
+    count bottoms out at one dense prompt that alone overflows the cap, which is exactly
+    the residual failure mode the count-split couldn't fix."""
+    if len(texts) > 1:
+        mid = len(texts) // 2
+        return texts[:mid], texts[mid:]
+    text = texts[0]
+    if len(text) < _MIN_SPLIT_CHARS:
+        return None
+    mid = len(text) // 2
+    cut = text.find("\n", mid)  # prefer a line boundary at/after the midpoint
+    if cut == -1 or cut >= len(text) - 1:
+        cut = text.rfind("\n", 0, mid)  # else the last boundary before it
+    if cut <= 0:
+        cut = mid  # no newline at all — hard split (rare; a single huge line)
+    left, right = text[:cut].strip(), text[cut:].strip()
+    if not left or not right:
+        return None
+    return [left], [right]
+
+
+def _extract_lens_lists(
+    engine: ClaimsEngine, model: str, texts: list[str]
+) -> dict[str, list[str]]:
+    """Extract claim lists for ``texts``, splitting on parse failure.
+
+    Two failure modes route to the same split-and-union recovery: **output truncation**
+    (the GBNF grammar guarantees a well-formed *prefix*, so hitting the token cap leaves
+    an unbalanced object ``parse_lens_lists`` rejects) and **input overflow** (a prompt
+    too long for n_ctx → ``muninn_chat`` decode failure). Because extractive claims
+    compose by **set-union**, a session's claims equal the union of its sub-batches' — so
+    we halve (:func:`_split_for_retry`) and union, recursing until the input is too small
+    to split (then a still-failing extract is a *genuine* failure that propagates). A
+    non-decode ``OperationalError`` (e.g. a locked DB) is re-raised untouched."""
+    prompt = _CLAIMS_PROMPT_HEADER + "\n\n".join(texts)
+    try:
+        return parse_lens_lists(engine.extract(model, prompt))
+    except (ValueError, KeyError, sqlite3.OperationalError) as exc:
+        if isinstance(exc, sqlite3.OperationalError) and not _is_decode_error(exc):
+            raise  # a real DB error, not an over-long-prompt decode failure
+        halves = _split_for_retry(texts)
+        if halves is None:
+            raise  # cannot split further — a real failure, not truncation/overflow
+        left = _extract_lens_lists(engine, model, halves[0])
+        right = _extract_lens_lists(engine, model, halves[1])
+        return {k: [*left.get(k, []), *right.get(k, [])] for k in LENS_LIST_KEYS}
 
 
 def extract_session_claims(
@@ -208,29 +330,45 @@ def extract_session_claims(
         return 0  # cache hit — claims already current for this content+model
 
     prompt = _CLAIMS_PROMPT_HEADER + "\n\n".join(human_texts)
-    raw = engine.extract(model, prompt)
+    raw = ""  # may stay empty if the extract itself fails (decode/overflow, no output)
     try:
+        raw = engine.extract(model, prompt)
         lens_lists = parse_lens_lists(raw)
-    except (ValueError, KeyError) as exc:
-        # Record the failure as a first-class parallel-stream row (not silent loss),
-        # clear any stale claims, then re-raise so the caller still counts it.
-        _record_failure(conn, project_id, session_id, model, str(exc), raw, content_hash)
-        conn.execute(
-            "DELETE FROM session_claims WHERE project_id = ? AND session_id = ? AND model = ?",
-            (project_id, session_id, model),
-        )
-        conn.commit()
-        raise
+    except (ValueError, KeyError, sqlite3.OperationalError) as exc:
+        # Two recoverable modes: output truncation (parse error on a claim-dense session)
+        # and input overflow (muninn decode failure when the prompt exceeds n_ctx). Both
+        # retry via split-and-union — a session's claims are the set-union of its
+        # sub-batches'. A non-decode OperationalError (e.g. a locked DB) is re-raised.
+        # The original top-level ``raw`` is recorded on a hard failure (its tail makes the
+        # mode diagnosable; empty when the extract never returned).
+        if isinstance(exc, sqlite3.OperationalError) and not _is_decode_error(exc):
+            raise
+        halves = _split_for_retry(human_texts)
+        if halves is None:
+            _record_failure(conn, project_id, session_id, model, str(exc), raw, content_hash)
+            _clear_session_claims(conn, project_id, session_id, model)
+            conn.commit()
+            raise
+        try:
+            left = _extract_lens_lists(engine, model, halves[0])
+            right = _extract_lens_lists(engine, model, halves[1])
+            lens_lists = {k: [*left.get(k, []), *right.get(k, [])] for k in LENS_LIST_KEYS}
+        except (ValueError, KeyError, sqlite3.OperationalError) as split_exc:
+            if isinstance(split_exc, sqlite3.OperationalError) and not _is_decode_error(split_exc):
+                raise
+            _record_failure(
+                conn, project_id, session_id, model, str(split_exc), raw, content_hash
+            )
+            _clear_session_claims(conn, project_id, session_id, model)
+            conn.commit()
+            raise
 
     # Success — clear any prior failure row + stale claims, then insert fresh claims.
     conn.execute(
         "DELETE FROM session_claim_failures WHERE project_id = ? AND session_id = ? AND model = ?",
         (project_id, session_id, model),
     )
-    conn.execute(
-        "DELETE FROM session_claims WHERE project_id = ? AND session_id = ? AND model = ?",
-        (project_id, session_id, model),
-    )
+    _clear_session_claims(conn, project_id, session_id, model)
     now = datetime.now(UTC).isoformat()
     written = 0
     for lens in LENS_LIST_KEYS:
@@ -250,162 +388,16 @@ def extract_session_claims(
     return written
 
 
-# --- L2: set-union rollup with tiered dedup --------------------------------
-
-EmbedFn = Callable[[str], Sequence[float]]
-_WS = re.compile(r"\s+")
-
-
-def _normalize(text: str) -> str:
-    """Casefold + whitespace-collapse — the key for the cheap exact-match tier."""
-    return _WS.sub(" ", text.strip().casefold())
-
-
-def _cosine(a: Sequence[float], b: Sequence[float]) -> float:
-    dot = sum(x * y for x, y in zip(a, b, strict=False))
-    na = math.sqrt(sum(x * x for x in a))
-    nb = math.sqrt(sum(y * y for y in b))
-    return dot / (na * nb) if na and nb else 0.0
-
-
-class ClaimCluster:
-    """A deduped claim: a representative text, its salience COUNT (distinct sessions),
-    and the provenance session ids."""
-
-    __slots__ = ("claim", "sessions")
-
-    def __init__(self, claim: str) -> None:
-        self.claim = claim
-        self.sessions: set[str] = set()
-
-    @property
-    def count(self) -> int:
-        return len(self.sessions)
-
-
-def dedup_claims(
-    items: list[tuple[str, str]],
-    embed: EmbedFn | None = None,
-    cosine_threshold: float = 0.86,
-) -> list[ClaimCluster]:
-    """Set-union dedup of ``(claim_text, session_id)`` pairs into ranked clusters.
-
-    Tiered cascade (cheap → expensive), mirroring ``muninn_extract_er``'s philosophy:
-      1. **exact** — casefold/whitespace-normalised identical claims merge for free;
-      2. **cosine** — if ``embed`` is given, near-duplicate exact-groups whose
-         embeddings exceed ``cosine_threshold`` merge (greedy, popular anchors first).
-    COUNT is the number of **distinct sessions** expressing the cluster (salience),
-    not raw occurrences. Returns clusters sorted by count desc, then claim text.
-    (An optional LLM-judge tier for the borderline band is a future enhancement.)
-    """
-    # Tier 1 — exact-normalised grouping. Representative = first-seen original text.
-    by_norm: dict[str, ClaimCluster] = {}
-    for claim, session_id in items:
-        key = _normalize(claim)
-        if not key:
-            continue
-        cluster = by_norm.get(key)
-        if cluster is None:
-            cluster = ClaimCluster(claim)
-            by_norm[key] = cluster
-        cluster.sessions.add(session_id)
-    clusters = list(by_norm.values())
-
-    # Tier 2 — embedding-cosine merge of near-duplicate exact-groups.
-    if embed is not None and len(clusters) > 1:
-        clusters.sort(key=lambda c: (-c.count, c.claim))  # popular claims anchor
-        vectors = {c.claim: embed(c.claim) for c in clusters}
-        merged: list[ClaimCluster] = []
-        for cluster in clusters:
-            vec = vectors[cluster.claim]
-            target = next(
-                (m for m in merged if _cosine(vectors[m.claim], vec) >= cosine_threshold),
-                None,
-            )
-            if target is None:
-                merged.append(cluster)
-            else:
-                target.sessions |= cluster.sessions
-        clusters = merged
-
-    clusters.sort(key=lambda c: (-c.count, c.claim))
-    return clusters
-
-
-def set_union_rollup(
-    conn: sqlite3.Connection,
-    model: str,
-    granularity: str,
-    resolver: ProjectResolver,
-    *,
-    strategy: str = "setunion",
-    embed: EmbedFn | None = None,
-    cosine_threshold: float = 0.86,
-    top_n: int | None = None,
-) -> int:
-    """L2+ extractive rollup: union descendant ``session_claims`` at every scope×bucket,
-    dedup+count per lens, write ``rollup_claims``. Returns rows written.
-
-    Associative union → each scope unions ALL descendant sessions directly (no tiered
-    child-rollup walk needed). Bucketed on each session's earliest event timestamp.
-    """
-    ensure_claims_schema(conn)
-    bucket_sql = bucket_expr(granularity, "MIN(e.timestamp)")
-    rows = conn.execute(
-        f"""
-        SELECT sc.project_id AS project_id, sc.session_id AS session_id,
-               sc.lens AS lens, sc.claim AS claim, sc.content_hash AS content_hash,
-               {bucket_sql} AS bucket
-        FROM session_claims sc
-        JOIN events e ON e.project_id = sc.project_id AND e.session_id = sc.session_id
-        WHERE sc.model = ? AND e.timestamp IS NOT NULL
-        GROUP BY sc.project_id, sc.session_id, sc.lens, sc.claim
-        """,
-        (model,),
-    ).fetchall()
-
-    # Group claims under every ancestor scope × bucket × lens; track contributing
-    # (session_id, content_hash) for the freshness source_hash.
-    # key (scope, bucket, lens) -> [(claim, session_id)]
-    groups: dict[tuple[str, str, str], list[tuple[str, str]]] = defaultdict(list)
-    # key (scope, bucket) -> {(session_id, content_hash)}
-    src: dict[tuple[str, str], set[tuple[str, str]]] = defaultdict(set)
-    for r in rows:
-        resolved = _resolve_scopes(resolver, r["project_id"])
-        if resolved is None:
-            continue
-        _leaf, ancestors = resolved
-        bucket = str(r["bucket"])
-        for scope in ancestors:
-            groups[(scope, bucket, str(r["lens"]))].append((str(r["claim"]), str(r["session_id"])))
-            src[(scope, bucket)].add((str(r["session_id"]), str(r["content_hash"])))
-
-    now = datetime.now(UTC).isoformat()
-    written = 0
-    for (scope, bucket, lens), items in groups.items():
-        clusters = dedup_claims(items, embed=embed, cosine_threshold=cosine_threshold)
-        if top_n is not None:
-            clusters = clusters[:top_n]
-        source_hash = hashlib.sha256(
-            "\x00".join(f"{sid}:{h}" for sid, h in sorted(src[(scope, bucket)])).encode()
-        ).hexdigest()
-        depth = 0 if scope == "" else scope.count("/") + 1
-        for idx, cluster in enumerate(clusters):
-            conn.execute(
-                """INSERT OR REPLACE INTO rollup_claims
-                       (strategy, model, scope_path, scope_depth, time_granularity,
-                        time_bucket, lens, claim_index, claim, count,
-                        source_session_ids, source_hash, generated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""",
-                (
-                    strategy, model, scope, depth, granularity, bucket, lens, idx,
-                    cluster.claim, cluster.count,
-                    json.dumps(sorted(cluster.sessions)), source_hash, now,
-                ),
-            )
-            written += 1
-    conn.commit()
-    return written
+# --- L2: the set-union/greedy-cosine reducer is RETIRED (CR6) --------------
+#
+# ``dedup_claims`` + ``set_union_rollup`` (exact-normalised grouping + a single-pass GREEDY
+# cosine merge → ``rollup_claims``) are replaced by EVoC hierarchical clustering in
+# ``claim_clustering.py`` (``cluster_claims`` + ``cluster_rollup`` → ``rollup_clusters``).
+# The exact-normalised tier survives as the leaf dedup in ``cluster_rollup``; the greedy
+# cosine tier — which over-merged ``A~B~C`` chains and split near-dupes — is gone. The old
+# code is archived verbatim at ``tmp/archived/database/sqlite/claims_greedy_cosine.py``.
+# ``extract_session_claims`` (L1) and ``rollup_failures`` (the parallel failure stream)
+# below are unchanged.
 
 
 def rollup_failures(
@@ -416,8 +408,16 @@ def rollup_failures(
 ) -> int:
     """Roll up the failure stream parallel to claims: failed-session COUNT per
     scope×grain×bucket, with provenance. Returns rows written to rollup_claim_failures.
+
+    Full rebuild for ``(model, granularity)``: stale rows are deleted first, so once a
+    session's failure is fixed (its row cleared from ``session_claim_failures``) the
+    scope/bucket failure count drops to 0 instead of stranding a phantom count.
     """
     ensure_claims_schema(conn)
+    conn.execute(
+        "DELETE FROM rollup_claim_failures WHERE model = ? AND time_granularity = ?",
+        (model, granularity),
+    )
     bucket_sql = bucket_expr(granularity, "MIN(e.timestamp)")
     rows = conn.execute(
         f"""

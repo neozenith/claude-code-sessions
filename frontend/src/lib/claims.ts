@@ -1,4 +1,4 @@
-import type { Claim, CoverageCell, CoveragePivot } from '@/lib/api-client'
+import type { Claim, ClusterNode, CoverageCell, CoveragePivot } from '@/lib/api-client'
 
 /**
  * Pure data helpers for the Claims Explorer (CR5).
@@ -23,6 +23,16 @@ export const sortClaims = (claims: Claim[], sort: SortSpec): Claim[] => {
   return [...claims].sort((a, b) => {
     if (sort.field === 'count') return sign * (a.count - b.count)
     return sign * a.claim.localeCompare(b.claim)
+  })
+}
+
+/** Sort a lens's top-level cluster nodes (count = salience, or by cluster name).
+ * The `claim` field sorts nodes by their `name` (the cluster's common-thread label). */
+export const sortNodes = (nodes: ClusterNode[], sort: SortSpec): ClusterNode[] => {
+  const sign = sort.dir === 'asc' ? 1 : -1
+  return [...nodes].sort((a, b) => {
+    if (sort.field === 'count') return sign * (a.count - b.count)
+    return sign * a.name.localeCompare(b.name)
   })
 }
 

@@ -13,11 +13,12 @@ from pathlib import Path
 import pytest
 
 from claude_code_sessions.database.sqlite.claims import (
-    dedup_claims,
+    FAILURE_CATEGORIES,
+    _split_for_retry,
+    categorise_claim_failure,
     ensure_claims_schema,
     extract_session_claims,
     rollup_failures,
-    set_union_rollup,
 )
 from claude_code_sessions.database.sqlite.schema import SCHEMA_SQL
 from claude_code_sessions.project_resolver import ProjectResolver
@@ -72,27 +73,10 @@ class _FakeEngine:
         return self.reply
 
 
-# --- dedup (pure) ---------------------------------------------------------
-
-
-def test_dedup_exact_counts_distinct_sessions() -> None:
-    clusters = dedup_claims(
-        [("Refactor app.py", "s1"), ("refactor app.py", "s2"), ("Refactor app.py", "s1")]
-    )
-    assert len(clusters) == 1
-    assert clusters[0].count == 2  # distinct sessions s1,s2 (the repeat from s1 doesn't double)
-    assert clusters[0].sessions == {"s1", "s2"}
-
-
-def test_dedup_cosine_merges_paraphrases() -> None:
-    emb = {"add a flag": [1.0, 0.0], "add an option": [0.99, 0.14], "delete the cache": [0.0, 1.0]}
-    clusters = dedup_claims(
-        [("add a flag", "s1"), ("add an option", "s2"), ("delete the cache", "s3")],
-        embed=lambda t: emb[t],
-        cosine_threshold=0.9,
-    )
-    assert len(clusters) == 2  # the two paraphrases merged, 'delete' stayed separate
-    assert clusters[0].count == 2 and clusters[0].sessions == {"s1", "s2"}
+# NOTE: the L2 reducer moved from greedy-cosine dedup (dedup_claims / set_union_rollup,
+# archived under tmp/archived/) to EVoC clustering — see tests/test_claim_clustering.py for
+# cluster_claims / cluster_rollup coverage. This file keeps the still-current L1 extraction
+# + parallel failure-stream tests.
 
 
 # --- L1 extraction --------------------------------------------------------
@@ -118,43 +102,145 @@ def test_extract_writes_one_row_per_claim_empty_lens_no_rows() -> None:
     assert extract_session_claims(conn, DOGFOOD_PID, "s1", _FakeEngine(reply), "M") == 0
 
 
-# --- L2 set-union rollup --------------------------------------------------
+# --- failure taxonomy (CR5 distillation) ----------------------------------
 
 
-def test_set_union_rollup_counts_and_provenance(tmp_path: Path) -> None:
+def test_categorise_claim_failure_taxonomy() -> None:
+    # Truncation: started the object, never closed (the dominant mode).
+    assert (
+        categorise_claim_failure(
+            "no balanced JSON object found in model output", '{"tasks": ["a", "b'
+        )
+        == "truncated_json"
+    )
+    # No JSON at all (refusal / empty) → distinct from truncation.
+    assert (
+        categorise_claim_failure("no balanced JSON object found in model output", "I cannot help")
+        == "empty_or_refusal"
+    )
+    assert categorise_claim_failure("no balanced JSON object found", "") == "empty_or_refusal"
+    # Missing a lens key vs a non-array lens value.
+    assert (
+        categorise_claim_failure("\"model output JSON missing lens keys ['learnings']\"", "{...}")
+        == "missing_lens_key"
+    )
+    assert (
+        categorise_claim_failure("lens 'tasks' must be a JSON array of claims, got str", "{...}")
+        == "non_array_lens"
+    )
+    # A bare json syntax error mid-stream.
+    assert (
+        categorise_claim_failure("Expecting ',' delimiter: line 1", '{"tasks": ["a" "b"]}')
+        == "malformed_json"
+    )
+    # Everything maps to a known category.
+    assert categorise_claim_failure("some brand new error", "weird") in FAILURE_CATEGORIES
+
+
+class _PromptKeyedEngine:
+    """Truncates (returns an unbalanced object) when the prompt carries MORE than one of
+    the marker texts; returns valid per-text JSON for a single marker — exercising the
+    split-and-union recovery on an over-long (output-truncated) session."""
+
+    MARKERS = ("AAA", "BBB", "CCC", "DDD")
+
+    def extract(self, model: str, prompt: str) -> str:
+        present = [m for m in self.MARKERS if m in prompt]
+        if len(present) > 1:
+            return '{"tasks": ["' + present[0] + '", "trunc'  # cut off → no balanced JSON
+        claim = present[0] if present else "none"
+        return json.dumps(
+            {"tasks": [claim], "patterns": [], "decisions_values": [], "learnings": []}
+        )
+
+
+def test_split_for_retry_by_count_and_within_single_prompt() -> None:
+    # Multi-prompt: split by count.
+    assert _split_for_retry(["a", "b", "c", "d"]) == (["a", "b"], ["c", "d"])
+    # Single over-long prompt (> _MIN_SPLIT_CHARS): split internally at a newline
+    # near the midpoint so each half is independently extractable.
+    big = "first half of the prompt\n" + "x" * 500 + "\nsecond half of the prompt"
+    halves = _split_for_retry([big])
+    assert halves is not None
+    left, right = halves
+    assert len(left) == 1 and len(right) == 1
+    assert left[0] and right[0] and left[0] != right[0]  # both non-empty, distinct
+    # Too small to usefully split → genuine failure (None).
+    assert _split_for_retry(["tiny"]) is None
+
+
+def test_categorise_context_overflow() -> None:
+    assert (
+        categorise_claim_failure("muninn_chat: prompt decode failed (rc=-3)", "")
+        == "context_overflow"
+    )
+
+
+class _DecodeOverflowEngine:
+    """Raises a muninn decode error (as an over-long prompt does) when the prompt carries
+    >1 marker; returns valid JSON for a single marker — exercises decode-error→split."""
+
+    MARKERS = ("AAA", "BBB", "CCC", "DDD")
+
+    def extract(self, model: str, prompt: str) -> str:
+        present = [m for m in self.MARKERS if m in prompt]
+        if len(present) > 1:
+            raise sqlite3.OperationalError("muninn_chat: prompt decode failed (rc=-3)")
+        claim = present[0] if present else "none"
+        return json.dumps(
+            {"tasks": [claim], "patterns": [], "decisions_values": [], "learnings": []}
+        )
+
+
+def test_decode_overflow_routes_to_split_and_union() -> None:
     conn = _cache()
-    _index(tmp_path, DOGFOOD_PID, DOGFOOD_PATH)
-    _seed_session(conn, DOGFOOD_PID, "s1", ["one"])
-    _seed_session(conn, DOGFOOD_PID, "s2", ["two"])
-    extract_session_claims(
-        conn, DOGFOOD_PID, "s1",
-        _FakeEngine(json.dumps({"tasks": ["refactor makefile", "add tests"], "patterns": [],
-                                "decisions_values": [], "learnings": []})), "M",
-    )
-    extract_session_claims(
-        conn, DOGFOOD_PID, "s2",
-        _FakeEngine(json.dumps({"tasks": ["refactor makefile"], "patterns": [],
-                                "decisions_values": [], "learnings": []})), "M",
-    )
-    resolver = ProjectResolver(tmp_path / "projects")
-    written = set_union_rollup(conn, "M", "month", resolver)
-    assert written > 0
+    _seed_session(conn, DOGFOOD_PID, "s1", ["AAA", "BBB", "CCC", "DDD"])
+    # The full prompt raises a decode error (overflow); the fallback splits until each
+    # chunk fits, then unions — recovering the session instead of crashing the run.
+    n = extract_session_claims(conn, DOGFOOD_PID, "s1", _DecodeOverflowEngine(), "M")
+    assert n == 4
+    tasks = {
+        r["claim"]
+        for r in conn.execute(
+            "SELECT claim FROM session_claims WHERE model='M' AND lens='tasks'"
+        ).fetchall()
+    }
+    assert tasks == {"AAA", "BBB", "CCC", "DDD"}
+    assert conn.execute("SELECT COUNT(*) FROM session_claim_failures").fetchone()[0] == 0
 
-    proj = conn.execute(
-        """SELECT claim, count, source_session_ids FROM rollup_claims
-           WHERE model='M' AND scope_path='play/claude-code-sessions' AND lens='tasks'""",
-    ).fetchall()
-    counts = {r["claim"]: r["count"] for r in proj}
-    assert counts["refactor makefile"] == 2  # both sessions → salience 2
-    assert counts["add tests"] == 1
-    prov_json = next(r["source_session_ids"] for r in proj if r["claim"] == "refactor makefile")
-    assert set(json.loads(prov_json)) == {"s1", "s2"}
-    # the union propagates to the root scope too
-    root = conn.execute(
-        """SELECT count FROM rollup_claims WHERE model='M' AND scope_path='' AND lens='tasks'
-           AND claim='refactor makefile'"""
-    ).fetchone()
-    assert root["count"] == 2
+
+class _LockedEngine:
+    def extract(self, model: str, prompt: str) -> str:
+        raise sqlite3.OperationalError("database is locked")
+
+
+def test_non_decode_operational_error_is_not_swallowed() -> None:
+    # A real DB error (not a decode failure) must propagate, never be mistaken for an
+    # over-long prompt and silently split/retried.
+    conn = _cache()
+    _seed_session(conn, DOGFOOD_PID, "s1", ["only one prompt here"])
+    with pytest.raises(sqlite3.OperationalError, match="database is locked"):
+        extract_session_claims(conn, DOGFOOD_PID, "s1", _LockedEngine(), "M")
+
+
+def test_split_and_union_recovers_truncated_session() -> None:
+    conn = _cache()
+    _seed_session(conn, DOGFOOD_PID, "s1", ["AAA", "BBB", "CCC", "DDD"])
+    # The full 4-prompt call truncates; the fallback halves until each fits, then unions.
+    n = extract_session_claims(conn, DOGFOOD_PID, "s1", _PromptKeyedEngine(), "M")
+    assert n == 4  # one task per text, recovered via split-and-union
+    tasks = {
+        r["claim"]
+        for r in conn.execute(
+            "SELECT claim FROM session_claims WHERE model='M' AND lens='tasks'"
+        ).fetchall()
+    }
+    assert tasks == {"AAA", "BBB", "CCC", "DDD"}
+    # No failure recorded — the session was recovered, not lost.
+    n_failures = conn.execute(
+        "SELECT COUNT(*) FROM session_claim_failures WHERE session_id='s1'"
+    ).fetchone()[0]
+    assert n_failures == 0
 
 
 # --- failure stream (parallel) --------------------------------------------
@@ -181,7 +267,9 @@ def test_success_clears_prior_failure() -> None:
     _seed_session(conn, DOGFOOD_PID, "s1", ["hi there"])
     with pytest.raises(ValueError):
         extract_session_claims(conn, DOGFOOD_PID, "s1", _FakeEngine("nope"), "M")
-    ok = json.dumps({"tasks": ["do the thing"], "patterns": [], "decisions_values": [], "learnings": []})
+    ok = json.dumps(
+        {"tasks": ["do the thing"], "patterns": [], "decisions_values": [], "learnings": []}
+    )
     extract_session_claims(conn, DOGFOOD_PID, "s1", _FakeEngine(ok), "M")
     assert conn.execute(
         "SELECT COUNT(*) FROM session_claim_failures WHERE session_id='s1'"
@@ -190,6 +278,32 @@ def test_success_clears_prior_failure() -> None:
         "SELECT COUNT(*) FROM session_claims WHERE session_id='s1'"
     ).fetchone()[0]
     assert n_claims == 1  # the retry succeeded and wrote claims
+
+
+def test_rollup_failures_clears_resolved_failures(tmp_path: Path) -> None:
+    """A fixed failure must drop the scope's rollup failure count to 0 — not strand a
+    phantom count. Regression for the INSERT-OR-REPLACE-without-delete staleness bug."""
+    conn = _cache()
+    _index(tmp_path, DOGFOOD_PID, DOGFOOD_PATH)
+    _seed_session(conn, DOGFOOD_PID, "s1", ["one"])
+    resolver = ProjectResolver(tmp_path / "projects")
+    # 1) fail s1 → rollup records the failure.
+    with pytest.raises(ValueError):
+        extract_session_claims(conn, DOGFOOD_PID, "s1", _FakeEngine("garbage out"), "M")
+    rollup_failures(conn, "M", "month", resolver)
+    assert conn.execute("SELECT COUNT(*) FROM rollup_claim_failures WHERE model='M'").fetchone()[
+        0
+    ] > 0
+    # 2) resolve s1 (valid extraction clears its failure row), then re-roll-up.
+    ok = json.dumps(
+        {"tasks": ["fixed it"], "patterns": [], "decisions_values": [], "learnings": []}
+    )
+    extract_session_claims(conn, DOGFOOD_PID, "s1", _FakeEngine(ok), "M")
+    rollup_failures(conn, "M", "month", resolver)
+    # The stale rollup failure rows are gone — not left as phantom counts.
+    assert conn.execute("SELECT COUNT(*) FROM rollup_claim_failures WHERE model='M'").fetchone()[
+        0
+    ] == 0
 
 
 def test_rollup_failures_counts_per_scope(tmp_path: Path) -> None:

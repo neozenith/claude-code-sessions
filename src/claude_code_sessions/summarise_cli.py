@@ -28,6 +28,14 @@ import numpy as np
 import sqlite_muninn
 
 from claude_code_sessions.config import CACHE_DB_PATH, PROJECTS_PATH
+from claude_code_sessions.database.sqlite.claim_clustering import (
+    cluster_claims,
+    cluster_rollup,
+    ensure_clustering_schema,
+    sync_claim_embeddings,
+)
+from claude_code_sessions.database.sqlite.claim_naming import MuninnClusterNamer, name_clusters
+from claude_code_sessions.database.sqlite.claims import rollup_failures
 from claude_code_sessions.database.sqlite.embeddings import (
     EMBED_MAX_CHARS,
 )
@@ -69,6 +77,10 @@ MODELS_DIRS: tuple[Path, ...] = (
 MODEL_REGISTRY: dict[str, tuple[str, str, float]] = {
     "gemma-4-E2B": ("gemma-4-E2B-it-Q4_K_M.gguf", "gemma", 2.0),
     "gemma-4-E4B": ("gemma-4-E4B-it-Q4_K_M.gguf", "gemma", 4.0),
+    # Gemma 4 12B (unified encoder-free multimodal, released 2026-06-02). Reference
+    # llama.cpp quant: ggml-org/gemma-4-12B-it-GGUF (7.38 GB). Text path only — no
+    # mmproj needed for muninn_chat.
+    "gemma-4-12B": ("gemma-4-12B-it-Q4_K_M.gguf", "gemma", 12.0),
     "Qwen3.5-0.8B": ("Qwen3.5-0.8B-Q4_K_M.gguf", "qwen", 0.8),
     "Qwen3.5-2B": ("Qwen3.5-2B-Q4_K_M.gguf", "qwen", 2.0),
     "Qwen3.5-4B": ("Qwen3.5-4B-Q4_K_M.gguf", "qwen", 4.0),
@@ -116,6 +128,21 @@ BENCH_SINCE_DAYS = 7
 # while 128k adds <1% coverage at ~2x the KV-cache RAM. The extension's own default
 # (~16384) silently overflows reground — n_ctx MUST be set explicitly at registration.
 DEFAULT_N_CTX = 65536
+
+# Per-model n_ctx overrides. gemma-4-12B decodes garbage (emits <unused…> tokens) and
+# then fails with `muninn_chat: prompt decode failed (rc=-3)` at the default 65536 — a
+# Gemma-4 context ceiling in muninn's llama.cpp build; it is clean at ≤49152, which still
+# holds ~99% of session prompts (the largest real dogfood session is ~37k tokens). Other
+# models keep DEFAULT_N_CTX. Verified empirically via tmp/gemma4_smoke.py / _diag.py.
+MODEL_N_CTX: dict[str, int] = {
+    "gemma-4-12B": 49152,
+}
+
+
+def model_n_ctx(model_id: str) -> int:
+    """The context window to load ``model_id`` with — a per-model cap below the
+    extension's default where a model can't decode at 65536 (see ``MODEL_N_CTX``)."""
+    return MODEL_N_CTX.get(model_id, DEFAULT_N_CTX)
 
 
 def _iter_session_keys(
@@ -377,6 +404,48 @@ def make_embed_cosine(conn: sqlite3.Connection) -> Callable[[str, str], float]:
         return round(float(_embed(conn, candidate) @ _embed(conn, reference)), 4)
 
     return _cosine
+
+
+def _embed_blob(conn: sqlite3.Connection, text: str) -> bytes:
+    """Raw ``muninn_embed`` vector blob for a (short) claim — the input persisted to
+    ``session_claims.embedding`` and fed to CR6 clustering. Claims are bounded by the
+    extraction grammar (≤~200 chars), so one embed call per concept suffices."""
+    row = conn.execute(
+        "SELECT muninn_embed(?, ?)", (EMBED_MODEL_NAME, text[:EMBED_MAX_CHARS])
+    ).fetchone()
+    return bytes(row[0])
+
+
+def cluster_and_name_pipeline(
+    conn: sqlite3.Connection,
+    model: str,
+    resolver: ProjectResolver,
+    *,
+    grains: tuple[str, ...] = GRAINS,
+    progress: Callable[..., None] | None = None,
+) -> int:
+    """CR6 L1.5→L3: embed claims → EVoC cluster (global per lens) → name clusters → leaf
+    cluster rollup + failure rollup, for every grain. Reused by the CLI driver
+    (:mod:`scripts.claims_run`) and the background reindex runner so both stay in lockstep.
+
+    Assumes L1 (``extract_session_claims``) has already populated ``session_claims``.
+    Returns the total leaf rollup rows written. ``progress(**fields)`` publishes counts."""
+    p = progress or (lambda **_: None)
+    make_embed_cosine(conn)  # register the embed model on temp.muninn_models
+    ensure_clustering_schema(conn)
+    p(message="embedding claims")
+    embedded = sync_claim_embeddings(conn, model, lambda t: _embed_blob(conn, t))
+    p(embeddings_done=embedded, message="clustering claims")
+    cluster_claims(conn, model)
+    p(message="naming clusters")
+    named = name_clusters(conn, model, MuninnClusterNamer(conn))
+    p(clusters_named=named, message="rolling up all grains")
+    written = 0
+    for g in grains:
+        written += cluster_rollup(conn, model, g, resolver)
+        rollup_failures(conn, model, g, resolver)
+        p(rollups_written=written)
+    return written
 
 
 def _mean_scores(scores: list[dict[str, float]]) -> dict[str, float]:

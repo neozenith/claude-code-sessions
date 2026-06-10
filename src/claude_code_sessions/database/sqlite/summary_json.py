@@ -92,3 +92,19 @@ def parse_lens_lists(raw: str) -> dict[str, list[str]]:
             )
         out[key] = [str(item) for item in value]
     return out
+
+
+def parse_cluster_name(raw: str) -> str:
+    """Parse a model reply into a single cluster ``name`` string (CR6, fail-loud).
+
+    The naming grammar (:data:`summaries.CLUSTER_NAME_GBNF`) constrains output to
+    ``{"name": "..."}``; this extracts it with the same ``<think>``/prose/fence tolerance.
+    Raises ``KeyError`` if ``name`` is absent and ``ValueError`` if no JSON object or the
+    name is empty (a blank cluster name is never silently accepted)."""
+    obj: dict[str, Any] = json.loads(_first_json_object(raw))
+    if "name" not in obj:
+        raise KeyError(f"cluster-name JSON missing 'name' key: {obj!r}")
+    name = str(obj["name"]).strip()
+    if not name:
+        raise ValueError(f"cluster-name JSON has an empty name: {obj!r}")
+    return name

@@ -5,7 +5,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest'
 
 import { ClaimsExplorerView } from './ClaimsExplorer'
 import { ThemeProvider } from '../contexts/ThemeContext'
-import type { Claim, ClaimRollup, CoveragePivot } from '../lib/api-client'
+import type { Claim, ClaimRollup, ClusterNode, CoveragePivot } from '../lib/api-client'
 
 // jsdom (as configured here) doesn't implement matchMedia or a writable
 // localStorage; ThemeProvider — pulled in transitively by the
@@ -62,20 +62,44 @@ const claim = (text: string, count: number, sessions: string[] = []): Claim => (
   sessions,
 })
 
+/** Wrap flat claims into the CR6 cluster-tree shape. With small data the real pipeline
+ * takes the singleton boundary (each claim its own one-member, single-level cluster), so
+ * this mirrors production: the cluster name is the claim text, and the member is the claim
+ * itself — keeping the leaf-level (`claim-item`/`claim-count`/provenance) assertions valid. */
+const nodesFrom = (claims: Claim[]): ClusterNode[] =>
+  claims.map((c, i) => ({
+    cluster_id: i,
+    layer: 0,
+    name: c.claim,
+    count: c.count,
+    sessions: c.sessions,
+    members: [c],
+  }))
+
 const summarised = (
   tasks: Claim[],
   patterns: Claim[],
   decisions: Claim[],
-  extra: { failure_count?: number; failed_sessions?: string[] } = {},
+  extra: {
+    failure_count?: number
+    failed_sessions?: string[]
+    session_projects?: Record<string, string>
+  } = {},
 ): ClaimRollup => ({
   status: 'summarised',
   scope_path: 'clients/acme',
   grain: 'month',
   bucket: '2026-05',
   model: 'qwen3',
-  lenses: { tasks, patterns, decisions_values: decisions, learnings: [] },
+  lenses: {
+    tasks: nodesFrom(tasks),
+    patterns: nodesFrom(patterns),
+    decisions_values: nodesFrom(decisions),
+    learnings: [],
+  },
   failure_count: extra.failure_count ?? 0,
   failed_sessions: extra.failed_sessions ?? [],
+  session_projects: extra.session_projects ?? {},
 })
 
 function renderView(
@@ -96,6 +120,7 @@ function renderView(
           childScopes: [],
           coverage: null,
           pivot: null,
+          failures: null,
           loading: false,
           scopePath: '',
           pinned: false,
@@ -147,15 +172,26 @@ describe('ClaimsExplorerView — ranked claims + counts (ADR8.2)', () => {
     expect(texts[2]).toContain('low')
   })
 
-  it('renders a count badge and provenance session links per claim', () => {
+  it('provenance links resolve to the real SessionDetail route via session_projects', () => {
     renderView({
-      rollup: summarised([claim('a claim', 3, ['sess-aaaaaaaa', 'sess-bbbbbbbb'])], [], []),
+      rollup: summarised([claim('a claim', 3, ['sess-aaaaaaaa', 'sess-bbbbbbbb'])], [], [], {
+        session_projects: {
+          'sess-aaaaaaaa': '-Users-dev-play-proj',
+          // sess-bbbbbbbb deliberately unresolved → renders as plain text, not a dead link.
+        },
+      }),
     })
     const tasksCard = screen.getByTestId('claims-lens-tasks')
     expect(tasksCard.querySelector('[data-testid="claim-count"]')?.textContent).toBe('(3×)')
-    const links = tasksCard.querySelectorAll('[data-testid="claim-session-link"]')
-    expect(links.length).toBe(2)
-    expect((links[0] as HTMLAnchorElement).getAttribute('href')).toContain('session=sess-aaaaaaaa')
+    const nodes = tasksCard.querySelectorAll('[data-testid="claim-session-link"]')
+    expect(nodes.length).toBe(2)
+    // Resolved → an <a> to /sessions/:projectId/:sessionId (includes the project_id).
+    const linked = Array.from(nodes).find((n) => n.tagName === 'A') as HTMLAnchorElement
+    expect(linked.getAttribute('href')).toBe(
+      '/sessions/-Users-dev-play-proj/sess-aaaaaaaa',
+    )
+    // Unresolved → a non-anchor span (no broken link).
+    expect(Array.from(nodes).some((n) => n.tagName !== 'A')).toBe(true)
   })
 
   it('shows a "No claims." placeholder for an empty lens', () => {
@@ -166,16 +202,98 @@ describe('ClaimsExplorerView — ranked claims + counts (ADR8.2)', () => {
   })
 })
 
+describe('ClaimsExplorerView — multi-level cluster tree (CR6)', () => {
+  const twoLevel = (): ClaimRollup => ({
+    status: 'summarised',
+    scope_path: 'clients/acme',
+    grain: 'month',
+    bucket: '2026-05',
+    model: 'qwen3',
+    lenses: {
+      tasks: [
+        {
+          cluster_id: 100,
+          layer: 1,
+          name: 'Local-LLM operability',
+          count: 3,
+          sessions: ['s1', 's2', 's3'],
+          children: [
+            {
+              cluster_id: 0,
+              layer: 0,
+              name: 'Context-window sizing',
+              count: 2,
+              sessions: ['s1', 's2'],
+              members: [claim('verify n_ctx before a long run', 2, ['s1', 's2'])],
+            },
+            {
+              cluster_id: 1,
+              layer: 0,
+              name: 'Bounded generation',
+              count: 1,
+              sessions: ['s3'],
+              members: [claim('cap output tokens + grammar', 1, ['s3'])],
+            },
+          ],
+        },
+      ],
+      patterns: [],
+      decisions_values: [],
+      learnings: [],
+    },
+    failure_count: 0,
+    failed_sessions: [],
+    session_projects: { s1: '-Users-dev-play-proj' },
+  })
+
+  it('renders coarse → fine cluster names and the leaf member claims', () => {
+    renderView({ rollup: twoLevel() })
+    const tasksCard = screen.getByTestId('claims-lens-tasks')
+    const names = Array.from(
+      tasksCard.querySelectorAll('[data-testid="cluster-name"]'),
+    ).map((n) => n.textContent)
+    // Coarse cluster + both fine sub-clusters surface as named nodes.
+    expect(names).toContain('Local-LLM operability')
+    expect(names).toContain('Context-window sizing')
+    expect(names).toContain('Bounded generation')
+    // The verbatim leaf claims render under the fine clusters with their counts.
+    const claims = Array.from(
+      tasksCard.querySelectorAll('[data-testid="claim-item"]'),
+    ).map((n) => n.textContent ?? '')
+    expect(claims.some((t) => t.includes('verify n_ctx') && t.includes('(2×)'))).toBe(true)
+    expect(claims.some((t) => t.includes('cap output tokens'))).toBe(true)
+  })
+
+  it('nests fine clusters inside their coarse parent (a tree, not a flat list)', () => {
+    renderView({ rollup: twoLevel() })
+    const nodes = screen
+      .getByTestId('claims-lens-tasks')
+      .querySelectorAll('[data-testid="cluster-node"]')
+    // 1 coarse + 2 fine = 3 cluster nodes; the coarse one contains the fine ones.
+    expect(nodes.length).toBe(3)
+    const coarse = Array.from(nodes).find((n) =>
+      n.querySelector('[data-testid="cluster-name"]')?.textContent === 'Local-LLM operability',
+    )
+    expect(coarse?.querySelectorAll('[data-testid="cluster-node"]').length).toBe(2)
+  })
+})
+
 describe('ClaimsExplorerView — failures badge (CR5)', () => {
   it('renders the failure badge with count and links the failed sessions', () => {
     renderView({
       rollup: summarised([claim('t', 1)], [], [], {
         failure_count: 2,
         failed_sessions: ['fail-1111', 'fail-2222'],
+        session_projects: { 'fail-1111': '-Users-dev-play-proj', 'fail-2222': '-Users-dev-play-proj' },
       }),
     })
     expect(screen.getByTestId('claims-failure-badge').textContent).toContain('2 extraction failures')
-    expect(screen.getAllByTestId('claims-failed-session').length).toBe(2)
+    const nodes = screen.getAllByTestId('claims-failed-session')
+    expect(nodes.length).toBe(2)
+    // Resolved to the real SessionDetail route (carries the project_id).
+    expect((nodes[0] as HTMLAnchorElement).getAttribute('href')).toBe(
+      '/sessions/-Users-dev-play-proj/fail-1111',
+    )
   })
 
   it('omits the failures block when failure_count is 0', () => {
@@ -321,6 +439,56 @@ describe('ClaimsExplorerView — sortable lens columns (CR5)', () => {
     ).map((el) => el.textContent ?? '')
     // Patterns still default count-desc.
     expect(patternsTexts[0]).toContain('p-high')
+  })
+})
+
+describe('ClaimsExplorerView — failure analysis panel (CR5)', () => {
+  it('renders categorised failure modes with counts and sample session links', () => {
+    renderView({
+      failures: {
+        model: 'qwen3',
+        total: 3,
+        by_model: { qwen3: 3 },
+        categories: [
+          {
+            category: 'truncated_json',
+            count: 2,
+            pct: 66.7,
+            sample_reason: 'no balanced JSON object found in model output',
+            sample_excerpt_tail: '"re-enable the lines',
+            sample_sessions: [{ project_id: 'p1', session_id: 'sess-aaaaaaaa' }],
+          },
+          {
+            category: 'empty_or_refusal',
+            count: 1,
+            pct: 33.3,
+            sample_reason: 'no balanced JSON object found',
+            sample_excerpt_tail: '',
+            sample_sessions: [{ project_id: 'p1', session_id: 'sess-bbbbbbbb' }],
+          },
+        ],
+      },
+    })
+    expect(screen.getByTestId('failure-analysis')).toBeTruthy()
+    expect(screen.getByTestId('failure-total').textContent).toContain('3 failed sessions')
+    const trunc = screen.getByTestId('failure-category-truncated_json')
+    expect(trunc.textContent).toContain('Truncated JSON')
+    expect(trunc.querySelector('[data-testid="failure-category-count"]')?.textContent).toContain(
+      '2 (66.7%)',
+    )
+    const link = trunc.querySelector('[data-testid="failure-sample-session"]') as HTMLAnchorElement
+    expect(link.getAttribute('href')).toContain('sess-aaaaaaaa')
+  })
+
+  it('shows a clean-run message when there are zero failures', () => {
+    renderView({ failures: { model: 'qwen3', total: 0, by_model: {}, categories: [] } })
+    expect(screen.getByTestId('failure-total').textContent).toContain('no extraction failures')
+    expect(screen.queryByTestId('failure-category-truncated_json')).toBeNull()
+  })
+
+  it('omits the panel entirely when failures data is null', () => {
+    renderView({ failures: null })
+    expect(screen.queryByTestId('failure-analysis')).toBeNull()
   })
 })
 

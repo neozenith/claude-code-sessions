@@ -185,14 +185,26 @@ is ~2 orders of magnitude cheaper at L2 *and* grounded by construction (claims a
 sample is small and varied. The thesis — repetition surfaces what matters — only bites at larger N;
 this run proves the *mechanism*, not yet the *signal strength*.
 
-**Finding — 25% L1 failure to harden.** 3/12 sessions returned "no balanced JSON object." Diagnosed
-as **not** input overflow (the failed sessions were 1.5k–27k chars, incl. a tiny 1.5k one), so it is
-the **list grammar / `max_tokens=512` decode** — the array grammar needs the same dial-in CR2 did for
-the single-string grammar (raise the claims token cap and/or bound array length, and capture raw
-output to confirm truncation vs malformed). Recorded as data, not hidden.
+**Finding — 25% L1 failure → RESOLVED (2026-06-04).** The failure stream confirmed the mode is
+**output truncation**: the GBNF grammar guarantees a well-formed *prefix*, so a claim-dense session
+hitting `max_tokens=512` left an unbalanced object → "no balanced JSON". (Confirmed from raw
+excerpts: real claim arrays cut off mid-string at ~512 tokens, two ending *below* the 2000-char
+storage cap = the model stopped on its own.) Two fixes: a dedicated `CLAIM_LENS_MAX_TOKENS=4096`
+for the extractive path, and a **split-and-union fallback** (`_extract_lens_lists` halves the
+human-texts on parse failure and unions — correct because claims are associative). Failures are now
+**distilled**, not just counted: `categorise_claim_failure` → a fixed taxonomy
+(truncated_json / malformed_json / missing_lens_key / non_array_lens / empty_or_refusal / other),
+surfaced by `/api/claims/failures` + the `FailureAnalysis` explorer panel; `scripts/claims_run.py`
+runs all scopes for a window and prints the breakdown.
 
 ### Remaining for a full CR5.5 verdict
-- Harden L1 list extraction (the 25% failure) and re-run for a clean rate.
+- ~~Harden L1 list extraction (the 25% failure)~~ — **DONE + clean run (2026-06-04)**: all 231
+  sessions across every domain/project in the last 2 months extract with **0 failures**. Two further
+  modes surfaced + fixed during the run: (a) a single over-long prompt can't be split by prompt-count,
+  so `_split_for_retry` now also splits one prompt internally at a newline near its midpoint; (b)
+  `set_union_rollup`/`rollup_failures` were INSERT-OR-REPLACE-only and stranded phantom rows after a
+  fix — both now delete-then-rebuild. Output cap tuned to 1024 (loose 4096 over-generated to ~2
+  min/session; split-and-union covers any residual overflow).
 - Dedup **precision/recall** vs a hand-labelled claim set (needs manual labels) — not yet done.
 - Head-to-head vs the abstractive 64k baseline (that run was killed) — qualitative only so far:
   extractive claims are readable + grounded + counted, vs the abstractive month-root collapsing to one
@@ -293,3 +305,52 @@ sort + domain filter).
   35 unit/API/reindex tests + e2e; real results gathered + live trace-through evidenced.
 - [ ] **Done (full benchmark)** — pending L1 hardening (the 25% JSON-fail), dedup precision/recall vs
   hand-labels, and the abstractive head-to-head.
+
+## CR6 — EVoC hierarchical clustering supersedes the greedy-cosine L2 (2026-06-09)
+
+**Why.** The CR5 L2 reducer (`dedup_claims` + `set_union_rollup`) merged claims with
+exact-normalised grouping + a single-pass **greedy cosine** pass (hard 0.86 threshold, popular
+claims anchor). That is order-dependent single-linkage with no global view of the embedding
+manifold — it over-merges `A~B~C` chains and leaves differently-worded near-dupes split. The
+aggregation quality was unsatisfactory.
+
+**What replaced it.** Density-based **EVoC** clustering (`database/sqlite/claim_clustering.py`) run
+**globally per `(model, lens)`** over the whole claim cloud, so a cluster is a *stable semantic
+concept* (the same at root and at a leaf project). Pipeline (drives off the unchanged L1
+`session_claims`):
+
+1. `sync_claim_embeddings` — fill `session_claims.embedding` (NomicEmbed 768-d, incremental).
+2. `cluster_claims` — EVoC over the distinct claim *concepts* → `claim_clusters` (the full layer
+   stack, with plurality-derived `parent_cluster_id`) + `claim_cluster_membership` (every
+   `claim_id` → cluster at every layer = the **audit trail**) + `claim_cluster_meta` (the two
+   surfaced layers). Below `viable_n` concepts → a defined singleton boundary (each concept its own
+   cluster), never a silent fallback.
+3. `name_clusters` — one bounded `muninn_chat` call per *surfaced cluster* (cached by member-text
+   hash) synthesises the **common-thread name**. The only LLM cost at the rollup tier, and it is
+   global, not per cell.
+4. `cluster_rollup` — per scope×bucket×lens, the exact-normalised **leaf** claims (verbatim,
+   grounded) tagged with their fine cluster_id → `rollup_clusters`. The backend assembles the
+   coarse→fine→leaf tree at read time (`assemble_cluster_tree`). EVoC only *groups* the leaves under
+   named parents; it never rewrites them, so CR5's grounding + associativity survive.
+
+The greedy-cosine reducer is archived verbatim at `tmp/archived/database/sqlite/claims_greedy_cosine.py`
+(and the obsolete `run_claims_experiment.py` under `tmp/archived/scripts/`).
+
+**Frontend.** Each lens is now a recursive cluster tree (coarse → fine → member claims), 2 levels
+expanded by default but depth-agnostic (surfacing more is a backend knob). SessionDetail tags each
+of a session's claims with the cluster it belongs to.
+
+**Evidence — real Qwen3.5-2B claims (4,897 claims, 4,309 distinct concepts):**
+- EVoC produced a genuine multi-level hierarchy: tasks 1316→3 layers (38 fine / 7 coarse), patterns
+  1315→3 (34/15), decisions_values 1021→2 (46/15), learnings 1074→4 (32/13). Embedding ~24s,
+  clustering <2s total.
+- Clusters are semantically coherent (sample `learnings` fine clusters): a *skill-development* group
+  named **"Iterative skill refinement"**, a *dbt/DAG* group named **"dbt selector implementation"**,
+  a *DuckDB/S3/sync* group named **"data freshness and sync strategy"**.
+- **Audit trail intact**: 100% of claim instances carry membership at every layer
+  (e.g. learnings 1114/1114), and a cluster's name is attributable to its exact member `claim_id`s.
+
+**Gates.** 497 backend pytest (incl. `test_claim_clustering.py`), mypy + ruff clean on `src/`;
+105 frontend vitest (incl. the multi-level tree), tsc + eslint clean. Remaining manual verification:
+populate the production cache (`uv run -m scripts.claims_run --model Qwen3.5-2B --rollup-only`) and
+a Playwright run-through of the cluster-tree explorer.

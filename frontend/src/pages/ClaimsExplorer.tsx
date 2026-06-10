@@ -7,16 +7,20 @@ import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import ScopeBreadcrumb from '@/components/ScopeBreadcrumb'
 import CacheSummarisation from '@/components/CacheSummarisation'
 import CoverageHeatmap from '@/components/CoverageHeatmap'
+import FailureAnalysis from '@/components/FailureAnalysis'
 import ReindexButton from '@/components/ReindexButton'
-import { DEFAULT_SORT, sortClaims } from '@/lib/claims'
+import { DEFAULT_SORT, sortNodes } from '@/lib/claims'
 import type { SortDir, SortField, SortSpec } from '@/lib/claims'
 import type {
+  Claim,
   ClaimBucket,
   ClaimLenses,
   ClaimModelDetail,
   ClaimRollup,
+  ClusterNode,
   Coverage,
   CoveragePivot,
+  FailureAnalysis as FailureAnalysisData,
   ProjectScope,
   ScopeChild,
 } from '@/lib/api-client'
@@ -45,6 +49,110 @@ const LENSES = [
 const GRAINS = ['day', 'week', 'month'] as const
 export const DEFAULT_GRAIN = 'month'
 
+/** Levels expanded by default — coarse (0) + fine (1). Deeper levels start collapsed. */
+const DEFAULT_OPEN_DEPTH = 2
+
+/** A verbatim leaf claim under a fine cluster: salience badge, text, provenance links. */
+function ClaimLeaf({
+  claim,
+  sessionHref,
+}: {
+  claim: Claim
+  sessionHref: (sid: string) => string | null
+}) {
+  return (
+    <li data-testid="claim-item" className="text-sm">
+      <div className="flex items-start gap-2">
+        <span
+          data-testid="claim-count"
+          className="mt-0.5 shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground"
+        >
+          ({claim.count}×)
+        </span>
+        <span className="whitespace-pre-wrap">{claim.claim}</span>
+      </div>
+      {claim.sessions.length > 0 ? (
+        <div className="ml-9 mt-1 flex flex-wrap gap-2">
+          {claim.sessions.map((sid) => {
+            const href = sessionHref(sid)
+            return href ? (
+              <Link
+                key={sid}
+                data-testid="claim-session-link"
+                to={href}
+                className="font-mono text-xs text-blue-600 hover:underline dark:text-blue-400"
+                title={`Open session ${sid}`}
+              >
+                {sid.slice(0, 8)}…
+              </Link>
+            ) : (
+              <span
+                key={sid}
+                data-testid="claim-session-link"
+                className="font-mono text-xs text-muted-foreground"
+                title={sid}
+              >
+                {sid.slice(0, 8)}…
+              </span>
+            )
+          })}
+        </div>
+      ) : null}
+    </li>
+  )
+}
+
+/** Recursive cluster node: a collapsible named cluster (salience badge) whose body is
+ * either its child clusters (coarse → fine) or, at the leaf level, its member claims.
+ * Depth-agnostic so surfacing >2 levels later needs no change here — only the backend's
+ * surfaced-layer count. */
+function ClusterNodeView({
+  node,
+  sessionHref,
+  depth,
+}: {
+  node: ClusterNode
+  sessionHref: (sid: string) => string | null
+  depth: number
+}) {
+  const hasChildren = node.children !== undefined && node.children.length > 0
+  return (
+    <details data-testid="cluster-node" open={depth < DEFAULT_OPEN_DEPTH}>
+      <summary className="flex cursor-pointer items-center gap-2 text-sm">
+        <span data-testid="cluster-name" className="font-medium">
+          {node.name}
+        </span>
+        <span
+          data-testid="cluster-count"
+          className="shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground"
+        >
+          ({node.count}×)
+        </span>
+      </summary>
+      <div className="ml-2 mt-2 border-l border-muted pl-3">
+        {hasChildren ? (
+          <div className="space-y-2">
+            {node.children!.map((child) => (
+              <ClusterNodeView
+                key={child.cluster_id}
+                node={child}
+                sessionHref={sessionHref}
+                depth={depth + 1}
+              />
+            ))}
+          </div>
+        ) : (
+          <ul className="space-y-3">
+            {(node.members ?? []).map((m, i) => (
+              <ClaimLeaf key={`${m.claim}-${i}`} claim={m} sessionHref={sessionHref} />
+            ))}
+          </ul>
+        )}
+      </div>
+    </details>
+  )
+}
+
 interface ClaimsExplorerViewProps {
   rollup: ClaimRollup | null
   buckets: ClaimBucket[]
@@ -52,6 +160,7 @@ interface ClaimsExplorerViewProps {
   childScopes: ScopeChild[]
   coverage: Coverage | null
   pivot: CoveragePivot | null
+  failures: FailureAnalysisData | null
   loading: boolean
   /** Effective scope shown — the global Project pin when set, else the ?path= crumb. */
   scopePath: string
@@ -69,6 +178,7 @@ export function ClaimsExplorerView({
   childScopes,
   coverage,
   pivot,
+  failures,
   loading,
   scopePath,
   pinned,
@@ -122,7 +232,19 @@ export function ClaimsExplorerView({
   const lenses = rollup?.status === 'summarised' ? rollup.lenses : null
   const failureCount = rollup?.status === 'summarised' ? rollup.failure_count : 0
   const failedSessions = rollup?.status === 'summarised' ? rollup.failed_sessions : []
+  const sessionProjects = rollup?.status === 'summarised' ? rollup.session_projects : {}
   const notSummarised = !loading && !lenses
+
+  // Provenance session_ids → the real SessionDetail route. Returns null when the
+  // session can't be resolved to a project (then we render plain text, not a dead link).
+  const sessionHref = (sid: string): string | null => {
+    const pid = sessionProjects[sid]
+    if (!pid) return null
+    const base = `/sessions/${encodeURIComponent(pid)}/${encodeURIComponent(sid)}`
+    // Carry the current model so SessionDetail's claims/memberships open under the
+    // SAME model these claims came from (not its alphabetical-first default).
+    return model ? `${base}?model=${encodeURIComponent(model)}` : base
+  }
 
   return (
     <div className="space-y-6">
@@ -220,17 +342,29 @@ export function ClaimsExplorerView({
             </span>
           </summary>
           <ul className="mt-2 flex flex-wrap gap-2">
-            {failedSessions.map((sid) => (
-              <li key={sid}>
-                <Link
-                  data-testid="claims-failed-session"
-                  to={`/sessions?session=${encodeURIComponent(sid)}`}
-                  className="font-mono text-xs text-blue-600 hover:underline dark:text-blue-400"
-                >
-                  {sid.slice(0, 8)}…
-                </Link>
-              </li>
-            ))}
+            {failedSessions.map((sid) => {
+              const href = sessionHref(sid)
+              return (
+                <li key={sid}>
+                  {href ? (
+                    <Link
+                      data-testid="claims-failed-session"
+                      to={href}
+                      className="font-mono text-xs text-blue-600 hover:underline dark:text-blue-400"
+                    >
+                      {sid.slice(0, 8)}…
+                    </Link>
+                  ) : (
+                    <span
+                      data-testid="claims-failed-session"
+                      className="font-mono text-xs text-muted-foreground"
+                    >
+                      {sid.slice(0, 8)}…
+                    </span>
+                  )}
+                </li>
+              )
+            })}
           </ul>
         </details>
       ) : null}
@@ -241,7 +375,7 @@ export function ClaimsExplorerView({
         <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
           {LENSES.map((lens) => {
             const lensSort = sort[lens.key] ?? DEFAULT_SORT
-            const sorted = sortClaims(lenses[lens.key], lensSort)
+            const sorted = sortNodes(lenses[lens.key], lensSort)
             return (
               <Card key={lens.key} data-testid={lens.testid}>
                 <CardHeader>
@@ -257,7 +391,7 @@ export function ClaimsExplorerView({
                       />
                       <SortHeader
                         testid={`sort-${lens.key}-claim`}
-                        label="text"
+                        label="name"
                         active={lensSort.field === 'claim'}
                         dir={lensSort.dir}
                         onClick={() => setLensSort(lens.key, 'claim')}
@@ -269,36 +403,16 @@ export function ClaimsExplorerView({
                   {sorted.length === 0 ? (
                     <p className="text-sm text-muted-foreground">No claims.</p>
                   ) : (
-                    <ul className="space-y-3">
-                      {sorted.map((claim, i) => (
-                        <li key={`${lens.key}-${i}`} data-testid="claim-item" className="text-sm">
-                          <div className="flex items-start gap-2">
-                            <span
-                              data-testid="claim-count"
-                              className="mt-0.5 shrink-0 rounded-full bg-muted px-1.5 py-0.5 text-xs font-semibold text-muted-foreground"
-                            >
-                              ({claim.count}×)
-                            </span>
-                            <span className="whitespace-pre-wrap">{claim.claim}</span>
-                          </div>
-                          {claim.sessions.length > 0 ? (
-                            <div className="ml-9 mt-1 flex flex-wrap gap-2">
-                              {claim.sessions.map((sid) => (
-                                <Link
-                                  key={sid}
-                                  data-testid="claim-session-link"
-                                  to={`/sessions?session=${encodeURIComponent(sid)}`}
-                                  className="font-mono text-xs text-blue-600 hover:underline dark:text-blue-400"
-                                  title={`Find session ${sid}`}
-                                >
-                                  {sid.slice(0, 8)}…
-                                </Link>
-                              ))}
-                            </div>
-                          ) : null}
-                        </li>
+                    <div className="space-y-2">
+                      {sorted.map((node) => (
+                        <ClusterNodeView
+                          key={node.cluster_id}
+                          node={node}
+                          sessionHref={sessionHref}
+                          depth={0}
+                        />
                       ))}
-                    </ul>
+                    </div>
                   )}
                 </CardContent>
               </Card>
@@ -317,6 +431,8 @@ export function ClaimsExplorerView({
           </CardContent>
         </Card>
       ) : null}
+
+      <FailureAnalysis data={failures} />
 
       <CoverageHeatmap pivot={pivot} />
 
@@ -407,6 +523,10 @@ export default function ClaimsExplorer() {
   const { data: pivot } = useApi<CoveragePivot>(
     `/claims/coverage-pivot?grain=${grain}&scope=${scopeQs}${modelQs}${daysQs}`,
   )
+  // Failure-mode distillation for the current slice (same scope + days + model filters).
+  const { data: failures } = useApi<FailureAnalysisData>(
+    `/claims/failures?scope=${scopeQs}${modelQs}${daysQs}`,
+  )
 
   return (
     <ClaimsExplorerView
@@ -416,6 +536,7 @@ export default function ClaimsExplorer() {
       childScopes={children ?? []}
       coverage={coverage}
       pivot={pivot}
+      failures={failures}
       loading={loading}
       scopePath={path}
       pinned={pinned}

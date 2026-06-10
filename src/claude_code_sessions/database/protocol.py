@@ -219,6 +219,19 @@ class Database(Protocol):
         bucket columns, for the heatmap (CR5)."""
         ...
 
+    def get_session_claim_models(self, project_id: str, session_id: str) -> list[str]:
+        """Models that have claims or a recorded failure for this session — the
+        SessionDetail claims/memberships view defaults to one of these (CR5)."""
+        ...
+
+    def get_claim_failure_analysis(
+        self, model: str | None = None, scope: str | None = None, days: int | None = None
+    ) -> dict[str, Any]:
+        """Categorised roll-up of the parallel failure stream into systematic modes
+        (truncated_json / malformed_json / missing_lens_key / …) with counts + samples,
+        optionally filtered by model/scope/days — the failure-distillation panel (CR5)."""
+        ...
+
     def get_event_raw_json(self, project_id: str, session_id: str, event_uuid: str) -> str | None:
         """Fetch a single event's raw JSONL line from the source file on disk.
 

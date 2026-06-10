@@ -1,25 +1,40 @@
-"""CR5 claims API — explorer rollups, session claims, reverse provenance, coverage.
+"""CR6 claims API — explorer cluster-tree rollups, session claims, reverse provenance,
+coverage.
 
-Real SQLiteDatabase seeded through the real claims path (extract → set_union →
-failures), only the model boundary faked, then driven via FastAPI TestClient.
+Real SQLiteDatabase seeded through the real claims path (extract → EVoC cluster →
+cluster rollup → failures), with the model + embedding boundaries faked (deterministic
+stand-ins, not mocks), then driven via FastAPI TestClient.
+
+These fixtures stay below ``viable_n`` distinct concepts, so clustering takes the singleton
+boundary (each claim its own cluster, one level) — deterministic without a real GGUF/EVoC.
+The lenses are therefore single-level cluster trees; :func:`_leaf_claims` flattens them back
+to the verbatim leaf claims the assertions check.
 """
 
 from __future__ import annotations
 
+import hashlib
 import json
 import sqlite3
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
+from typing import Any
 
+import numpy as np
 import pytest
 from fastapi.testclient import TestClient
 
 from claude_code_sessions.database import SQLiteDatabase
+from claude_code_sessions.database.sqlite.claim_clustering import (
+    GGUF_EMBEDDING_DIM,
+    cluster_claims,
+    cluster_rollup,
+    sync_claim_embeddings,
+)
 from claude_code_sessions.database.sqlite.claims import (
     ensure_claims_schema,
     extract_session_claims,
     rollup_failures,
-    set_union_rollup,
 )
 from claude_code_sessions.main import app
 from claude_code_sessions.project_resolver import ProjectResolver
@@ -36,6 +51,33 @@ class _FakeEngine:
 
     def extract(self, model: str, prompt: str) -> str:
         return self.reply
+
+
+def _fake_embed(text: str) -> bytes:
+    """A deterministic 768-d float32 vector blob (stand-in for muninn_embed)."""
+    seed = int.from_bytes(hashlib.sha256(text.encode()).digest()[:4], "little")
+    return np.random.default_rng(seed).normal(size=GGUF_EMBEDDING_DIM).astype(np.float32).tobytes()
+
+
+def _build_clusters(
+    conn: sqlite3.Connection, resolver: ProjectResolver, grain: str = "month"
+) -> None:
+    """Run the CR6 L1.5→L3 pipeline for model 'M' (embed → cluster → leaf rollup +
+    failures). Naming is skipped — these tests don't assert cluster names — so no fake
+    namer is needed; the read path falls back to 'Cluster N' labels."""
+    sync_claim_embeddings(conn, "M", _fake_embed)
+    cluster_claims(conn, "M")
+    cluster_rollup(conn, "M", grain, resolver)
+    rollup_failures(conn, "M", grain, resolver)
+
+
+def _leaf_claims(nodes: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Flatten a lens's cluster tree to its leaf claims (members), recursing children."""
+    leaves: list[dict[str, Any]] = []
+    for n in nodes:
+        leaves.extend(n.get("members", []))
+        leaves.extend(_leaf_claims(n.get("children", [])))
+    return leaves
 
 
 def _seed(conn: sqlite3.Connection, sid: str, texts: list[str]) -> None:
@@ -79,9 +121,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     extract_session_claims(conn, PID, "good2", _FakeEngine(ok2), "M")
     with pytest.raises(ValueError):
         extract_session_claims(conn, PID, "bad1", _FakeEngine("not json"), "M")
-    resolver = ProjectResolver(projects)
-    set_union_rollup(conn, "M", "month", resolver)
-    rollup_failures(conn, "M", "month", resolver)
+    _build_clusters(conn, ProjectResolver(projects))
     monkeypatch.setattr(app.state, "db", db)
     return TestClient(app)
 
@@ -92,18 +132,40 @@ def test_claim_rollup_ranks_by_count(client: TestClient) -> None:
     assert resp.status_code == 200
     body = resp.json()
     assert body["status"] == "summarised"
-    tasks = {c["claim"]: c["count"] for c in body["lenses"]["tasks"]}
-    assert tasks["refactor makefile"] == 2  # salience across both sessions
+    tasks = {c["claim"]: c["count"] for c in _leaf_claims(body["lenses"]["tasks"])}
+    assert tasks["refactor makefile"] == 2  # exact-leaf salience across both sessions
     assert tasks["add tests"] == 1
     assert body["failure_count"] == 1  # the parallel failure stream surfaces here
 
 
+def test_rollup_carries_session_project_map_for_backlinks(client: TestClient) -> None:
+    # Provenance session_ids resolve to their project_id so SessionDetail back-links
+    # (/sessions/:projectId/:sessionId) actually work.
+    body = client.get("/api/claims/scope", params={"path": SCOPE, "grain": "month",
+                                                    "bucket": MONTH, "model": "M"}).json()
+    sp = body["session_projects"]
+    assert sp["good1"] == PID and sp["good2"] == PID  # both resolve to the seeded project
+    # Every provenance session referenced by a leaf claim is resolvable.
+    referenced = {s for c in _leaf_claims(body["lenses"]["tasks"]) for s in c["sessions"]}
+    assert referenced and referenced <= set(sp)
+
+
 def test_session_claims_and_memberships(client: TestClient) -> None:
     claims = client.get(f"/api/claims/session/{PID}/good1", params={"model": "M"}).json()
-    assert "refactor makefile" in claims["lenses"]["tasks"]
+    # Each claim is now an object carrying its cluster attribution (CR6).
+    assert "refactor makefile" in [c["claim"] for c in claims["lenses"]["tasks"]]
     mem = client.get(f"/api/claims/session/{PID}/good1/memberships", params={"model": "M"}).json()
     scopes = {m["scope_path"] for m in mem}
     assert SCOPE in scopes and "" in scopes  # contributes to project AND root rollups
+
+
+def test_session_claim_models_lists_models_with_data_for_the_session(client: TestClient) -> None:
+    # SessionDetail defaults its claims view to a model that actually processed THIS
+    # session (good1 was extracted under "M"; bad1 failed under "M").
+    assert client.get(f"/api/claims/session/{PID}/good1/models").json() == ["M"]
+    assert client.get(f"/api/claims/session/{PID}/bad1/models").json() == ["M"]
+    # A session that was never processed has no models.
+    assert client.get(f"/api/claims/session/{PID}/never-seen/models").json() == []
 
 
 def test_coverage_counts(client: TestClient) -> None:
@@ -149,6 +211,25 @@ def test_coverage_scoped_by_page_filter(client: TestClient) -> None:
     # Out-of-scope: a sibling domain excludes it entirely (page filter drives the table).
     out = client.get("/api/claims/coverage", params={"model": "M", "scope": "work"}).json()
     assert out["projects"] == []
+
+
+def test_failure_analysis_categorises_the_failure_stream(client: TestClient) -> None:
+    # The fixture seeded one hard failure (bad1 → "not json"). The analysis endpoint
+    # rolls the freeform failure stream up into the fixed taxonomy.
+    body = client.get("/api/claims/failures", params={"model": "M"}).json()
+    assert body["total"] == 1
+    cats = {c["category"]: c for c in body["categories"]}
+    # "not json" has no JSON object at all → empty_or_refusal (not truncation).
+    assert "empty_or_refusal" in cats
+    assert cats["empty_or_refusal"]["count"] == 1
+    assert cats["empty_or_refusal"]["sample_sessions"][0]["session_id"] == "bad1"
+    assert body["by_model"]["M"] == 1
+
+
+def test_failure_analysis_scoped_out_is_empty(client: TestClient) -> None:
+    # A sibling domain contains none of the failing sessions → empty roll-up.
+    body = client.get("/api/claims/failures", params={"model": "M", "scope": "work"}).json()
+    assert body["total"] == 0 and body["categories"] == []
 
 
 def test_coverage_pivot_scoped_to_subtree(client: TestClient) -> None:
@@ -220,7 +301,7 @@ def two_month_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[TestC
                          "learnings": []})
     extract_session_claims(conn, PID, "recent1", _FakeEngine(shared), "M")
     extract_session_claims(conn, PID, "old1", _FakeEngine(shared), "M")
-    set_union_rollup(conn, "M", "month", ProjectResolver(projects))
+    _build_clusters(conn, ProjectResolver(projects))
     monkeypatch.setattr(app.state, "db", db)
     return TestClient(app), recent_bucket, SCOPE
 
@@ -233,7 +314,7 @@ def test_rollup_aggregates_all_buckets_when_no_bucket(
     body = client.get(
         "/api/claims/scope", params={"path": scope, "grain": "month", "bucket": "", "model": "M"}
     ).json()
-    tasks = {c["claim"]: c["count"] for c in body["lenses"]["tasks"]}
+    tasks = {c["claim"]: c["count"] for c in _leaf_claims(body["lenses"]["tasks"])}
     assert tasks["shared task"] == 2  # recent1 + old1 unioned across buckets
 
 
@@ -246,7 +327,7 @@ def test_days_window_excludes_old_bucket_in_aggregate(
         "/api/claims/scope",
         params={"path": scope, "grain": "month", "bucket": "", "model": "M", "days": 30},
     ).json()
-    tasks = {c["claim"]: c["count"] for c in body["lenses"]["tasks"]}
+    tasks = {c["claim"]: c["count"] for c in _leaf_claims(body["lenses"]["tasks"])}
     assert tasks["shared task"] == 1  # old month is outside the window
 
 
@@ -261,7 +342,7 @@ def test_explicit_bucket_drilldown_ignores_window(
         params={"path": scope, "grain": "month", "bucket": recent_bucket, "model": "M", "days": 1},
     ).json()
     assert body["status"] == "summarised"
-    assert any(c["claim"] == "shared task" for c in body["lenses"]["tasks"])
+    assert any(c["claim"] == "shared task" for c in _leaf_claims(body["lenses"]["tasks"]))
 
 
 def test_buckets_selector_respects_days_window(
@@ -331,7 +412,7 @@ def mixed_depth_db(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClien
         )
         conn.commit()
         extract_session_claims(conn, pid, sid, _FakeEngine(shared), "M")
-    set_union_rollup(conn, "M", "month", ProjectResolver(projects))
+    _build_clusters(conn, ProjectResolver(projects))
     monkeypatch.setattr(app.state, "db", db)
     return TestClient(app)
 
@@ -366,13 +447,15 @@ def test_rollup_unions_across_depths_at_domain_scope(mixed_depth_db: TestClient)
     play = mixed_depth_db.get(
         "/api/claims/scope", params={"path": "play", "grain": "month", "bucket": "", "model": "M"}
     ).json()
-    assert {c["claim"]: c["count"] for c in play["lenses"]["tasks"]}["shared task"] == 2
+    play_tasks = {c["claim"]: c["count"] for c in _leaf_claims(play["lenses"]["tasks"])}
+    assert play_tasks["shared task"] == 2
     # The intermediate sub-domain scope aggregates only its descendant.
     sub = mixed_depth_db.get(
         "/api/claims/scope",
         params={"path": "play/gh-webpages", "grain": "month", "bucket": "", "model": "M"},
     ).json()
-    assert {c["claim"]: c["count"] for c in sub["lenses"]["tasks"]}["shared task"] == 1
+    sub_tasks = {c["claim"]: c["count"] for c in _leaf_claims(sub["lenses"]["tasks"])}
+    assert sub_tasks["shared task"] == 1
 
 
 def test_coverage_pivot_includes_intermediate_subdomain_scope(mixed_depth_db: TestClient) -> None:

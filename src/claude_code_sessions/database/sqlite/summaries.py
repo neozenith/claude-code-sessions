@@ -110,6 +110,34 @@ CLAIM_LENS_GBNF = (
     r"ws ::= [ \t\n]*"
 )
 
+# Output-token cap for the EXTRACTIVE claims path. Distinct from SUMMARY_MAX_TOKENS
+# (512, fine for the abstractive 3-string object) because each extractive lens is an
+# *array* of 0..N claims — a claim-dense session needs more output budget, and the GBNF
+# grammar guarantees well-formed *prefixes* only: hitting the cap mid-array yields an
+# unbalanced object → "no balanced JSON object found" (the original 512 truncated ~20%
+# of dogfood sessions). 1024 ≈ 2× headroom — enough for most sessions in one call while
+# keeping generation fast (a loose 4096 let the model over-generate to ~2 min/session on
+# CPU). The split-and-union fallback (extract_session_claims) recovers any session dense
+# enough to STILL overflow 1024, so correctness never depends on the cap being large.
+CLAIM_LENS_MAX_TOKENS = 1024
+
+# CR6 cluster-naming grammar: a single short string naming the common thread of a group
+# of similar claims. One-key object so parsing is robust (parse_cluster_name); bounded
+# length so a verbose model can't truncate mid-name past the small token cap. Same three
+# GBNF gotchas as the lens grammars (root on one line; no control chars; bounded string).
+_CLUSTER_NAME_MAX = 80
+CLUSTER_NAME_GBNF = (
+    r'root ::= "{" ws "\"name\"" ws ":" ws string ws "}"'
+    "\n"
+    r'string ::= "\"" ( [^"\\\x00-\x1F] | "\\" ["\\/bfnrt] ){1,'
+    + str(_CLUSTER_NAME_MAX)
+    + r'} "\""'
+    "\n"
+    r"ws ::= [ \t\n]*"
+)
+# Small cap: a name is ≤8 words. Generous headroom over that keeps generation near-instant.
+CLUSTER_NAME_MAX_TOKENS = 64
+
 
 class MuninnSummaryEngine:
     """Production :class:`SummaryEngine` backed by ``sqlite-muninn`` (ADR2.1).

@@ -315,6 +315,13 @@ async def get_session_claims(project_id: str, session_id: str, model: str) -> di
     return get_db().get_session_claims(project_id, session_id, model=model)
 
 
+@app.get("/api/claims/session/{project_id}/{session_id}/models")
+async def get_session_claim_models(project_id: str, session_id: str) -> list[str]:
+    """Models that have claims/failures for this session — SessionDetail picks its
+    default claims view from these, not the global alphabetical-first model (CR5)."""
+    return get_db().get_session_claim_models(project_id, session_id)
+
+
 @app.get("/api/claims/session/{project_id}/{session_id}/memberships")
 async def get_session_rollup_memberships(
     project_id: str, session_id: str, model: str
@@ -348,6 +355,15 @@ async def get_claims_coverage_pivot(
     the explorer's current `scope` (page-level filter) and the last-N-days bucket
     columns — the heatmap source (CR5)."""
     return get_db().get_claims_coverage_pivot(model, grain, scope=scope, days=days)
+
+
+@app.get("/api/claims/failures")
+async def get_claim_failure_analysis(
+    model: str | None = None, scope: str | None = None, days: int | None = None
+) -> dict[str, Any]:
+    """Categorised failure-mode roll-up of the parallel failure stream — counts +
+    samples per taxonomy category, filtered by model/scope/days (CR5 distillation)."""
+    return get_db().get_claim_failure_analysis(model=model, scope=scope, days=days)
 
 
 @app.get("/api/sessions/{project_id}/{session_id}/events/{event_uuid}/raw")

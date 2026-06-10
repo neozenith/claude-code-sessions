@@ -587,7 +587,15 @@ export default function SessionDetail() {
   // until extraction has run the card shows an empty state.
   const claimsModelParam = new URLSearchParams(location.search).get('model')
   const { data: claimModels } = useApi<string[]>('/claims/models')
-  const claimsModel = claimsModelParam ?? claimModels?.[0]
+  // Prefer a model that actually has data for THIS session over the global
+  // alphabetical-first one (which may be a different model with no claims here —
+  // the cause of the empty "Included in these summaries" card).
+  const sessionModelsUrl =
+    projectId && sessionId
+      ? `/claims/session/${encodeURIComponent(projectId)}/${encodeURIComponent(sessionId)}/models`
+      : null
+  const { data: sessionModels } = useApi<string[]>(sessionModelsUrl)
+  const claimsModel = claimsModelParam ?? sessionModels?.[0] ?? claimModels?.[0]
   const membershipsUrl = useMemo(() => {
     if (!projectId || !sessionId || !claimsModel) return null
     return (
@@ -828,7 +836,16 @@ export default function SessionDetail() {
                   <ul className="mt-1 list-disc space-y-1 pl-4 text-sm">
                     {sessionClaims.lenses[lens.key].map((claim, i) => (
                       <li key={i} className="whitespace-pre-wrap">
-                        {claim}
+                        {claim.claim}
+                        {claim.cluster_name ? (
+                          <span
+                            data-testid="session-claim-cluster"
+                            className="ml-1 rounded bg-muted px-1 py-0.5 text-xs text-muted-foreground"
+                            title="EVoC cluster this claim belongs to"
+                          >
+                            {claim.cluster_name}
+                          </span>
+                        ) : null}
                       </li>
                     ))}
                   </ul>

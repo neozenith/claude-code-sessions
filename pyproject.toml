@@ -17,6 +17,8 @@ dependencies = [
     "huggingface-hub>=0.25",
     "urllib3>=2",
     "requests>=2.31",
+    "evoc>=0.3.1",
+    "matplotlib>=3.10.9",
 ]
 
 [project.scripts]
@@ -82,5 +84,10 @@ implicit_reexport = true
 
 [[tool.mypy.overrides]]
 module = "huggingface_hub"
+ignore_missing_imports = true
+
+# evoc (EVōC clustering, CR6) ships no py.typed marker / stubs.
+[[tool.mypy.overrides]]
+module = "evoc"
 ignore_missing_imports = true
 
