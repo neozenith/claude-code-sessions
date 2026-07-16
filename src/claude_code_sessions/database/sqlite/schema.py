@@ -43,7 +43,7 @@ __all__ = ["CACHE_DB_PATH", "SCHEMA_SQL", "SCHEMA_VERSION"]
 #           scope_path, time_granularity, time_bucket). One row per merged
 #           scope×grain×bucket per (strategy, model) so the G10 benchmark can
 #           roll up every permutation side-by-side without clobbering.
-SCHEMA_VERSION = "19"
+SCHEMA_VERSION = "20"
 
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cache_metadata (

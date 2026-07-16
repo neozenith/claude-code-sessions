@@ -8,8 +8,12 @@ from __future__ import annotations
 
 from typing import Any
 
+# Per-million-token list prices. Verified 2026-07-13 against the Anthropic
+# pricing table. Output is always 5x input, an invariant compute_event_costs()
+# relies on. Cache read is 0.1x input; 5-minute cache write is 1.25x input.
 PRICING: dict[str, dict[str, float]] = {
-    "opus": {"input": 15.0, "output": 75.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
+    "fable": {"input": 10.0, "output": 50.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
+    "opus": {"input": 5.0, "output": 25.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
     "sonnet": {"input": 3.0, "output": 15.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
     "haiku": {"input": 1.0, "output": 5.0, "cache_read_mult": 0.1, "cache_write_mult": 1.25},
 }
@@ -67,11 +71,11 @@ TOO_FAST_MIN_TOKENS = 200
 
 
 def model_family(model_id: str | None) -> str:
-    """Extract model family (opus/sonnet/haiku) from a full model ID string."""
+    """Extract model family (fable/opus/sonnet/haiku) from a full model ID string."""
     if model_id is None:
         return "unknown"
     lower = model_id.lower()
-    for family in ("opus", "sonnet", "haiku"):
+    for family in ("fable", "opus", "sonnet", "haiku"):
         if family in lower:
             return family
     return "unknown"

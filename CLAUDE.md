@@ -117,11 +117,20 @@ make sync-projects        # rsync from ~/.claude/projects/
 ```
 
 ### Pricing (per million tokens)
-| Model | Input | Output | Cache Read | Cache Write 5m |
-|-------|-------|--------|------------|----------------|
-| claude-sonnet-4-5 | $3.00 | $15.00 | $0.30 | $3.75 |
-| claude-opus-4 | $15.00 | $75.00 | $1.50 | $18.75 |
-| claude-haiku-4-5 | $1.00 | $5.00 | $0.10 | $1.25 |
+
+Priced by model **family** (substring match), not by individual model ID, so new
+versions within a family price automatically. Verified 2026-07-13.
+
+| Family | Input | Output | Cache Read | Cache Write 5m |
+|--------|-------|--------|------------|----------------|
+| fable | $10.00 | $50.00 | $1.00 | $12.50 |
+| opus | $5.00 | $25.00 | $0.50 | $6.25 |
+| sonnet | $3.00 | $15.00 | $0.30 | $3.75 |
+| haiku | $1.00 | $5.00 | $0.10 | $1.25 |
+
+Changing a price requires editing **both** pricing dicts (`database/sqlite/pricing.py`
+and the introspect skill's script copy) **and** bumping `SCHEMA_VERSION` — costs are
+computed at ingest, so existing cached rows are only re-costed by a full reingest.
 
 ## Frontend Structure
 
